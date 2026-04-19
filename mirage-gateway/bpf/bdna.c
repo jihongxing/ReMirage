@@ -192,12 +192,11 @@ int bdna_tcp_rewrite(struct __sk_buff *skb)
     if (ip->protocol != IPPROTO_TCP)
         return TC_ACT_OK;
     
-    // 3. 解析 TCP 头（使用固定偏移，避免 verifier 无法追踪 ihl 动态值）
-    __u8 ip_hlen = ip->ihl * 4;
-    if (ip_hlen < 20 || ip_hlen > 60)
-        return TC_ACT_OK;
+    // 3. 解析 TCP 头（固定 IP 头 20 字节偏移，SYN 包无 IP Options）
+    if (ip->ihl != 5)
+        return TC_ACT_OK;  // 跳过带 IP Options 的包
     
-    struct tcphdr *tcp = (void *)ip + ip_hlen;
+    struct tcphdr *tcp = (void *)(ip + 1);
     if ((void *)(tcp + 1) > data_end)
         return TC_ACT_OK;
     
@@ -311,11 +310,10 @@ int bdna_quic_rewrite(struct __sk_buff *skb)
         return TC_ACT_OK;
     
     // 3. 解析 UDP 头
-    __u8 ip_hlen = ip->ihl * 4;
-    if (ip_hlen < 20 || ip_hlen > 60)
+    if (ip->ihl != 5)
         return TC_ACT_OK;
     
-    struct udphdr *udp = (void *)ip + ip_hlen;
+    struct udphdr *udp = (void *)(ip + 1);
     if ((void *)(udp + 1) > data_end)
         return TC_ACT_OK;
     
@@ -413,21 +411,19 @@ int bdna_tls_rewrite(struct __sk_buff *skb)
     if (ip->protocol != IPPROTO_TCP)
         return TC_ACT_OK;
     
-    // 3. 解析 TCP 头
-    __u8 ip_hlen2 = ip->ihl * 4;
-    if (ip_hlen2 < 20 || ip_hlen2 > 60)
+    // 3. 解析 TCP 头（固定偏移）
+    if (ip->ihl != 5)
         return TC_ACT_OK;
     
-    struct tcphdr *tcp = (void *)ip + ip_hlen2;
+    struct tcphdr *tcp = (void *)(ip + 1);
     if ((void *)(tcp + 1) > data_end)
         return TC_ACT_OK;
     
-    // 4. 获取 TCP 载荷
-    __u8 tcp_hlen = tcp->doff * 4;
-    if (tcp_hlen < 20 || tcp_hlen > 60)
+    // 4. 获取 TCP 载荷（固定 TCP 头偏移）
+    if (tcp->doff < 5 || tcp->doff > 15)
         return TC_ACT_OK;
     
-    void *payload = (void *)tcp + tcp_hlen;
+    void *payload = (void *)(((__u8 *)tcp) + (tcp->doff * 4));
     if ((void *)(payload + 6) > data_end)
         return TC_ACT_OK;
     
@@ -512,19 +508,17 @@ int bdna_ja4_capture(struct __sk_buff *skb)
     if (ip->protocol != IPPROTO_TCP)
         return TC_ACT_OK;
     
-    __u8 ip_hlen3 = ip->ihl * 4;
-    if (ip_hlen3 < 20 || ip_hlen3 > 60)
+    if (ip->ihl != 5)
         return TC_ACT_OK;
     
-    struct tcphdr *tcp = (void *)ip + ip_hlen3;
+    struct tcphdr *tcp = (void *)(ip + 1);
     if ((void *)(tcp + 1) > data_end)
         return TC_ACT_OK;
     
-    __u8 tcp_hlen2 = tcp->doff * 4;
-    if (tcp_hlen2 < 20 || tcp_hlen2 > 60)
+    if (tcp->doff < 5 || tcp->doff > 15)
         return TC_ACT_OK;
     
-    void *payload = (void *)tcp + tcp_hlen2;
+    void *payload = (void *)(((__u8 *)tcp) + (tcp->doff * 4));
     if ((void *)(payload + 6) > data_end)
         return TC_ACT_OK;
     
