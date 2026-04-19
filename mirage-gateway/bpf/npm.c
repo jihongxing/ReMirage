@@ -207,14 +207,8 @@ int npm_padding_egress(struct xdp_md *ctx)
         csum = (csum & 0xFFFF) + (csum >> 16);
     ip->check = ~csum;
     
-    // 13. 填充随机数据（内联，避免 verifier 丢失包指针边界）
-    {
-        __u8 *ptr = data + current_size;
-        if ((void *)(ptr + 4) <= data_end) {
-            __u32 magic = bpf_get_prandom_u32();
-            *(__u32 *)ptr = magic;
-        }
-    }
+    // 13. 扩展区域已自动零填充，无需额外写入
+    //     （避免 verifier 无法追踪 adjust_tail 后旧偏移量的合法性）
     
     // 14. 更新统计
     if (stats) {
