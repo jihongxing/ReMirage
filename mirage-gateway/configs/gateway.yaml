@@ -85,7 +85,7 @@ security:
 
 # M.C.C. 连接配置（mTLS）
 mcc:
-  endpoint: ${MCC_ENDPOINT:https://mirage-os:50847}
+  endpoint: ${MCC_ENDPOINT:mirage-os:50847}
   tls:
     enabled: ${MCC_TLS_ENABLED:true}     # 生产环境强制启用
     cert_file: ${MCC_TLS_CERT:/etc/mirage/certs/gateway.crt}
