@@ -153,12 +153,10 @@ int bdna_tcp_rewrite(struct __sk_buff *skb)
         return TC_ACT_OK;
     }
     
-    // 6. 重写 TCP Window Size
-    __u16 old_window = tcp->window;
-    tcp->window = bpf_htons(fp->tcp_window);
-    
-    // 7. 重写 TCP 选项（switch 分支编译期常量方案）
-    //    每个 bpf_skb_load_bytes 的 size 参数必须是编译期常量
+    // ============================================================
+    // Phase A: 重写 TCP Options（bpf_skb_load/store_bytes）
+    //          store_bytes 会使所有包指针失效
+    // ============================================================
     __u32 doff = tcp->doff;
     __u8 opts[40] = {};
     __u32 opt_offset = ETH_HLEN + sizeof(struct iphdr) + sizeof(struct tcphdr);
@@ -176,11 +174,11 @@ int bdna_tcp_rewrite(struct __sk_buff *skb)
     case 13: loaded = bpf_skb_load_bytes(skb, opt_offset, opts, 32); opt_len = 32; break;
     case 14: loaded = bpf_skb_load_bytes(skb, opt_offset, opts, 36); opt_len = 36; break;
     case 15: loaded = bpf_skb_load_bytes(skb, opt_offset, opts, 40); opt_len = 40; break;
-    default: goto skip_options;
+    default: goto phase_b;  // doff == 5, 无 Options
     }
     
     if (loaded < 0)
-        goto skip_options;
+        goto phase_b;
     
     // 在栈上遍历并修改 TCP Options
     {
@@ -227,29 +225,55 @@ int bdna_tcp_rewrite(struct __sk_buff *skb)
         }
     }
     
-    // 写回修改后的 Options（同样使用 switch 分支常量 size）
+    // 写回 Options（使用 BPF_F_RECOMPUTE_CSUM 自动修正 checksum）
     switch (doff) {
-    case 6:  bpf_skb_store_bytes(skb, opt_offset, opts, 4, 0);  break;
-    case 7:  bpf_skb_store_bytes(skb, opt_offset, opts, 8, 0);  break;
-    case 8:  bpf_skb_store_bytes(skb, opt_offset, opts, 12, 0); break;
-    case 9:  bpf_skb_store_bytes(skb, opt_offset, opts, 16, 0); break;
-    case 10: bpf_skb_store_bytes(skb, opt_offset, opts, 20, 0); break;
-    case 11: bpf_skb_store_bytes(skb, opt_offset, opts, 24, 0); break;
-    case 12: bpf_skb_store_bytes(skb, opt_offset, opts, 28, 0); break;
-    case 13: bpf_skb_store_bytes(skb, opt_offset, opts, 32, 0); break;
-    case 14: bpf_skb_store_bytes(skb, opt_offset, opts, 36, 0); break;
-    case 15: bpf_skb_store_bytes(skb, opt_offset, opts, 40, 0); break;
+    case 6:  bpf_skb_store_bytes(skb, opt_offset, opts, 4,  BPF_F_RECOMPUTE_CSUM); break;
+    case 7:  bpf_skb_store_bytes(skb, opt_offset, opts, 8,  BPF_F_RECOMPUTE_CSUM); break;
+    case 8:  bpf_skb_store_bytes(skb, opt_offset, opts, 12, BPF_F_RECOMPUTE_CSUM); break;
+    case 9:  bpf_skb_store_bytes(skb, opt_offset, opts, 16, BPF_F_RECOMPUTE_CSUM); break;
+    case 10: bpf_skb_store_bytes(skb, opt_offset, opts, 20, BPF_F_RECOMPUTE_CSUM); break;
+    case 11: bpf_skb_store_bytes(skb, opt_offset, opts, 24, BPF_F_RECOMPUTE_CSUM); break;
+    case 12: bpf_skb_store_bytes(skb, opt_offset, opts, 28, BPF_F_RECOMPUTE_CSUM); break;
+    case 13: bpf_skb_store_bytes(skb, opt_offset, opts, 32, BPF_F_RECOMPUTE_CSUM); break;
+    case 14: bpf_skb_store_bytes(skb, opt_offset, opts, 36, BPF_F_RECOMPUTE_CSUM); break;
+    case 15: bpf_skb_store_bytes(skb, opt_offset, opts, 40, BPF_F_RECOMPUTE_CSUM); break;
     }
+    // ← 此处所有旧的 data/eth/ip/tcp 指针已失效
     
-skip_options:
-    // 8. 重新计算 TCP 校验和（增量更新）
-    ;
-    __u32 csum = (~tcp->check) & 0xFFFF;
-    csum += (~old_window) & 0xFFFF;
-    csum += bpf_htons(fp->tcp_window);
-    while (csum >> 16)
-        csum = (csum & 0xFFFF) + (csum >> 16);
-    tcp->check = ~csum;
+    // ============================================================
+    // Phase B: 刷新指针 → 修改 Window → bpf_l4_csum_replace
+    // ============================================================
+phase_b:
+    // 重新获取包指针（Pointer Refresh Pattern）
+    data = (void *)(long)skb->data;
+    data_end = (void *)(long)skb->data_end;
+    
+    eth = data;
+    if ((void *)(eth + 1) > data_end)
+        return TC_ACT_OK;
+    
+    ip = (void *)(eth + 1);
+    if ((void *)(ip + 1) > data_end)
+        return TC_ACT_OK;
+    
+    tcp = (void *)(ip + 1);
+    if ((void *)(tcp + 1) > data_end)
+        return TC_ACT_OK;
+    
+    // 使用 bpf_l4_csum_replace 修改 window 并自动修正 checksum
+    __u16 old_window = tcp->window;
+    __u16 new_window = bpf_htons(fp->tcp_window);
+    
+    if (old_window != new_window) {
+        // 偏移量：TCP checksum 字段在包中的绝对偏移
+        __u32 csum_offset = ETH_HLEN + sizeof(struct iphdr)
+                          + __builtin_offsetof(struct tcphdr, check);
+        
+        // bpf_l4_csum_replace: 同时修改字段值并更新 checksum
+        tcp->window = new_window;
+        bpf_l4_csum_replace(skb, csum_offset,
+                            old_window, new_window, sizeof(__u16));
+    }
     
     // 9. 更新统计
     struct bdna_stats *stats = bpf_map_lookup_elem(&bdna_stats_map, &key);

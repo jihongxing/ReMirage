@@ -56,6 +56,10 @@
 #define BPF_F_PSEUDO_HDR (1ULL << 4)
 #endif
 
+#ifndef BPF_F_RECOMPUTE_CSUM
+#define BPF_F_RECOMPUTE_CSUM (1ULL << 0)
+#endif
+
 /* ============================================
  * 配置结构体（Go → C）
  * ============================================ */
