@@ -294,6 +294,7 @@ func bootstrapWithRetry(ctx context.Context, client *gtclient.GTunnelClient, poo
 			return nil
 		}
 
+		printStatus("Bootstrap failed: %v", err)
 		printStatus("Reconnecting in %v...", delay)
 		select {
 		case <-ctx.Done():

@@ -37,25 +37,33 @@ func createPlatformTUN(name string, mtu int) (TUNDevice, error) {
 		return nil, fmt.Errorf("wintun.dll not loaded: call tun.SetWintunDLL() first")
 	}
 
-	// 1. Extract wintun.dll to temp dir (wintun package loads from PATH)
-	tmpDir, err := os.MkdirTemp("", "mirage-wintun-*")
+	// 1. Extract wintun.dll to exe directory (Windows DLL search checks exe dir first)
+	exePath, err := os.Executable()
 	if err != nil {
-		return nil, fmt.Errorf("create temp dir: %w", err)
+		return nil, fmt.Errorf("get executable path: %w", err)
+	}
+	exeDir := filepath.Dir(exePath)
+	dllPath := filepath.Join(exeDir, "wintun.dll")
+
+	// Write DLL if not already present
+	if _, err := os.Stat(dllPath); os.IsNotExist(err) {
+		if err := os.WriteFile(dllPath, WintunDLL, 0644); err != nil {
+			// Fallback to temp dir
+			tmpDir, _ := os.MkdirTemp("", "mirage-wintun-*")
+			dllPath = filepath.Join(tmpDir, "wintun.dll")
+			if err := os.WriteFile(dllPath, WintunDLL, 0644); err != nil {
+				return nil, fmt.Errorf("write wintun.dll: %w", err)
+			}
+			exeDir = tmpDir
+		}
 	}
 
-	dllPath := filepath.Join(tmpDir, "wintun.dll")
-	if err := os.WriteFile(dllPath, WintunDLL, 0600); err != nil {
-		os.RemoveAll(tmpDir)
-		return nil, fmt.Errorf("write wintun.dll: %w", err)
-	}
-
-	// 2. Add temp dir to DLL search path so wintun package can find it
-	os.Setenv("PATH", tmpDir+";"+os.Getenv("PATH"))
+	// 2. Ensure DLL is findable via PATH
+	os.Setenv("PATH", exeDir+";"+os.Getenv("PATH"))
 
 	// 3. Create adapter
 	adapter, err := wintun.CreateAdapter(name, "Mirage", nil)
 	if err != nil {
-		os.RemoveAll(tmpDir)
 		return nil, fmt.Errorf("WintunCreateAdapter: %w", err)
 	}
 
@@ -63,7 +71,6 @@ func createPlatformTUN(name string, mtu int) (TUNDevice, error) {
 	session, err := adapter.StartSession(0x800000)
 	if err != nil {
 		adapter.Close()
-		os.RemoveAll(tmpDir)
 		return nil, fmt.Errorf("WintunStartSession: %w", err)
 	}
 
@@ -72,7 +79,7 @@ func createPlatformTUN(name string, mtu int) (TUNDevice, error) {
 		session: session,
 		name:    name,
 		mtu:     mtu,
-		dllDir:  tmpDir,
+		dllDir:  exeDir,
 	}
 
 	return dev, nil

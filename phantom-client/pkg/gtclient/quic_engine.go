@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -58,26 +59,52 @@ func NewQUICEngine(cfg *QUICEngineConfig) *QUICEngine {
 }
 
 // Connect establishes the QUIC connection and starts the receive pump.
+// Uses explicit physical NIC binding to avoid Wintun routing interference.
 func (e *QUICEngine) Connect(ctx context.Context) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	conn, err := quic.DialAddr(ctx, e.addr, e.tlsConf, e.quicConf)
+	// 1. Discover physical outbound IP (does not send any packet)
+	probeConn, err := net.Dial("udp4", "8.8.8.8:53")
 	if err != nil {
+		return fmt.Errorf("detect physical NIC: %w", err)
+	}
+	physicalIP := probeConn.LocalAddr().(*net.UDPAddr).IP
+	probeConn.Close()
+
+	// 2. Bind UDP socket to physical NIC IP (bypass Wintun/WFP interference)
+	localAddr := &net.UDPAddr{IP: physicalIP, Port: 0}
+	udpConn, err := net.ListenUDP("udp4", localAddr)
+	if err != nil {
+		return fmt.Errorf("bind physical NIC %s: %w", physicalIP, err)
+	}
+
+	// 3. Resolve remote address
+	remoteAddr, err := net.ResolveUDPAddr("udp4", e.addr)
+	if err != nil {
+		udpConn.Close()
+		return fmt.Errorf("resolve %s: %w", e.addr, err)
+	}
+
+	// 4. QUIC dial with explicit bound socket
+	conn, err := quic.Dial(ctx, udpConn, remoteAddr, e.tlsConf, e.quicConf)
+	if err != nil {
+		udpConn.Close()
 		return fmt.Errorf("quic dial %s: %w", e.addr, err)
 	}
 
-	// Verify datagram support was negotiated
+	// 5. Verify datagram support was negotiated
 	state := conn.ConnectionState()
 	if !state.SupportsDatagrams.Remote || !state.SupportsDatagrams.Local {
 		conn.CloseWithError(0, "datagrams not supported")
+		udpConn.Close()
 		return fmt.Errorf("gateway does not support QUIC Datagrams")
 	}
 
 	e.conn = conn
 	e.connected.Store(true)
 
-	// Start receive pump
+	// 6. Start receive pump
 	pumpCtx, cancel := context.WithCancel(ctx)
 	e.cancelFunc = cancel
 	go e.recvPump(pumpCtx)

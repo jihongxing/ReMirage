@@ -105,6 +105,7 @@ func (c *GTunnelClient) ProbeAndConnect(ctx context.Context, pool []token.Gatewa
 				c.mu.Unlock()
 				return nil
 			}
+			fmt.Printf("[debug] probe %s:%d failed: %v\n", r.gw.IP, r.gw.Port, r.err)
 		case <-probeCtx.Done():
 			return fmt.Errorf("probe timeout: %w", probeCtx.Err())
 		}
