@@ -105,74 +105,6 @@ struct {
  * TCP 指纹重写
  * ============================================ */
 
-// 使用 bpf_skb_load_bytes/store_bytes 重写 TCP 选项
-// 避免 verifier 无法追踪动态 doff 偏移的包指针问题
-static __always_inline int rewrite_tcp_options_safe(
-    struct __sk_buff *skb,
-    __u32 tcp_offset,
-    __u32 opt_len,
-    struct stack_fingerprint *fp
-) {
-    if (!fp || opt_len == 0 || opt_len > 40)
-        return -1;
-    
-    __u8 opts[40] = {};
-    
-    // 从 skb 加载 TCP Options 到栈上
-    __u32 opt_offset = tcp_offset + sizeof(struct tcphdr);
-    if (bpf_skb_load_bytes(skb, opt_offset, opts, opt_len) < 0)
-        return -1;
-    
-    // 在栈上遍历并修改 TCP Options
-    __u32 pos = 0;
-    #pragma unroll
-    for (int i = 0; i < 20; i++) {
-        if (pos >= opt_len)
-            break;
-        
-        __u8 kind = opts[pos];
-        
-        if (kind == TCPOPT_EOL)
-            break;
-        
-        if (kind == TCPOPT_NOP) {
-            pos++;
-            continue;
-        }
-        
-        if (pos + 1 >= opt_len)
-            break;
-        
-        __u8 len = opts[pos + 1];
-        if (len < 2 || pos + len > opt_len)
-            break;
-        
-        switch (kind) {
-        case TCPOPT_MSS:
-            if (len == TCPOLEN_MSS && pos + 3 < opt_len) {
-                __u16 mss = bpf_htons(fp->tcp_mss);
-                opts[pos + 2] = (__u8)(mss >> 8);
-                opts[pos + 3] = (__u8)(mss & 0xFF);
-            }
-            break;
-            
-        case TCPOPT_WSCALE:
-            if (len == TCPOLEN_WSCALE && pos + 2 < opt_len) {
-                opts[pos + 2] = fp->tcp_wscale;
-            }
-            break;
-        }
-        
-        pos += len;
-    }
-    
-    // 写回修改后的 Options
-    if (bpf_skb_store_bytes(skb, opt_offset, opts, opt_len, 0) < 0)
-        return -1;
-    
-    return 0;
-}
-
 SEC("tc")
 int bdna_tcp_rewrite(struct __sk_buff *skb)
 {
@@ -225,17 +157,71 @@ int bdna_tcp_rewrite(struct __sk_buff *skb)
     __u16 old_window = tcp->window;
     tcp->window = bpf_htons(fp->tcp_window);
     
-    // 7. 重写 TCP 选项（通过 bpf_skb_load_bytes/store_bytes）
-    __u32 doff = tcp->doff;
-    if (doff < 5 || doff > 15)
-        return TC_ACT_OK;
-    __u32 opt_len = (doff - 5) * 4;
-    if (opt_len > 0) {
-        __u32 tcp_offset = ETH_HLEN + sizeof(struct iphdr);
-        rewrite_tcp_options_safe(skb, tcp_offset, opt_len, fp);
+    // 7. 重写 TCP 选项（终极掩码防御 + bpf_skb_load/store_bytes）
+    //    必须在同一作用域内完成掩码+零值检查+helper调用，不可封入子函数
+    __u32 opt_len = (tcp->doff - 5) * 4;
+    opt_len &= 0x3F;  // umax = 63，强制 Verifier 上限
+    
+    if (opt_len == 0 || opt_len > 40)
+        goto skip_options;
+    
+    {
+        __u8 opts[40] = {};
+        __u32 opt_offset = ETH_HLEN + sizeof(struct iphdr) + sizeof(struct tcphdr);
+        
+        if (bpf_skb_load_bytes(skb, opt_offset, opts, opt_len) < 0)
+            goto skip_options;
+        
+        // 在栈上遍历并修改 TCP Options
+        __u32 pos = 0;
+        #pragma unroll
+        for (int i = 0; i < 10; i++) {
+            if (pos >= opt_len)
+                break;
+            
+            __u8 kind = opts[pos];
+            
+            if (kind == TCPOPT_EOL)
+                break;
+            
+            if (kind == TCPOPT_NOP) {
+                pos++;
+                continue;
+            }
+            
+            if (pos + 1 >= opt_len)
+                break;
+            
+            __u8 len = opts[pos + 1];
+            if (len < 2 || pos + len > opt_len)
+                break;
+            
+            switch (kind) {
+            case TCPOPT_MSS:
+                if (len == TCPOLEN_MSS && pos + 3 < opt_len) {
+                    __u16 mss = bpf_htons(fp->tcp_mss);
+                    opts[pos + 2] = (__u8)(mss >> 8);
+                    opts[pos + 3] = (__u8)(mss & 0xFF);
+                }
+                break;
+                
+            case TCPOPT_WSCALE:
+                if (len == TCPOLEN_WSCALE && pos + 2 < opt_len) {
+                    opts[pos + 2] = fp->tcp_wscale;
+                }
+                break;
+            }
+            
+            pos += len;
+        }
+        
+        // 写回修改后的 Options
+        bpf_skb_store_bytes(skb, opt_offset, opts, opt_len, 0);
     }
     
+skip_options:
     // 8. 重新计算 TCP 校验和（增量更新）
+    ;
     __u32 csum = (~tcp->check) & 0xFFFF;
     csum += (~old_window) & 0xFFFF;
     csum += bpf_htons(fp->tcp_window);
