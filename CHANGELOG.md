@@ -65,6 +65,8 @@
 - Linux 编译验证通过（OpenCloudOS 9, kernel 6.6.119, clang 17, Go 1.24.2）
 - eBPF 数据面：7 个 .o 全部编译成功（bdna/chameleon/h3_shaper/jitter/npm/phantom/sockmap）
 - Go 控制面：bin/mirage-gateway 二进制生成，零错误
+- Linux 运行验证通过：18 阶段全量启动，eBPF 全量挂载（共享 Map 13 个，总 Map 43 个）
+- eBPF Verifier 系统性修复：位掩码定界、Pointer Refresh Pattern、Bulletproof Scanner
 
 ---
 
