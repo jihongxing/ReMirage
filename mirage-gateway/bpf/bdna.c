@@ -154,89 +154,62 @@ int bdna_tcp_rewrite(struct __sk_buff *skb)
     }
     
     // ============================================================
-    // Phase A: 重写 TCP Options（bpf_skb_load/store_bytes）
-    //          store_bytes 会使所有包指针失效
+    // Phase A: 重写 TCP Options（无栈变量偏移的 skb 游走扫描）
+    //          直接在 skb 上逐 Option 探测并精准写入
     // ============================================================
     __u32 doff = tcp->doff;
-    __u8 opts[40] = {};
     __u32 opt_offset = ETH_HLEN + sizeof(struct iphdr) + sizeof(struct tcphdr);
-    int loaded = -1;
-    __u32 opt_len = 0;
+    __u32 scan_offset = opt_offset;
+    __u32 max_offset = opt_offset + 40;
     
-    switch (doff) {
-    case 6:  loaded = bpf_skb_load_bytes(skb, opt_offset, opts, 4);  opt_len = 4;  break;
-    case 7:  loaded = bpf_skb_load_bytes(skb, opt_offset, opts, 8);  opt_len = 8;  break;
-    case 8:  loaded = bpf_skb_load_bytes(skb, opt_offset, opts, 12); opt_len = 12; break;
-    case 9:  loaded = bpf_skb_load_bytes(skb, opt_offset, opts, 16); opt_len = 16; break;
-    case 10: loaded = bpf_skb_load_bytes(skb, opt_offset, opts, 20); opt_len = 20; break;
-    case 11: loaded = bpf_skb_load_bytes(skb, opt_offset, opts, 24); opt_len = 24; break;
-    case 12: loaded = bpf_skb_load_bytes(skb, opt_offset, opts, 28); opt_len = 28; break;
-    case 13: loaded = bpf_skb_load_bytes(skb, opt_offset, opts, 32); opt_len = 32; break;
-    case 14: loaded = bpf_skb_load_bytes(skb, opt_offset, opts, 36); opt_len = 36; break;
-    case 15: loaded = bpf_skb_load_bytes(skb, opt_offset, opts, 40); opt_len = 40; break;
-    default: goto phase_b;  // doff == 5, 无 Options
-    }
+    if (doff <= 5)
+        goto phase_b;  // 无 Options
     
-    if (loaded < 0)
-        goto phase_b;
+    // 限定实际 Options 边界
+    max_offset = opt_offset + (doff - 5) * 4;
+    if (max_offset > opt_offset + 40)
+        max_offset = opt_offset + 40;
     
-    // 在栈上遍历并修改 TCP Options
-    {
-        __u32 pos = 0;
-        #pragma unroll
-        for (int i = 0; i < 10; i++) {
-            if (pos >= opt_len)
-                break;
-            
-            __u8 kind = opts[pos];
-            
-            if (kind == TCPOPT_EOL)
-                break;
-            
-            if (kind == TCPOPT_NOP) {
-                pos++;
-                continue;
-            }
-            
-            if (pos + 1 >= opt_len)
-                break;
-            
-            __u8 len = opts[pos + 1];
-            if (len < 2 || pos + len > opt_len)
-                break;
-            
-            switch (kind) {
-            case TCPOPT_MSS:
-                if (len == TCPOLEN_MSS && pos + 3 < opt_len) {
-                    __u16 mss = bpf_htons(fp->tcp_mss);
-                    opts[pos + 2] = (__u8)(mss >> 8);
-                    opts[pos + 3] = (__u8)(mss & 0xFF);
-                }
-                break;
-                
-            case TCPOPT_WSCALE:
-                if (len == TCPOLEN_WSCALE && pos + 2 < opt_len) {
-                    opts[pos + 2] = fp->tcp_wscale;
-                }
-                break;
-            }
-            
-            pos += len;
+    #pragma unroll
+    for (int i = 0; i < 15; i++) {
+        if (scan_offset >= max_offset)
+            break;
+        
+        __u8 kind;
+        if (bpf_skb_load_bytes(skb, scan_offset, &kind, 1) < 0)
+            break;
+        
+        if (kind == TCPOPT_EOL)
+            break;
+        
+        if (kind == TCPOPT_NOP) {
+            scan_offset += 1;
+            continue;
         }
-    }
-    
-    // 写回 Options（使用 BPF_F_RECOMPUTE_CSUM 自动修正 checksum）
-    switch (doff) {
-    case 6:  bpf_skb_store_bytes(skb, opt_offset, opts, 4,  BPF_F_RECOMPUTE_CSUM); break;
-    case 7:  bpf_skb_store_bytes(skb, opt_offset, opts, 8,  BPF_F_RECOMPUTE_CSUM); break;
-    case 8:  bpf_skb_store_bytes(skb, opt_offset, opts, 12, BPF_F_RECOMPUTE_CSUM); break;
-    case 9:  bpf_skb_store_bytes(skb, opt_offset, opts, 16, BPF_F_RECOMPUTE_CSUM); break;
-    case 10: bpf_skb_store_bytes(skb, opt_offset, opts, 20, BPF_F_RECOMPUTE_CSUM); break;
-    case 11: bpf_skb_store_bytes(skb, opt_offset, opts, 24, BPF_F_RECOMPUTE_CSUM); break;
-    case 12: bpf_skb_store_bytes(skb, opt_offset, opts, 28, BPF_F_RECOMPUTE_CSUM); break;
-    case 13: bpf_skb_store_bytes(skb, opt_offset, opts, 32, BPF_F_RECOMPUTE_CSUM); break;
-    case 14: bpf_skb_store_bytes(skb, opt_offset, opts, 36, BPF_F_RECOMPUTE_CSUM); break;
-    case 15: bpf_skb_store_bytes(skb, opt_offset, opts, 40, BPF_F_RECOMPUTE_CSUM); break;
+        
+        __u8 len;
+        if (bpf_skb_load_bytes(skb, scan_offset + 1, &len, 1) < 0)
+            break;
+        
+        if (len < 2 || scan_offset + len > max_offset)
+            break;
+        
+        // 命中 MSS
+        if (kind == TCPOPT_MSS && len == 4) {
+            __u8 mss_val[4] = { TCPOPT_MSS, 4, 0, 0 };
+            __u16 mss = bpf_htons(fp->tcp_mss);
+            mss_val[2] = (__u8)(mss >> 8);
+            mss_val[3] = (__u8)(mss & 0xFF);
+            bpf_skb_store_bytes(skb, scan_offset, mss_val, 4, BPF_F_RECOMPUTE_CSUM);
+        }
+        // 命中 WScale
+        else if (kind == TCPOPT_WSCALE && len == 3) {
+            __u8 ws_val[3] = { TCPOPT_WSCALE, 3, 0 };
+            ws_val[2] = fp->tcp_wscale;
+            bpf_skb_store_bytes(skb, scan_offset, ws_val, 3, BPF_F_RECOMPUTE_CSUM);
+        }
+        
+        scan_offset += len;
     }
     // ← 此处所有旧的 data/eth/ip/tcp 指针已失效
     
