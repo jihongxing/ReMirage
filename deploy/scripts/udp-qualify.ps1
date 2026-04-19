@@ -266,9 +266,11 @@ if ($wfpProviders.Count -gt 50) {
 # 检查常见 VPN 驱动
 $vpnDrivers = @("tap0901", "wintun", "npcap", "v2ray", "clash", "wireguard")
 $foundDrivers = @()
-foreach ($drv in $vpnDrivers) {
-    $found = Get-WindowsDriver -Online -ErrorAction SilentlyContinue | Where-Object { $_.OriginalFileName -match $drv }
-    if ($found) { $foundDrivers += $drv }
+if ($isAdmin) {
+    foreach ($drv in $vpnDrivers) {
+        $found = Get-WindowsDriver -Online -ErrorAction SilentlyContinue | Where-Object { $_.OriginalFileName -match $drv }
+        if ($found) { $foundDrivers += $drv }
+    }
 }
 # 也检查服务
 $vpnServices = Get-Service -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "v2ray|clash|wireguard|openvpn|tap" -and $_.Status -eq "Running" }
