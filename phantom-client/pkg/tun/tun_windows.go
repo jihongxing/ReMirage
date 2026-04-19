@@ -8,9 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"unsafe"
 
-	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wintun"
 )
 
@@ -39,7 +37,7 @@ func createPlatformTUN(name string, mtu int) (TUNDevice, error) {
 		return nil, fmt.Errorf("wintun.dll not loaded: call tun.SetWintunDLL() first")
 	}
 
-	// 1. Extract wintun.dll to temp dir (wintun library requires DLL on disk)
+	// 1. Extract wintun.dll to temp dir (wintun package loads from PATH)
 	tmpDir, err := os.MkdirTemp("", "mirage-wintun-*")
 	if err != nil {
 		return nil, fmt.Errorf("create temp dir: %w", err)
@@ -51,11 +49,8 @@ func createPlatformTUN(name string, mtu int) (TUNDevice, error) {
 		return nil, fmt.Errorf("write wintun.dll: %w", err)
 	}
 
-	// 2. Load DLL into wintun library
-	if err := wintun.LoadLibrary(dllPath); err != nil {
-		os.RemoveAll(tmpDir)
-		return nil, fmt.Errorf("wintun.LoadLibrary: %w", err)
-	}
+	// 2. Add temp dir to DLL search path so wintun package can find it
+	os.Setenv("PATH", tmpDir+";"+os.Getenv("PATH"))
 
 	// 3. Create adapter
 	adapter, err := wintun.CreateAdapter(name, "Mirage", nil)
@@ -150,10 +145,6 @@ func (d *WintunDevice) Close() error {
 	os.RemoveAll(d.dllDir)
 	return nil
 }
-
-// Suppress unused import warning for unsafe (used by wintun internally)
-var _ = unsafe.Pointer(nil)
-var _ = windows.ERROR_SUCCESS
 
 func cleanupStaleWindows() {
 	tmpDir := os.TempDir()
