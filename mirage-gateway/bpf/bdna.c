@@ -157,22 +157,33 @@ int bdna_tcp_rewrite(struct __sk_buff *skb)
     __u16 old_window = tcp->window;
     tcp->window = bpf_htons(fp->tcp_window);
     
-    // 7. 重写 TCP 选项（终极掩码防御 + bpf_skb_load/store_bytes）
-    //    必须在同一作用域内完成掩码+零值检查+helper调用，不可封入子函数
-    __u32 opt_len = (tcp->doff - 5) * 4;
-    opt_len &= 0x3F;  // umax = 63，强制 Verifier 上限
+    // 7. 重写 TCP 选项（switch 分支编译期常量方案）
+    //    每个 bpf_skb_load_bytes 的 size 参数必须是编译期常量
+    __u32 doff = tcp->doff;
+    __u8 opts[40] = {};
+    __u32 opt_offset = ETH_HLEN + sizeof(struct iphdr) + sizeof(struct tcphdr);
+    int loaded = -1;
+    __u32 opt_len = 0;
     
-    if (opt_len == 0 || opt_len > 40)
+    switch (doff) {
+    case 6:  loaded = bpf_skb_load_bytes(skb, opt_offset, opts, 4);  opt_len = 4;  break;
+    case 7:  loaded = bpf_skb_load_bytes(skb, opt_offset, opts, 8);  opt_len = 8;  break;
+    case 8:  loaded = bpf_skb_load_bytes(skb, opt_offset, opts, 12); opt_len = 12; break;
+    case 9:  loaded = bpf_skb_load_bytes(skb, opt_offset, opts, 16); opt_len = 16; break;
+    case 10: loaded = bpf_skb_load_bytes(skb, opt_offset, opts, 20); opt_len = 20; break;
+    case 11: loaded = bpf_skb_load_bytes(skb, opt_offset, opts, 24); opt_len = 24; break;
+    case 12: loaded = bpf_skb_load_bytes(skb, opt_offset, opts, 28); opt_len = 28; break;
+    case 13: loaded = bpf_skb_load_bytes(skb, opt_offset, opts, 32); opt_len = 32; break;
+    case 14: loaded = bpf_skb_load_bytes(skb, opt_offset, opts, 36); opt_len = 36; break;
+    case 15: loaded = bpf_skb_load_bytes(skb, opt_offset, opts, 40); opt_len = 40; break;
+    default: goto skip_options;
+    }
+    
+    if (loaded < 0)
         goto skip_options;
     
+    // 在栈上遍历并修改 TCP Options
     {
-        __u8 opts[40] = {};
-        __u32 opt_offset = ETH_HLEN + sizeof(struct iphdr) + sizeof(struct tcphdr);
-        
-        if (bpf_skb_load_bytes(skb, opt_offset, opts, opt_len) < 0)
-            goto skip_options;
-        
-        // 在栈上遍历并修改 TCP Options
         __u32 pos = 0;
         #pragma unroll
         for (int i = 0; i < 10; i++) {
@@ -214,9 +225,20 @@ int bdna_tcp_rewrite(struct __sk_buff *skb)
             
             pos += len;
         }
-        
-        // 写回修改后的 Options
-        bpf_skb_store_bytes(skb, opt_offset, opts, opt_len, 0);
+    }
+    
+    // 写回修改后的 Options（同样使用 switch 分支常量 size）
+    switch (doff) {
+    case 6:  bpf_skb_store_bytes(skb, opt_offset, opts, 4, 0);  break;
+    case 7:  bpf_skb_store_bytes(skb, opt_offset, opts, 8, 0);  break;
+    case 8:  bpf_skb_store_bytes(skb, opt_offset, opts, 12, 0); break;
+    case 9:  bpf_skb_store_bytes(skb, opt_offset, opts, 16, 0); break;
+    case 10: bpf_skb_store_bytes(skb, opt_offset, opts, 20, 0); break;
+    case 11: bpf_skb_store_bytes(skb, opt_offset, opts, 24, 0); break;
+    case 12: bpf_skb_store_bytes(skb, opt_offset, opts, 28, 0); break;
+    case 13: bpf_skb_store_bytes(skb, opt_offset, opts, 32, 0); break;
+    case 14: bpf_skb_store_bytes(skb, opt_offset, opts, 36, 0); break;
+    case 15: bpf_skb_store_bytes(skb, opt_offset, opts, 40, 0); break;
     }
     
 skip_options:
