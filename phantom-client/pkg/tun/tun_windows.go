@@ -7,29 +7,31 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"golang.zx2c4.com/wintun"
 )
 
 // WintunDLL is set by the main package via SetWintunDLL before CreateTUN is called.
-// This avoids cross-package embed path issues.
 var WintunDLL []byte
 
-// SetWintunDLL sets the embedded wintun.dll bytes.
+// SetWintunDLL extracts and loads the embedded wintun.dll.
+// Must be called before CreateTUN on Windows.
 func SetWintunDLL(dll []byte) {
 	WintunDLL = dll
 }
 
-// WintunDevice implements TUNDevice for Windows via embedded wintun.dll.
+// WintunDevice implements TUNDevice using the official wintun library.
 type WintunDevice struct {
-	adapter uintptr
-	session uintptr
-	dll     *windows.DLL
-	dllPath string
-	dllDir  string
+	adapter *wintun.Adapter
+	session wintun.Session
 	name    string
 	mtu     int
 	closed  bool
+	mu      sync.Mutex
+	dllDir  string // temp dir for cleanup
 }
 
 func createPlatformTUN(name string, mtu int) (TUNDevice, error) {
@@ -37,7 +39,7 @@ func createPlatformTUN(name string, mtu int) (TUNDevice, error) {
 		return nil, fmt.Errorf("wintun.dll not loaded: call tun.SetWintunDLL() first")
 	}
 
-	// 1. Extract wintun.dll to temp dir
+	// 1. Extract wintun.dll to temp dir (wintun library requires DLL on disk)
 	tmpDir, err := os.MkdirTemp("", "mirage-wintun-*")
 	if err != nil {
 		return nil, fmt.Errorf("create temp dir: %w", err)
@@ -49,60 +51,109 @@ func createPlatformTUN(name string, mtu int) (TUNDevice, error) {
 		return nil, fmt.Errorf("write wintun.dll: %w", err)
 	}
 
-	// 2. Load DLL
-	dll, err := windows.LoadDLL(dllPath)
+	// 2. Load DLL into wintun library
+	if err := wintun.LoadLibrary(dllPath); err != nil {
+		os.RemoveAll(tmpDir)
+		return nil, fmt.Errorf("wintun.LoadLibrary: %w", err)
+	}
+
+	// 3. Create adapter
+	adapter, err := wintun.CreateAdapter(name, "Mirage", nil)
 	if err != nil {
 		os.RemoveAll(tmpDir)
-		return nil, fmt.Errorf("load wintun.dll: %w", err)
+		return nil, fmt.Errorf("WintunCreateAdapter: %w", err)
+	}
+
+	// 4. Start session with 8MB ring buffer (must be power of 2, range 128KB-64MB)
+	session, err := adapter.StartSession(0x800000)
+	if err != nil {
+		adapter.Close()
+		os.RemoveAll(tmpDir)
+		return nil, fmt.Errorf("WintunStartSession: %w", err)
 	}
 
 	dev := &WintunDevice{
-		dll:     dll,
-		dllPath: dllPath,
-		dllDir:  tmpDir,
+		adapter: adapter,
+		session: session,
 		name:    name,
 		mtu:     mtu,
+		dllDir:  tmpDir,
 	}
-
-	// 3. Create adapter (WintunCreateAdapter)
-	// In production, call actual Wintun API procs.
-	// Placeholder: the real implementation would call:
-	//   createAdapter, _ := dll.FindProc("WintunCreateAdapter")
-	//   adapter, _, _ := createAdapter.Call(...)
-	//   startSession, _ := dll.FindProc("WintunStartSession")
-	//   session, _, _ := startSession.Call(adapter, 0x400000)
 
 	return dev, nil
 }
 
+// Read blocks until a packet arrives from the Windows network stack.
+// The packet is copied into buf. This is the egress path (host -> tunnel).
 func (d *WintunDevice) Read(buf []byte) (int, error) {
-	// Placeholder: real impl calls WintunReceivePacket
-	return 0, fmt.Errorf("wintun read not implemented in placeholder")
+	if d.closed {
+		return 0, fmt.Errorf("device closed")
+	}
+
+	// ReceivePacket blocks until a packet is available.
+	// Returns a slice backed by the ring buffer — must be released after copy.
+	packet, err := d.session.ReceivePacket()
+	if err != nil {
+		return 0, fmt.Errorf("ReceivePacket: %w", err)
+	}
+
+	n := copy(buf, packet)
+
+	// Critical: release ring buffer memory immediately
+	d.session.ReleaseReceivePacket(packet)
+
+	return n, nil
 }
 
+// Write injects a packet into the Windows network stack.
+// This is the ingress path (tunnel -> host).
 func (d *WintunDevice) Write(buf []byte) (int, error) {
-	// Placeholder: real impl calls WintunAllocateSendPacket + WintunSendPacket
-	return 0, fmt.Errorf("wintun write not implemented in placeholder")
+	if d.closed {
+		return 0, fmt.Errorf("device closed")
+	}
+
+	n := len(buf)
+	if n == 0 {
+		return 0, nil
+	}
+
+	// Allocate exact-size packet from ring buffer
+	packet, err := d.session.AllocateSendPacket(n)
+	if err != nil {
+		// Ring buffer full — drop packet to maintain stability
+		return 0, nil
+	}
+
+	// Copy data and notify Windows kernel
+	copy(packet, buf[:n])
+	d.session.SendPacket(packet)
+
+	return n, nil
 }
 
 func (d *WintunDevice) Name() string { return d.name }
 func (d *WintunDevice) MTU() int     { return d.mtu }
 
 func (d *WintunDevice) Close() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
 	if d.closed {
 		return nil
 	}
 	d.closed = true
 
-	// Close session & adapter (real impl calls WintunEndSession, WintunCloseAdapter)
-	if d.dll != nil {
-		d.dll.Release()
-	}
-	// Remove temp files
-	os.Remove(d.dllPath)
+	d.session.End()
+	d.adapter.Close()
+
+	// Cleanup temp DLL
 	os.RemoveAll(d.dllDir)
 	return nil
 }
+
+// Suppress unused import warning for unsafe (used by wintun internally)
+var _ = unsafe.Pointer(nil)
+var _ = windows.ERROR_SUCCESS
 
 func cleanupStaleWindows() {
 	tmpDir := os.TempDir()
