@@ -56,6 +56,7 @@ type GTunnelClient struct {
 	currentGW  token.GatewayEndpoint
 	psk        []byte
 	switchFn   func(newIP string)
+	quic       *QUICEngine
 	connected  bool
 	mu         sync.RWMutex
 }
@@ -112,46 +113,66 @@ func (c *GTunnelClient) ProbeAndConnect(ctx context.Context, pool []token.Gatewa
 	return fmt.Errorf("all bootstrap nodes unreachable")
 }
 
-// probe attempts to connect to a single gateway.
+// probe attempts to connect to a single gateway via QUIC Datagram.
 func (c *GTunnelClient) probe(ctx context.Context, gw token.GatewayEndpoint) error {
-	// In production: establish QUIC connection to gw.IP:gw.Port
-	// For now, this is a placeholder that simulates the probe
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-		// Real implementation would use quic-go to dial
-		return fmt.Errorf("probe not implemented for %s:%d", gw.IP, gw.Port)
+	addr := fmt.Sprintf("%s:%d", gw.IP, gw.Port)
+	engine := NewQUICEngine(&QUICEngineConfig{
+		GatewayAddr: addr,
+	})
+
+	if err := engine.Connect(ctx); err != nil {
+		return err
 	}
+
+	// Success — store engine
+	c.mu.Lock()
+	if c.quic != nil {
+		c.quic.Close()
+	}
+	c.quic = engine
+	c.mu.Unlock()
+
+	return nil
 }
 
-// Send encrypts and sends a packet through the tunnel.
-// Pipeline: data → overlap split → FEC encode → ChaCha20 encrypt → QUIC send
+// Send encrypts and sends a packet through the tunnel via QUIC Datagram.
+// Pipeline: IP packet → overlap split → FEC encode → ChaCha20 encrypt → QUIC Datagram
 func (c *GTunnelClient) Send(packet []byte) error {
 	if len(packet) == 0 {
 		return nil
 	}
 
+	// If QUIC engine not connected, drop silently
+	if c.quic == nil || !c.quic.IsConnected() {
+		return fmt.Errorf("tunnel not connected")
+	}
+
 	// 1. Overlap sampling split
 	fragments := c.sampler.Split(packet)
 
-	// 2. For each fragment: FEC encode
+	// 2. For each fragment: FEC encode → encrypt → send
 	for _, frag := range fragments {
 		shards, err := c.fec.Encode(frag.Data)
 		if err != nil {
 			return fmt.Errorf("fec encode: %w", err)
 		}
 
-		// 3. Encrypt each shard
+		// 3. Encrypt and fire each shard
 		for _, shard := range shards {
-			encrypted, err := c.encrypt(shard)
+			// Prepend fragment header before encryption
+			header := EncodeFragmentHeader(&frag)
+			payload := append(header, shard...)
+
+			encrypted, err := c.encrypt(payload)
 			if err != nil {
-				return fmt.Errorf("encrypt: %w", err)
+				continue // skip this shard on encrypt failure
 			}
 
-			// 4. Send via QUIC (placeholder)
-			_ = encrypted
-			// In production: c.quicStream.Write(encrypted)
+			// 4. Fire via QUIC Datagram (unreliable, FEC handles loss)
+			if err := c.quic.SendDatagram(encrypted); err != nil {
+				// Congestion or buffer full — drop and let FEC recover
+				continue
+			}
 		}
 	}
 
@@ -159,14 +180,32 @@ func (c *GTunnelClient) Send(packet []byte) error {
 }
 
 // Receive reads and decrypts a packet from the tunnel.
-// Pipeline: QUIC receive → decrypt → FEC decode → reassemble
-func (c *GTunnelClient) Receive() ([]byte, error) {
-	// Placeholder: in production, read from QUIC stream
-	// 1. Read encrypted shards from QUIC
-	// 2. Decrypt each shard
-	// 3. FEC decode to recover fragments
-	// 4. Reassemble fragments into original packet
-	return nil, fmt.Errorf("receive not implemented: no active QUIC connection")
+// Pipeline: QUIC Datagram → decrypt → strip header → FEC decode → reassemble
+func (c *GTunnelClient) Receive(ctx context.Context) ([]byte, error) {
+	if c.quic == nil || !c.quic.IsConnected() {
+		return nil, fmt.Errorf("tunnel not connected")
+	}
+
+	// Read single datagram (one encrypted shard)
+	msg, err := c.quic.ReceiveDatagram(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Decrypt
+	plaintext, err := c.decrypt(msg)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt: %w", err)
+	}
+
+	// Strip 8-byte fragment header to get raw shard data
+	if len(plaintext) <= 8 {
+		return nil, fmt.Errorf("payload too short")
+	}
+
+	// For now, return the raw payload (full reassembly requires buffering multiple shards)
+	// TODO: implement full FEC decode + reassembly pipeline with shard buffer
+	return plaintext[8:], nil
 }
 
 // PullRouteTable fetches the dynamic route table through the tunnel.
@@ -227,7 +266,9 @@ func (c *GTunnelClient) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.connected = false
-	// In production: close QUIC connection
+	if c.quic != nil {
+		return c.quic.Close()
+	}
 	return nil
 }
 
@@ -235,6 +276,9 @@ func (c *GTunnelClient) Close() error {
 func (c *GTunnelClient) IsConnected() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	if c.quic != nil {
+		return c.quic.IsConnected()
+	}
 	return c.connected
 }
 

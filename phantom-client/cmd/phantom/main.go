@@ -348,7 +348,7 @@ func forwardTunnelToTUN(ctx context.Context, client *gtclient.GTunnelClient, dev
 		default:
 		}
 
-		packet, err := client.Receive()
+		packet, err := client.Receive(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
