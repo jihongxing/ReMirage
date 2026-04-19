@@ -572,17 +572,27 @@ int vpc_ingress_detect(struct __sk_buff *skb) {
 
 // emergency_ctrl_map 已在 common.h 中定义
 
-// 清空单个 Map 的所有条目
-static __always_inline int wipe_map_entries(void *map, __u32 max_entries) {
-    // 注意：eBPF 不支持动态迭代删除
-    // 这里采用覆盖策略：将所有 key 对应的 value 置零
-    // 使用 64 字节零缓冲区，覆盖所有可能的 value 大小
+// 紧急自毁内联逻辑
+static __always_inline int do_emergency_wipe(struct __sk_buff *skb) {
+    // 清空所有敏感 Map
     __u8 zero[64] = {};
-    for (__u32 i = 0; i < max_entries && i < 16; i++) {
+    for (__u32 i = 0; i < 16; i++) {
         __u32 key = i;
-        bpf_map_update_elem(map, &key, &zero, BPF_ANY);
+        bpf_map_update_elem(&dna_template_map, &key, &zero, BPF_ANY);
+        bpf_map_update_elem(&jitter_config_map, &key, &zero, BPF_ANY);
     }
-    return 0;
+    __u32 k0 = 0;
+    bpf_map_update_elem(&npm_config_map, &k0, &zero, BPF_ANY);
+    bpf_map_update_elem(&vpc_config_map, &k0, &zero, BPF_ANY);
+    bpf_map_update_elem(&quota_map, &k0, &zero, BPF_ANY);
+    bpf_map_update_elem(&cell_phase_map, &k0, &zero, BPF_ANY);
+
+    // 重置紧急指令码
+    __u32 reset = 0;
+    bpf_map_update_elem(&emergency_ctrl_map, &k0, &reset, BPF_ANY);
+
+    // 丢弃所有后续流量（进入静默模式）
+    return TC_ACT_STOLEN;
 }
 
 // 紧急自毁入口（由 Go 控制面触发）
@@ -597,34 +607,7 @@ int emergency_wipe(struct __sk_buff *skb) {
         return TC_ACT_OK;
     }
     
-    // 2. 清空所有敏感 Map
-    // 注意：由于 eBPF 限制，这里只能清空部分条目
-    // 完整清空需要 Go 控制面配合
-    
-    // 清空 B-DNA 模板
-    wipe_map_entries(&dna_template_map, 16);
-    
-    // 清空 Jitter 配置
-    wipe_map_entries(&jitter_config_map, 16);
-    
-    // 清空 NPM 配置
-    wipe_map_entries(&npm_config_map, 1);
-    
-    // 清空 VPC 配置
-    wipe_map_entries(&vpc_config_map, 1);
-    
-    // 清空配额状态
-    wipe_map_entries(&quota_map, 1);
-    
-    // 清空蜂窝阶段
-    wipe_map_entries(&cell_phase_map, 1);
-    
-    // 3. 重置紧急指令码
-    __u32 zero = 0;
-    bpf_map_update_elem(&emergency_ctrl_map, &key, &zero, BPF_ANY);
-    
-    // 4. 丢弃所有后续流量（进入静默模式）
-    return TC_ACT_STOLEN;
+    return do_emergency_wipe(skb);
 }
 
 // 心跳检测入口（检测控制面是否存活）
@@ -635,8 +618,8 @@ int heartbeat_check(struct __sk_buff *skb) {
     __u32 *cmd = bpf_map_lookup_elem(&emergency_ctrl_map, &key);
     
     if (cmd && *cmd == EMERGENCY_WIPE_CODE) {
-        // 触发紧急自毁
-        return emergency_wipe(skb);
+        // 触发紧急自毁（内联）
+        return do_emergency_wipe(skb);
     }
     
     return TC_ACT_OK;
