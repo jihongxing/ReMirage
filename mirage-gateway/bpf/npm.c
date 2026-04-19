@@ -115,25 +115,9 @@ static __always_inline __u32 calculate_padding(
     return padding;
 }
 
-// 填充随机数据（熵注入）
-static __always_inline void fill_random_padding(
-    void *data,
-    void *data_end,
-    __u32 offset,
-    __u32 size
-) {
-    // eBPF 限制：无法直接写入大量数据
-    // 使用 bpf_xdp_adjust_tail 扩展后，新区域自动为零
-    // 这里可以选择性注入随机字节
-    
-    __u8 *ptr = data + offset;
-    if ((void *)(ptr + 4) > data_end)
-        return;
-    
-    // 注入随机魔数（用于调试和验证）
-    __u32 magic = bpf_get_prandom_u32();
-    *(__u32 *)ptr = magic;
-}
+// 填充随机数据（熵注入）- 直接在调用处内联使用
+// 注意：eBPF verifier 无法追踪通过函数参数传递的包指针边界
+// 因此不能将 data/data_end 作为参数传递给辅助函数
 
 /* ============================================
  * XDP 核心程序：出口填充
@@ -223,8 +207,14 @@ int npm_padding_egress(struct xdp_md *ctx)
         csum = (csum & 0xFFFF) + (csum >> 16);
     ip->check = ~csum;
     
-    // 13. 填充随机数据
-    fill_random_padding(data, data_end, current_size, padding);
+    // 13. 填充随机数据（内联，避免 verifier 丢失包指针边界）
+    {
+        __u8 *ptr = data + current_size;
+        if ((void *)(ptr + 4) <= data_end) {
+            __u32 magic = bpf_get_prandom_u32();
+            *(__u32 *)ptr = magic;
+        }
+    }
     
     // 14. 更新统计
     if (stats) {
