@@ -105,67 +105,70 @@ struct {
  * TCP 指纹重写
  * ============================================ */
 
-// 解析并重写 TCP 选项
-static __always_inline int rewrite_tcp_options(
-    struct tcphdr *tcp,
-    void *data_end,
+// 使用 bpf_skb_load_bytes/store_bytes 重写 TCP 选项
+// 避免 verifier 无法追踪动态 doff 偏移的包指针问题
+static __always_inline int rewrite_tcp_options_safe(
+    struct __sk_buff *skb,
+    __u32 tcp_offset,
+    __u32 opt_len,
     struct stack_fingerprint *fp
 ) {
-    if (!fp)
+    if (!fp || opt_len == 0 || opt_len > 40)
         return -1;
     
-    __u8 *opt = (__u8 *)tcp + sizeof(struct tcphdr);
-    __u8 *opt_end = (__u8 *)tcp + (tcp->doff * 4);
+    __u8 opts[40] = {};
     
-    if ((void *)opt_end > data_end)
+    // 从 skb 加载 TCP Options 到栈上
+    __u32 opt_offset = tcp_offset + sizeof(struct tcphdr);
+    if (bpf_skb_load_bytes(skb, opt_offset, opts, opt_len) < 0)
         return -1;
     
-    // 遍历 TCP 选项（固定迭代次数，避免展开警告）
-    for (int i = 0; i < 40; i++) {
-        if (opt >= opt_end)
-            break;
-        if ((void *)(opt + 1) > data_end)
+    // 在栈上遍历并修改 TCP Options
+    __u32 pos = 0;
+    #pragma unroll
+    for (int i = 0; i < 20; i++) {
+        if (pos >= opt_len)
             break;
         
-        __u8 kind = *opt;
+        __u8 kind = opts[pos];
         
         if (kind == TCPOPT_EOL)
             break;
         
         if (kind == TCPOPT_NOP) {
-            opt++;
+            pos++;
             continue;
         }
         
-        if ((void *)(opt + 2) > data_end)
+        if (pos + 1 >= opt_len)
             break;
         
-        __u8 len = *(opt + 1);
-        if (len < 2 || (void *)(opt + len) > data_end)
+        __u8 len = opts[pos + 1];
+        if (len < 2 || pos + len > opt_len)
             break;
         
         switch (kind) {
         case TCPOPT_MSS:
-            // 重写 MSS
-            if (len == TCPOLEN_MSS && (void *)(opt + 4) <= data_end) {
-                *(__u16 *)(opt + 2) = bpf_htons(fp->tcp_mss);
+            if (len == TCPOLEN_MSS && pos + 3 < opt_len) {
+                __u16 mss = bpf_htons(fp->tcp_mss);
+                opts[pos + 2] = (__u8)(mss >> 8);
+                opts[pos + 3] = (__u8)(mss & 0xFF);
             }
             break;
             
         case TCPOPT_WSCALE:
-            // 重写窗口缩放因子
-            if (len == TCPOLEN_WSCALE && (void *)(opt + 3) <= data_end) {
-                *(opt + 2) = fp->tcp_wscale;
+            if (len == TCPOLEN_WSCALE && pos + 2 < opt_len) {
+                opts[pos + 2] = fp->tcp_wscale;
             }
-            break;
-            
-        case TCPOPT_TIMESTAMP:
-            // 时间戳选项：可选择性修改
             break;
         }
         
-        opt += len;
+        pos += len;
     }
+    
+    // 写回修改后的 Options
+    if (bpf_skb_store_bytes(skb, opt_offset, opts, opt_len, 0) < 0)
+        return -1;
     
     return 0;
 }
@@ -184,7 +187,7 @@ int bdna_tcp_rewrite(struct __sk_buff *skb)
     if (eth->h_proto != bpf_htons(ETH_P_IP))
         return TC_ACT_OK;
     
-    // 2. 解析 IP 头
+    // 2. 解析 IP 头（固定偏移，SYN 包无 IP Options）
     struct iphdr *ip = (void *)(eth + 1);
     if ((void *)(ip + 1) > data_end)
         return TC_ACT_OK;
@@ -192,10 +195,10 @@ int bdna_tcp_rewrite(struct __sk_buff *skb)
     if (ip->protocol != IPPROTO_TCP)
         return TC_ACT_OK;
     
-    // 3. 解析 TCP 头（固定 IP 头 20 字节偏移，SYN 包无 IP Options）
     if (ip->ihl != 5)
-        return TC_ACT_OK;  // 跳过带 IP Options 的包
+        return TC_ACT_OK;
     
+    // 3. 解析 TCP 头（固定 IP 偏移）
     struct tcphdr *tcp = (void *)(ip + 1);
     if ((void *)(tcp + 1) > data_end)
         return TC_ACT_OK;
@@ -222,8 +225,15 @@ int bdna_tcp_rewrite(struct __sk_buff *skb)
     __u16 old_window = tcp->window;
     tcp->window = bpf_htons(fp->tcp_window);
     
-    // 7. 重写 TCP 选项
-    rewrite_tcp_options(tcp, data_end, fp);
+    // 7. 重写 TCP 选项（通过 bpf_skb_load_bytes/store_bytes）
+    __u32 doff = tcp->doff;
+    if (doff < 5 || doff > 15)
+        return TC_ACT_OK;
+    __u32 opt_len = (doff - 5) * 4;
+    if (opt_len > 0) {
+        __u32 tcp_offset = ETH_HLEN + sizeof(struct iphdr);
+        rewrite_tcp_options_safe(skb, tcp_offset, opt_len, fp);
+    }
     
     // 8. 重新计算 TCP 校验和（增量更新）
     __u32 csum = (~tcp->check) & 0xFFFF;
@@ -403,7 +413,7 @@ int bdna_tls_rewrite(struct __sk_buff *skb)
     if (eth->h_proto != bpf_htons(ETH_P_IP))
         return TC_ACT_OK;
     
-    // 2. 解析 IP 头
+    // 2. 解析 IP 头（固定偏移）
     struct iphdr *ip = (void *)(eth + 1);
     if ((void *)(ip + 1) > data_end)
         return TC_ACT_OK;
@@ -411,19 +421,21 @@ int bdna_tls_rewrite(struct __sk_buff *skb)
     if (ip->protocol != IPPROTO_TCP)
         return TC_ACT_OK;
     
-    // 3. 解析 TCP 头（固定偏移）
     if (ip->ihl != 5)
         return TC_ACT_OK;
     
+    // 3. 解析 TCP 头（固定 IP 偏移）
     struct tcphdr *tcp = (void *)(ip + 1);
     if ((void *)(tcp + 1) > data_end)
         return TC_ACT_OK;
     
-    // 4. 获取 TCP 载荷（固定 TCP 头偏移）
-    if (tcp->doff < 5 || tcp->doff > 15)
+    // 4. 位掩码黄金法则：跳过 TCP Options 到达 payload
+    __u32 doff_len = tcp->doff * 4;
+    if (doff_len < sizeof(struct tcphdr) || doff_len > 60)
         return TC_ACT_OK;
+    doff_len &= 0x3C;  // 强制定界：最大 60，且 4 字节对齐
     
-    void *payload = (void *)(((__u8 *)tcp) + (tcp->doff * 4));
+    void *payload = (void *)((__u8 *)tcp) + doff_len;
     if ((void *)(payload + 6) > data_end)
         return TC_ACT_OK;
     
@@ -441,7 +453,7 @@ int bdna_tls_rewrite(struct __sk_buff *skb)
         return TC_ACT_OK;
     
     // 6. TLS Extension 顺序重排
-    // 注意：由于 eBPF 限制，复杂的 TLS 重写需要用户态配合
+    // 由于 eBPF 限制，复杂的 TLS 重写需要用户态配合
     // 这里标记包，由用户态完成实际重写
     skb->mark |= 0x544C5348;  // "TLSH" magic
     
@@ -515,10 +527,13 @@ int bdna_ja4_capture(struct __sk_buff *skb)
     if ((void *)(tcp + 1) > data_end)
         return TC_ACT_OK;
     
-    if (tcp->doff < 5 || tcp->doff > 15)
+    // 位掩码黄金法则
+    __u32 doff_len = tcp->doff * 4;
+    if (doff_len < sizeof(struct tcphdr) || doff_len > 60)
         return TC_ACT_OK;
+    doff_len &= 0x3C;
     
-    void *payload = (void *)(((__u8 *)tcp) + (tcp->doff * 4));
+    void *payload = (void *)((__u8 *)tcp) + doff_len;
     if ((void *)(payload + 6) > data_end)
         return TC_ACT_OK;
     

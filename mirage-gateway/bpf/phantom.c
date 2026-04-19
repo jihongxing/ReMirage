@@ -128,13 +128,19 @@ int phantom_redirect(struct __sk_buff *skb) {
         event->honeypot_ip = new_dst;
         event->event_type = 0; // redirect
         
-        // 解析端口
-        struct tcphdr *tcp = (void *)ip + (ip->ihl * 4);
+        // 解析端口（位掩码黄金法则）
+        __u32 ip_hlen = ip->ihl * 4;
+        if (ip_hlen < 20 || ip_hlen > 60)
+            goto submit_event;
+        ip_hlen &= 0x3C;
+        
+        struct tcphdr *tcp = (void *)((__u8 *)ip) + ip_hlen;
         if ((void *)(tcp + 1) <= data_end) {
             event->src_port = bpf_ntohs(tcp->source);
             event->dst_port = bpf_ntohs(tcp->dest);
         }
         
+submit_event:
         bpf_ringbuf_submit(event, 0);
     }
     

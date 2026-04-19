@@ -372,8 +372,13 @@ int npm_mtu_probe(struct xdp_md *ctx)
     if (ip->protocol != 1)  // ICMP
         return XDP_PASS;
     
-    // 解析 ICMP
-    __u8 *icmp = (void *)ip + (ip->ihl * 4);
+    // 解析 ICMP（位掩码黄金法则，XDP 上下文）
+    __u32 ip_hlen = ip->ihl * 4;
+    if (ip_hlen < 20 || ip_hlen > 60)
+        return XDP_PASS;
+    ip_hlen &= 0x3C;
+    
+    __u8 *icmp = (void *)((__u8 *)ip) + ip_hlen;
     if ((void *)(icmp + 8) > data_end)
         return XDP_PASS;
     

@@ -97,7 +97,7 @@ int chameleon_tls_rewrite(struct __sk_buff *skb) {
     if (eth->h_proto != bpf_htons(ETH_P_IP))
         return TC_ACT_OK;
     
-    // 3. 解析 IP 头
+    // 3. 解析 IP 头（固定偏移）
     struct iphdr *ip = (void *)(eth + 1);
     if ((void *)(ip + 1) > data_end)
         return TC_ACT_OK;
@@ -106,20 +106,28 @@ int chameleon_tls_rewrite(struct __sk_buff *skb) {
     if (ip->protocol != IPPROTO_TCP)
         return TC_ACT_OK;
     
-    struct tcphdr *tcp = (void *)ip + sizeof(*ip);
+    if (ip->ihl != 5)
+        return TC_ACT_OK;
+    
+    struct tcphdr *tcp = (void *)(ip + 1);
     if ((void *)(tcp + 1) > data_end)
         return TC_ACT_OK;
     
-    // 5. 检查是否为 TLS ClientHello
-    void *payload = (void *)tcp + (tcp->doff * 4);
+    // 5. 位掩码黄金法则：跳过 TCP Options 到达 payload
+    __u32 doff_len = tcp->doff * 4;
+    if (doff_len < sizeof(struct tcphdr) || doff_len > 60)
+        return TC_ACT_OK;
+    doff_len &= 0x3C;
+    
+    void *payload = (void *)((__u8 *)tcp) + doff_len;
+    if ((void *)(payload + 6) > data_end)
+        return TC_ACT_OK;
+    
     if (!is_tls_client_hello(payload, data_end))
         return TC_ACT_OK;
     
     // 6. TLS 指纹重写
-    // 注意：eBPF 无法直接修改包内容（需要 bpf_skb_store_bytes）
-    // 这里只做标记，实际重写在用户态完成
-    
-    // 记录事件
+    // 实际重写在用户态完成，这里只做标记和事件上报
     report_threat(
         THREAT_NONE,
         ip->saddr,
