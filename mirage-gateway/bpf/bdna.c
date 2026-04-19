@@ -192,8 +192,12 @@ int bdna_tcp_rewrite(struct __sk_buff *skb)
     if (ip->protocol != IPPROTO_TCP)
         return TC_ACT_OK;
     
-    // 3. 解析 TCP 头
-    struct tcphdr *tcp = (void *)ip + (ip->ihl * 4);
+    // 3. 解析 TCP 头（使用固定偏移，避免 verifier 无法追踪 ihl 动态值）
+    __u8 ip_hlen = ip->ihl * 4;
+    if (ip_hlen < 20 || ip_hlen > 60)
+        return TC_ACT_OK;
+    
+    struct tcphdr *tcp = (void *)ip + ip_hlen;
     if ((void *)(tcp + 1) > data_end)
         return TC_ACT_OK;
     
@@ -307,7 +311,11 @@ int bdna_quic_rewrite(struct __sk_buff *skb)
         return TC_ACT_OK;
     
     // 3. 解析 UDP 头
-    struct udphdr *udp = (void *)ip + (ip->ihl * 4);
+    __u8 ip_hlen = ip->ihl * 4;
+    if (ip_hlen < 20 || ip_hlen > 60)
+        return TC_ACT_OK;
+    
+    struct udphdr *udp = (void *)ip + ip_hlen;
     if ((void *)(udp + 1) > data_end)
         return TC_ACT_OK;
     
@@ -406,12 +414,23 @@ int bdna_tls_rewrite(struct __sk_buff *skb)
         return TC_ACT_OK;
     
     // 3. 解析 TCP 头
-    struct tcphdr *tcp = (void *)ip + (ip->ihl * 4);
+    __u8 ip_hlen2 = ip->ihl * 4;
+    if (ip_hlen2 < 20 || ip_hlen2 > 60)
+        return TC_ACT_OK;
+    
+    struct tcphdr *tcp = (void *)ip + ip_hlen2;
     if ((void *)(tcp + 1) > data_end)
         return TC_ACT_OK;
     
     // 4. 获取 TCP 载荷
-    void *payload = (void *)tcp + (tcp->doff * 4);
+    __u8 tcp_hlen = tcp->doff * 4;
+    if (tcp_hlen < 20 || tcp_hlen > 60)
+        return TC_ACT_OK;
+    
+    void *payload = (void *)tcp + tcp_hlen;
+    if ((void *)(payload + 6) > data_end)
+        return TC_ACT_OK;
+    
     if (!is_tls_client_hello(payload, data_end))
         return TC_ACT_OK;
     
@@ -493,11 +512,22 @@ int bdna_ja4_capture(struct __sk_buff *skb)
     if (ip->protocol != IPPROTO_TCP)
         return TC_ACT_OK;
     
-    struct tcphdr *tcp = (void *)ip + (ip->ihl * 4);
+    __u8 ip_hlen3 = ip->ihl * 4;
+    if (ip_hlen3 < 20 || ip_hlen3 > 60)
+        return TC_ACT_OK;
+    
+    struct tcphdr *tcp = (void *)ip + ip_hlen3;
     if ((void *)(tcp + 1) > data_end)
         return TC_ACT_OK;
     
-    void *payload = (void *)tcp + (tcp->doff * 4);
+    __u8 tcp_hlen2 = tcp->doff * 4;
+    if (tcp_hlen2 < 20 || tcp_hlen2 > 60)
+        return TC_ACT_OK;
+    
+    void *payload = (void *)tcp + tcp_hlen2;
+    if ((void *)(payload + 6) > data_end)
+        return TC_ACT_OK;
+    
     if (!is_tls_client_hello(payload, data_end))
         return TC_ACT_OK;
     
