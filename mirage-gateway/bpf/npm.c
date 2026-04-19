@@ -120,11 +120,10 @@ static __always_inline __u32 calculate_padding(
 // 因此不能将 data/data_end 作为参数传递给辅助函数
 
 /* ============================================
- * XDP 核心程序：出口填充
+ * XDP 内部逻辑：出口填充
  * ============================================ */
 
-SEC("xdp")
-int npm_padding_egress(struct xdp_md *ctx)
+static __always_inline int handle_npm_padding(struct xdp_md *ctx)
 {
     void *data = (void *)(long)ctx->data;
     void *data_end = (void *)(long)ctx->data_end;
@@ -168,7 +167,6 @@ int npm_padding_egress(struct xdp_md *ctx)
     __u32 threshold = (cfg->filling_rate * 0xFFFFFFFF) / 100;
     
     if (rand > threshold) {
-        // 不填充
         return XDP_PASS;
     }
     
@@ -182,11 +180,10 @@ int npm_padding_egress(struct xdp_md *ctx)
     // 9. 执行尾部扩展
     int ret = bpf_xdp_adjust_tail(ctx, padding);
     if (ret < 0) {
-        // 扩展失败（可能超过 MTU）
         return XDP_PASS;
     }
     
-    // 10. 重新获取数据指针（adjust 后指针可能变化）
+    // 10. 重新获取数据指针（adjust 后指针失效）
     data = (void *)(long)ctx->data;
     data_end = (void *)(long)ctx->data_end;
     
@@ -207,10 +204,7 @@ int npm_padding_egress(struct xdp_md *ctx)
         csum = (csum & 0xFFFF) + (csum >> 16);
     ip->check = ~csum;
     
-    // 13. 扩展区域已自动零填充，无需额外写入
-    //     （避免 verifier 无法追踪 adjust_tail 后旧偏移量的合法性）
-    
-    // 14. 更新统计
+    // 13. 更新统计
     if (stats) {
         __sync_fetch_and_add(&stats->padded_packets, 1);
         __sync_fetch_and_add(&stats->padding_bytes, padding);
@@ -220,11 +214,10 @@ int npm_padding_egress(struct xdp_md *ctx)
 }
 
 /* ============================================
- * XDP 入口程序：剥离填充
+ * XDP 内部逻辑：入口剥离填充
  * ============================================ */
 
-SEC("xdp")
-int npm_strip_ingress(struct xdp_md *ctx)
+static __always_inline int handle_npm_strip(struct xdp_md *ctx)
 {
     void *data = (void *)(long)ctx->data;
     void *data_end = (void *)(long)ctx->data_end;
@@ -250,12 +243,27 @@ int npm_strip_ingress(struct xdp_md *ctx)
         __u32 padding = frame_len - ip_len;
         
         // 剥离填充
-        int ret = bpf_xdp_adjust_tail(ctx, -(__s32)padding);
-        if (ret < 0)
-            return XDP_PASS;
+        bpf_xdp_adjust_tail(ctx, -(__s32)padding);
     }
     
     return XDP_PASS;
+}
+
+/* ============================================
+ * XDP 唯一挂载点：合并入口（Single Entry Point）
+ * Linux 内核规定：一个网卡接口只能挂载一个 XDP 程序
+ * ============================================ */
+
+SEC("xdp")
+int npm_xdp_main(struct xdp_md *ctx)
+{
+    // 先执行入站剥离
+    int action = handle_npm_strip(ctx);
+    if (action != XDP_PASS)
+        return action;
+    
+    // 再执行出站填充
+    return handle_npm_padding(ctx);
 }
 
 /* ============================================

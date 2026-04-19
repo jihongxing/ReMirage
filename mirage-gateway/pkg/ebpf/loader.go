@@ -255,15 +255,9 @@ func (l *Loader) loadFollowerProgram(prog bpfProgram) error {
 
 // attachNPM 挂载 NPM (XDP)
 func (l *Loader) attachNPM(loader *Loader, objs *ebpf.Collection) error {
-	// XDP: npm_padding_egress（主防线，必须成功）
-	if err := l.attachXDP(objs, "npm_padding_egress"); err != nil {
-		return fmt.Errorf("挂载 npm_padding_egress 失败: %w", err)
-	}
-	// XDP: npm_strip_ingress（辅助，可降级）
-	if prog := objs.Programs["npm_strip_ingress"]; prog != nil {
-		if err := l.attachXDP(objs, "npm_strip_ingress"); err != nil {
-			log.Printf("  ⚠️  npm_strip_ingress 挂载失败（降级）: %v", err)
-		}
+	// XDP 单入口：npm_xdp_main（合并了 padding + strip）
+	if err := l.attachXDP(objs, "npm_xdp_main"); err != nil {
+		return fmt.Errorf("挂载 npm_xdp_main 失败: %w", err)
 	}
 	return nil
 }
@@ -492,16 +486,16 @@ func (l *Loader) attachSkMsg(objs *ebpf.Collection) error {
 		return fmt.Errorf("sockmap 不存在")
 	}
 
-	lnk, err := link.AttachRawLink(link.RawLinkOptions{
+	// sk_msg 必须通过 RawAttachProgram 挂载到 Map FD（非 RawLink）
+	err := link.RawAttachProgram(link.RawAttachProgramOptions{
 		Target:  sockMap.FD(),
 		Program: prog,
 		Attach:  ebpf.AttachSkMsgVerdict,
 	})
 	if err != nil {
-		return fmt.Errorf("AttachRawLink sk_msg 失败: %w", err)
+		return fmt.Errorf("RawAttachProgram sk_msg 失败: %w", err)
 	}
 
-	l.links = append(l.links, lnk)
 	log.Println("  ✅ sk_msg 已挂载到 sockmap")
 	return nil
 }
