@@ -65,8 +65,20 @@
 - Linux 编译验证通过（OpenCloudOS 9, kernel 6.6.119, clang 17, Go 1.24.2）
 - eBPF 数据面：7 个 .o 全部编译成功（bdna/chameleon/h3_shaper/jitter/npm/phantom/sockmap）
 - Go 控制面：bin/mirage-gateway 二进制生成，零错误
-- Linux 运行验证通过：18 阶段全量启动，eBPF 全量挂载（共享 Map 13 个，总 Map 43 个）
-- eBPF Verifier 系统性修复：位掩码定界、Pointer Refresh Pattern、Bulletproof Scanner
+- Linux 运行验证通过：18 阶段全量启动，零降级，零警告
+- eBPF 全量挂载：XDP 1 个 + TC 8 个 + Sockops 1 个 + sk_msg 1 个，共享 Map 13 个，总 Map 43 个
+- Sockmap 零拷贝路径已激活
+- Dead Man's Switch 自毁序列验证通过（心跳超时 → 0xDEADBEEF → Map 清空 → 内存擦除 → 进程退出）
+
+### eBPF Verifier 修复
+- jitter.c: 内联 emergency_wipe 消除跨程序 BPF 调用
+- npm.c: 合并双 XDP 为 npm_xdp_main 单入口（Single-Tenancy Rule）
+- bdna.c: Bulletproof Scanner — 逐字节 skb 游走，零栈变量偏移访问
+- bdna.c: Pointer Refresh Pattern — store_bytes 后刷新所有包指针
+- bdna.c: bpf_l4_csum_replace 替代手动校验和计算
+- bdna.c/chameleon.c: 位掩码黄金法则 (doff_len &= 0x3C) 强制定界
+- phantom.c/npm.c: ip_hlen &= 0x3C 位掩码定界
+- loader.go: sk_msg 改用 RawAttachProgram 挂载到 Map FD
 
 ---
 
