@@ -1,0 +1,77 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ${MIRAGE_DB_NAME:-mirage}
+      POSTGRES_USER: ${MIRAGE_DB_USER:-mirage}
+      POSTGRES_PASSWORD: ${MIRAGE_DB_PASSWORD}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MIRAGE_DB_USER:-mirage}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  gateway-bridge:
+    build: ./gateway-bridge
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${MIRAGE_DB_USER:-mirage}:${MIRAGE_DB_PASSWORD}@postgres:5432/${MIRAGE_DB_NAME:-mirage}
+      REDIS_URL: redis://redis:6379
+      TLS_CERT: /etc/mirage/certs/os.crt
+      TLS_KEY: /etc/mirage/certs/os.key
+      TLS_CA: /etc/mirage/certs/ca.crt
+    volumes:
+      - ${MIRAGE_CERT_DIR:-./certs}:/etc/mirage/certs:ro
+    ports:
+      - "50847:50847"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 50847 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  api-server:
+    build: ./api-server
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${MIRAGE_DB_USER:-mirage}:${MIRAGE_DB_PASSWORD}@postgres:5432/${MIRAGE_DB_NAME:-mirage}
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${MIRAGE_JWT_SECRET}
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  pg_data:
+  redis_data:

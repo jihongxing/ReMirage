@@ -1,0 +1,41 @@
+# 任务清单：Phase 4 — 生产加固与交付
+
+- [x] 1. 安全加固模块
+  - [x] 1.1 创建 `pkg/security/ram_shield.go`：SecureBuffer 结构体、RAMShield 结构体（registeredBufs 列表）、NewRAMShield、SecureAlloc（分配 + syscall.Mlock + 注册）、SecureWipe（逐字节清零 + syscall.Munlock + 移除注册）、DisableCoreDump（RLIMIT_CORE=0）、CheckSwapUsage（解析 /proc/self/status VmSwap）、WipeAll；Linux 实现 + Windows/macOS 降级桩
+  - [x] 1.2 创建 `pkg/security/cert_pinning.go`：CertPin 结构体（pinnedHash [32]byte）、NewCertPin（支持预设 configHash）、PinCertificate（SHA-256 DER 指纹）、VerifyPin（比较指纹，不匹配返回 error + 安全告警）、UpdatePin（替换钉扎值）、GetPinnedHash
+  - [x] 1.3 创建 `pkg/security/anti_debug.go`：AntiDebug 结构体、NewAntiDebug、StartMonitor（30 秒循环读取 /proc/self/status TracerPid + 扫描调试器进程）、IsDebuggerPresent、EnterSilentMode/ExitSilentMode、SetCallbacks、Stop、ParseTracerPid（纯函数，可测试）
+  - [x] 1.4 创建 `pkg/security/graceful_shutdown.go`：ShutdownModule 接口（Name + Shutdown）、EmergencyWiper 接口、GracefulShutdown 结构体、NewGracefulShutdown、RegisterModule、RegisterSensitiveBuffer、Shutdown（逆序关闭模块 → TriggerWipe → WipeAll → 30 秒超时强制退出）
+  - [x] 1.5 创建 `pkg/security/ram_shield_test.go`：Property 1（SecureWipe 清零）、Property 2（SecureAlloc/Wipe 往返）、Property 3（CheckSwapUsage 解析）属性测试 + DisableCoreDump/VmSwap 告警单元测试；使用 pgregory.net/rapid，最少 100 次迭代
+  - [x] 1.6 创建 `pkg/security/cert_pinning_test.go`：Property 4（钉扎验证往返）、Property 5（更新后旧证书拒绝）属性测试 + 预设指纹/未钉扎边界单元测试；使用 pgregory.net/rapid，最少 100 次迭代
+  - [x] 1.7 创建 `pkg/security/anti_debug_test.go`：Property 6（TracerPid 解析）属性测试 + 静默模式进入退出/调试器进程名匹配单元测试
+  - [x] 1.8 创建 `pkg/security/graceful_shutdown_test.go`：Property 7（逆序关闭）、Property 8（擦除所有缓冲区）属性测试 + 30 秒超时/空模块列表/EmergencyWiper 调用单元测试
+- [x] 2. main.go 安全集成
+  - [x] 2.1 重构 `cmd/gateway/main.go`：在启动序列中集成 RAMShield.DisableCoreDump + RAMShield.CheckSwapUsage + CertPin 初始化 + AntiDebug.StartMonitor + GracefulShutdown 注册所有模块
+  - [x] 2.2 实现优雅关闭集成：SIGINT/SIGTERM → GracefulShutdown.Shutdown（逆序关闭 gRPC → 威胁编排 → 策略引擎 → eBPF → mTLS，擦除所有敏感内存，清空 eBPF Map）
+  - [x] 2.3 扩展 `configs/gateway.yaml`：添加 security.ram_shield / security.cert_pinning / security.anti_debug / security.graceful_shutdown 配置段
+- [x] 3. 部署自动化 — 证书生成
+  - [x] 3.1 创建 `deploy/certs/gen_root_ca.sh`：生成自签名 Root CA（RSA 4096，10 年有效期），幂等（已存在则跳过），权限 600
+  - [x] 3.2 创建 `deploy/certs/gen_gateway_cert.sh`：接受 NODE_ID 参数，生成由 Root CA 签发的 Gateway 证书（RSA 2048，1 年），CN 包含节点 ID
+  - [x] 3.3 创建 `deploy/certs/gen_os_cert.sh`：生成由 Root CA 签发的 OS 节点证书（RSA 2048，1 年）
+  - [x] 3.4 创建 `deploy/certs/openssl.cnf`：OpenSSL 配置模板，包含 SAN 扩展
+- [x] 4. 部署自动化 — Ansible Gateway 部署
+  - [x] 4.1 创建 `deploy/ansible/playbook.yml`：主 playbook，引用 common/certs/gateway 三个 role
+  - [x] 4.2 创建 `deploy/ansible/roles/common/tasks/main.yml`：内核版本检查（< 5.15 终止）、安装 clang/llvm/golang/libelf-dev/libbpf-dev
+  - [x] 4.3 创建 `deploy/ansible/roles/certs/tasks/main.yml`：调用证书生成脚本、分发 Root CA 到所有节点、部署 Gateway 证书到 /etc/mirage/certs/（权限 600）
+  - [x] 4.4 创建 `deploy/ansible/roles/gateway/tasks/main.yml`：编译 eBPF（clang -O2 -target bpf）、编译 Go（CGO_ENABLED=1）、生成 gateway.yaml（模板）、部署 systemd 服务文件（mirage-gateway.service）、启动服务并验证 active 状态
+  - [x] 4.5 创建 `deploy/ansible/roles/gateway/templates/gateway.yaml.j2`：Jinja2 模板，包含节点 ID、网络接口、OS 端点等变量
+  - [x] 4.6 创建 `deploy/ansible/roles/upgrade/tasks/main.yml`：停止服务 → 备份旧二进制 → 部署新二进制 → 重启服务
+  - [x] 4.7 创建 `deploy/ansible/inventory/hosts.yml` + `deploy/ansible/group_vars/all.yml`：主机清单模板 + 全局变量（证书配置、编译配置、部署路径）
+- [x] 5. 部署自动化 — OS docker-compose
+  - [x] 5.1 创建 `deploy/docker-compose.os.yml`：四个服务（gateway-bridge、api-server、PostgreSQL 15、Redis 7）、环境变量配置敏感参数、数据持久化卷、服务依赖（depends_on + healthcheck）、健康检查配置
+- [x] 6. 性能基准测试
+  - [x] 6.1 创建 `benchmarks/ebpf_latency.bt`：bpftrace 脚本测量 XDP/TC 程序延迟，1000 次采样输出 P50/P95/P99，验证 P99 < 1ms
+  - [x] 6.2 创建 `benchmarks/fec_bench_test.go`：Go benchmark 测试 FEC 编码/解码延迟，四种包大小（64B/512B/1500B/9000B），验证 P99 < 1ms
+  - [x] 6.3 创建 `benchmarks/gswitch_bench_test.go`：Go benchmark 测试 G-Switch 转生端到端延迟（TriggerEscape），验证 < 5s
+  - [x] 6.4 创建 `benchmarks/resource_bench_test.go`：Go benchmark 模拟 N=10/50/100 并发连接，采集 runtime.MemStats（验证 < 200MB）、CPU profiling（验证 < 20%）、Goroutine 数量、GC 暂停时间
+  - [x] 6.5 创建 `benchmarks/load_test.sh`：负载测试脚本，调用 Go benchmark 并汇总输出资源占用报告
+- [x] 7. 安全检查清单
+  - [x] 7.1 创建 `tests/security_checklist_test.go`：7 个检查项（Mlock 注册验证、mTLS 强制启用、证书钉扎激活、反调试循环启动、tmpfs 无磁盘写入、紧急自毁功能、优雅关闭内存擦除），每项输出 CheckResult，汇总 ChecklistReport
+- [x] 8. tmpfs 部署验证
+  - [x] 8.1 更新 `mirage-gateway/Dockerfile.alpine`：确认根文件系统只读、tmpfs 挂载点、mem_swappiness=0、eBPF .o 从 tmpfs 加载
+  - [x] 8.2 更新 `mirage-gateway/docker-compose.tmpfs.yml`：确认 tmpfs 挂载 /var/mirage 和 /tmp、read_only: true、mem_swappiness: 0、gateway.yaml 只读挂载

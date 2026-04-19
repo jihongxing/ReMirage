@@ -1,0 +1,45 @@
+# 任务清单：Phase 2 — Mirage-OS 大脑 MVP
+
+- [x] 1. 项目脚手架与基础设施
+  - [x] 1.1 创建 `mirage-os/` 项目根目录，初始化 `docker-compose.yaml`（postgres:15-alpine、redis:7-alpine、gateway-bridge、api-server 四个服务，端口映射、环境变量、卷挂载、依赖关系）
+  - [x] 1.2 创建 `mirage-os/configs/mirage-os.yaml` 配置文件（grpc、database、redis、quota、intel 配置段）
+  - [x] 1.3 创建 `mirage-os/gateway-bridge/` Go 项目：`go.mod`（module mirage-os/gateway-bridge）、`cmd/bridge/main.go` 骨架、`Dockerfile`（多阶段构建）
+  - [x] 1.4 创建 `mirage-os/api-server/` NestJS 项目：`package.json`、`tsconfig.json`、`nest-cli.json`、`src/main.ts`、`src/app.module.ts`、`Dockerfile`
+  - [x] 1.5 创建 `mirage-os/gateway-bridge/proto/mirage.proto`（复用 Phase 1 定义的 GatewayUplink + GatewayDownlink 服务、所有消息和枚举），运行 protoc 生成 Go 代码
+- [x] 2. PostgreSQL 数据模型（Prisma Schema）
+  - [x] 2.1 创建 `mirage-os/api-server/src/prisma/schema.prisma`：定义 User、Cell、Gateway、BillingLog、ThreatIntel、Deposit、QuotaPurchase、InviteCode 八个模型，所有货币字段使用 @db.Decimal(20,8)，枚举 CellLevel/GatewayStatus/DepositStatus
+  - [x] 2.2 创建 `mirage-os/api-server/src/prisma/prisma.service.ts`：PrismaService 封装（onModuleInit 连接、enableShutdownHooks）
+  - [x] 2.3 创建 Go 侧数据库初始化 SQL（`mirage-os/gateway-bridge/pkg/store/migrations/001_init.sql`）：与 Prisma Schema 对齐的 CREATE TABLE 语句，确保 Go 直接写入的表（billing_logs、threat_intel、gateways、users quota 字段）与 Prisma 模型兼容
+  - [x] 2.4 创建 `mirage-os/gateway-bridge/pkg/store/postgres.go`：NewPostgres（连接池配置）、Ping、Close、事务辅助方法
+- [x] 3. Go gateway-bridge 核心模块
+  - [x] 3.1 创建 `mirage-os/gateway-bridge/pkg/config/config.go`：Config 结构体（GRPC/Database/Redis/Quota/Intel 配置段）、Load 函数（YAML 解析 + 必填字段校验）
+  - [x] 3.2 创建 `mirage-os/gateway-bridge/pkg/quota/enforcer.go`：Enforcer 结构体、NewEnforcer、CalculateCost（纯函数：businessBytes/defenseBytes/multiplier → costs）、Settle（事务：扣减 quota + 插入 billing_log + 更新 total_consumed）、GetRemainingQuota
+  - [x] 3.3 创建 `mirage-os/gateway-bridge/pkg/intel/distributor.go`：Distributor 结构体、NewDistributor、RecordThreat（UPSERT threat_intel）、CheckAndBan（hit_count >= 阈值 → 封禁 + Redis PUBLISH + SADD）、LoadBannedIPs、GetGlobalBlacklist、Cleanup
+  - [x] 3.4 创建 `mirage-os/gateway-bridge/pkg/dispatch/strategy.go`：StrategyDispatcher 结构体、NewStrategyDispatcher、RegisterGateway、PushStrategyToCell（从 Redis 获取在线 Gateway → 逐个推送）、PushBlacklistToAll、PushQuotaToGateway、RetryPending
+  - [x] 3.5 创建 `mirage-os/gateway-bridge/pkg/grpc/server.go`：Server 结构体（实现 GatewayUplinkServer）、NewServer、Start（mTLS/非 TLS 模式）、Stop、SyncHeartbeat（校验 → 更新 gateways 表 → Redis 缓存 → 查询 remaining_quota → 返回响应）、ReportTraffic（校验 → 调用 Enforcer.Settle）、ReportThreat（校验 → 遍历事件 → RecordThreat + CheckAndBan）
+  - [x] 3.6 完善 `mirage-os/gateway-bridge/cmd/bridge/main.go`：加载配置 → 连接 PostgreSQL → 连接 Redis → 初始化 Enforcer/Distributor/Dispatcher → 启动 gRPC Server → LoadBannedIPs → 优雅退出（SIGINT/SIGTERM）
+- [x] 4. Go gateway-bridge 测试
+  - [x] 4.1 创建 `mirage-os/gateway-bridge/pkg/quota/enforcer_test.go`：Property 1（费用计算精度）、Property 2（结算精度一致性）、Property 3（配额归零触发）、Property 4（蜂窝级别倍率单调性）+ 空流量跳过结算单元测试
+  - [x] 4.2 创建 `mirage-os/gateway-bridge/pkg/intel/distributor_test.go`：Property 5（封禁阈值）+ 清理旧记录单元测试
+  - [x] 4.3 创建 `mirage-os/gateway-bridge/pkg/grpc/server_test.go`：Property 10（无效 gRPC 请求拒绝）+ SyncHeartbeat/ReportTraffic/ReportThreat 集成测试
+  - [x] 4.4 创建 `mirage-os/gateway-bridge/pkg/config/config_test.go`：配置加载单元测试（有效 YAML、缺失必填字段）
+- [x] 5. NestJS api-server 认证模块
+  - [x] 5.1 创建 `mirage-os/api-server/src/modules/auth/auth.module.ts`、`auth.controller.ts`、`auth.service.ts`：POST /api/auth/register（邀请码验证 → bcrypt 密码哈希 → TOTP 密钥生成 → 创建用户 + 标记邀请码事务 → 返回 totpUri）、POST /api/auth/login（用户名密码验证 → TOTP 验证 → JWT 签发 24h）
+  - [x] 5.2 创建 `mirage-os/api-server/src/modules/auth/jwt.strategy.ts`、`jwt-auth.guard.ts`：Passport JWT 策略 + JwtAuthGuard（从 Bearer token 提取 user_id + cell_id）
+  - [x] 5.3 创建 `mirage-os/api-server/src/modules/auth/auth.service.spec.ts`：Property 6（邀请码一次性使用）、Property 7（登录统一拒绝）+ TOTP 生成/验证单元测试
+- [x] 6. NestJS api-server 业务模块
+  - [x] 6.1 创建 `mirage-os/api-server/src/modules/users/` 模块：GET /api/users（分页）、GET /api/users/:id、PATCH /api/users/:id/pubkey（绑定 Ed25519 公钥）、PATCH /api/users/:id/deactivate
+  - [x] 6.2 创建 `mirage-os/api-server/src/modules/billing/` 模块：GET /api/billing/logs（分页 + 时间范围过滤）、GET /api/billing/quota、POST /api/billing/recharge（事务：创建 quota_purchases + 增加 remaining_quota + total_deposit）、GET /api/billing/purchases
+  - [x] 6.3 创建 `mirage-os/api-server/src/modules/cells/` 模块：POST /api/cells（创建蜂窝，根据 level 自动设置 cost_multiplier）、GET /api/cells（列表 + 用户数/Gateway 数统计）、POST /api/cells/:id/assign（分配用户，检查容量上限）
+  - [x] 6.4 创建 `mirage-os/api-server/src/modules/gateways/` 模块：GET /api/gateways（列表，支持 cell_id/status 过滤）、GET /api/gateways/:id（详情）、定时任务 markOfflineGateways（last_heartbeat > 300s → OFFLINE）
+  - [x] 6.5 创建 `mirage-os/api-server/src/modules/domains/` 模块：GET /api/domains（列表，支持状态过滤）、GET /api/domains/stats（各状态数量统计）
+  - [x] 6.6 创建 `mirage-os/api-server/src/modules/threats/` 模块：GET /api/threats（列表，支持 threat_type/is_banned/severity 过滤，分页）、GET /api/threats/stats（各类型数量 + 已封禁总数）
+- [x] 7. NestJS api-server 测试
+  - [x] 7.1 创建 `mirage-os/api-server/src/modules/billing/billing.service.spec.ts`：Property 8（充值精度一致性）+ 流水查询/配额查询单元测试
+  - [x] 7.2 创建 `mirage-os/api-server/src/modules/cells/cells.service.spec.ts`：Property 9（蜂窝容量限制）+ 蜂窝创建/cost_multiplier 自动设置单元测试
+  - [x] 7.3 创建 `mirage-os/api-server/src/modules/gateways/gateways.service.spec.ts`：Gateway 超时标记 OFFLINE 单元测试
+- [x] 8. 集成与部署
+  - [x] 8.1 完善 `mirage-os/api-server/src/app.module.ts`：注册所有业务模块（AuthModule、UsersModule、CellsModule、BillingModule、DomainsModule、ThreatsModule、GatewaysModule、PrismaModule）
+  - [x] 8.2 添加 Go 依赖到 `go.mod`：google.golang.org/grpc、google.golang.org/protobuf、github.com/lib/pq、github.com/redis/go-redis/v9、gopkg.in/yaml.v3、pgregory.net/rapid
+  - [x] 8.3 添加 NestJS 依赖到 `package.json`：@nestjs/passport、passport-jwt、@nestjs/jwt、bcrypt、speakeasy、qrcode、@prisma/client、prisma、fast-check、ioredis
+  - [x] 8.4 验证 docker-compose 启动：`docker-compose up` 四个服务正常启动，PostgreSQL 可连接，Redis 可连接，gateway-bridge gRPC 端口可达，api-server HTTP 端口可达

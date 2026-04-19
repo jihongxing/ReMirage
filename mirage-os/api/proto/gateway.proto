@@ -1,0 +1,157 @@
+syntax = "proto3";
+
+package mirage.gateway.v1;
+
+option go_package = "mirage-os/api/proto;pb";
+
+// Gateway 心跳服务
+service GatewayService {
+  // 心跳同步（30秒一次）
+  rpc SyncHeartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  
+  // 流量上报（10秒一次）
+  rpc ReportTraffic(TrafficReport) returns (TrafficResponse);
+  
+  // 威胁上报（实时）
+  rpc ReportThreat(ThreatReport) returns (ThreatResponse);
+  
+  // 配额查询
+  rpc GetQuota(QuotaRequest) returns (QuotaResponse);
+}
+
+// ============================================
+// 心跳同步
+// ============================================
+
+message HeartbeatRequest {
+  string gateway_id = 1;              // Gateway 唯一标识
+  string version = 2;                 // Gateway 版本
+  uint32 current_threat_level = 3;    // 当前威胁等级 (0-5)
+  GatewayStatus status = 4;           // Gateway 状态
+  ResourceUsage resource = 5;         // 资源使用情况
+  int64 timestamp = 6;                // 时间戳（Unix 秒）
+}
+
+message GatewayStatus {
+  bool online = 1;                    // 是否在线
+  uint32 active_connections = 2;      // 活跃连接数
+  uint64 uptime_seconds = 3;          // 运行时长（秒）
+  string cell_id = 4;                 // 所属蜂窝 ID
+  string region = 5;                  // 地理区域（如 "US-West"）
+}
+
+message ResourceUsage {
+  float cpu_percent = 1;              // CPU 占用率 (0-100)
+  uint64 memory_bytes = 2;            // 内存占用（字节）
+  uint64 bandwidth_bps = 3;           // 带宽使用（bps）
+}
+
+message HeartbeatResponse {
+  bool success = 1;                   // 是否成功
+  string message = 2;                 // 响应消息
+  DefenseConfig defense_config = 3;   // 新的防御配置
+  uint64 remaining_quota = 4;         // 剩余配额（字节）
+  int64 next_heartbeat_interval = 5;  // 下次心跳间隔（秒）
+}
+
+message DefenseConfig {
+  uint32 defense_level = 1;           // 防御等级 (0-5)
+  uint32 jitter_mean_us = 2;          // Jitter 平均值（微秒）
+  uint32 jitter_stddev_us = 3;        // Jitter 标准差（微秒）
+  uint32 noise_intensity = 4;         // 噪声强度 (0-100)
+  uint32 padding_rate = 5;            // 填充率 (0-100)
+}
+
+// ============================================
+// 流量上报
+// ============================================
+
+message TrafficReport {
+  string gateway_id = 1;              // Gateway ID
+  int64 timestamp = 2;                // 时间戳
+  uint64 base_traffic_bytes = 3;      // 业务流量（字节）
+  uint64 defense_traffic_bytes = 4;   // 防御流量（字节）
+  string cell_level = 5;              // 蜂窝等级（standard/platinum/diamond）
+  TrafficBreakdown breakdown = 6;     // 流量细分
+}
+
+message TrafficBreakdown {
+  uint64 npm_padding_bytes = 7;       // NPM 填充流量
+  uint64 vpc_noise_bytes = 8;         // VPC 噪声流量
+  uint64 gtunnel_fec_bytes = 9;       // G-Tunnel FEC 流量
+}
+
+message TrafficResponse {
+  bool success = 1;                   // 是否成功
+  string message = 2;                 // 响应消息
+  uint64 remaining_quota = 3;         // 剩余配额
+  float current_cost_usd = 4;         // 当前费用（美元）
+  bool quota_warning = 5;             // 配额告警（< 10%）
+}
+
+// ============================================
+// 威胁上报
+// ============================================
+
+message ThreatReport {
+  string gateway_id = 1;              // Gateway ID
+  int64 timestamp = 2;                // 时间戳（纳秒）
+  ThreatType threat_type = 3;         // 威胁类型
+  string source_ip = 4;               // 源 IP
+  uint32 source_port = 5;             // 源端口
+  uint32 severity = 6;                // 严重程度 (0-10)
+  uint32 packet_count = 7;            // 数据包计数
+  bytes ja4_fingerprint = 8;          // JA4 指纹
+}
+
+enum ThreatType {
+  THREAT_UNKNOWN = 0;
+  THREAT_ACTIVE_PROBING = 1;          // 主动探测
+  THREAT_JA4_SCAN = 2;                // JA4 指纹扫描
+  THREAT_SNI_PROBE = 3;               // SNI 探测
+  THREAT_DPI_INSPECTION = 4;          // DPI 深度检测
+  THREAT_TIMING_ATTACK = 5;           // 时序攻击
+  THREAT_REPLAY_ATTACK = 6;           // 重放攻击
+}
+
+message ThreatResponse {
+  bool success = 1;                   // 是否成功
+  string message = 2;                 // 响应消息
+  ThreatAction action = 3;            // 建议动作
+  uint32 new_defense_level = 4;       // 新的防御等级
+}
+
+enum ThreatAction {
+  ACTION_NONE = 0;                    // 无动作
+  ACTION_INCREASE_DEFENSE = 1;        // 提升防御
+  ACTION_BLOCK_IP = 2;                // 封禁 IP
+  ACTION_SWITCH_CELL = 3;             // 切换蜂窝
+  ACTION_EMERGENCY_SHUTDOWN = 4;      // 紧急关闭
+}
+
+// ============================================
+// 配额查询
+// ============================================
+
+message QuotaRequest {
+  string gateway_id = 1;              // Gateway ID
+  string user_id = 2;                 // 用户 ID
+}
+
+message QuotaResponse {
+  bool success = 1;                   // 是否成功
+  string message = 2;                 // 响应消息
+  uint64 remaining_bytes = 3;         // 剩余流量（字节）
+  uint64 total_bytes = 4;             // 总配额（字节）
+  int64 expires_at = 5;               // 过期时间（Unix 秒）
+  bool auto_renew = 6;                // 自动续费
+  CellQuota cell_quota = 7;           // 蜂窝配额
+}
+
+message CellQuota {
+  string cell_id = 1;                 // 蜂窝 ID
+  string cell_level = 2;              // 蜂窝等级
+  uint64 allocated_bytes = 3;         // 分配流量
+  uint64 used_bytes = 4;              // 已用流量
+  float cost_multiplier = 5;          // 成本倍率
+}

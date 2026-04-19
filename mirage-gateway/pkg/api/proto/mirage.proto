@@ -1,0 +1,122 @@
+syntax = "proto3";
+package mirage;
+option go_package = "mirage-gateway/pkg/api/proto";
+
+// ========== 上行服务（Gateway → OS）==========
+service GatewayUplink {
+    rpc SyncHeartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+    rpc ReportTraffic(TrafficRequest) returns (TrafficResponse);
+    rpc ReportThreat(ThreatRequest) returns (ThreatResponse);
+}
+
+// ========== 下行服务（OS → Gateway）==========
+service GatewayDownlink {
+    rpc PushBlacklist(BlacklistPush) returns (PushResponse);
+    rpc PushStrategy(StrategyPush) returns (PushResponse);
+    rpc PushQuota(QuotaPush) returns (PushResponse);
+    rpc PushReincarnation(ReincarnationPush) returns (PushResponse);
+}
+
+// ========== 枚举 ==========
+enum GatewayStatus {
+    ONLINE = 0;
+    DEGRADED = 1;
+    EMERGENCY = 2;
+}
+
+enum ThreatType {
+    THREAT_UNKNOWN = 0;
+    ACTIVE_PROBING = 1;
+    REPLAY_ATTACK = 2;
+    TIMING_ATTACK = 3;
+    DPI_DETECTION = 4;
+    JA4_SCAN = 5;
+    SNI_PROBE = 6;
+}
+
+enum BlacklistSourceType {
+    BL_LOCAL = 0;
+    BL_GLOBAL = 1;
+}
+
+// ========== 上行消息 ==========
+message HeartbeatRequest {
+    string gateway_id = 1;
+    int64 timestamp = 2;
+    GatewayStatus status = 3;
+    bool ebpf_loaded = 4;
+    int32 threat_level = 5;
+    int64 active_connections = 6;
+    int32 memory_usage_mb = 7;
+}
+
+message HeartbeatResponse {
+    bool ack = 1;
+    int64 server_time = 2;
+}
+
+message TrafficRequest {
+    string gateway_id = 1;
+    int64 timestamp = 2;
+    uint64 business_bytes = 3;
+    uint64 defense_bytes = 4;
+    int32 period_seconds = 5;
+}
+
+message TrafficResponse {
+    bool ack = 1;
+}
+
+message ThreatEvent {
+    int64 timestamp = 1;
+    ThreatType threat_type = 2;
+    string source_ip = 3;
+    uint32 source_port = 4;
+    int32 severity = 5;
+    uint32 packet_count = 6;
+}
+
+message ThreatRequest {
+    string gateway_id = 1;
+    repeated ThreatEvent events = 2;
+}
+
+message ThreatResponse {
+    bool ack = 1;
+}
+
+// ========== 下行消息 ==========
+message BlacklistEntryProto {
+    string cidr = 1;
+    int64 expire_at = 2;
+    BlacklistSourceType source = 3;
+}
+
+message BlacklistPush {
+    repeated BlacklistEntryProto entries = 1;
+}
+
+message StrategyPush {
+    int32 defense_level = 1;
+    uint32 jitter_mean_us = 2;
+    uint32 jitter_stddev_us = 3;
+    uint32 noise_intensity = 4;
+    uint32 padding_rate = 5;
+    uint32 template_id = 6;
+}
+
+message QuotaPush {
+    uint64 remaining_bytes = 1;
+}
+
+message ReincarnationPush {
+    string new_domain = 1;
+    string new_ip = 2;
+    string reason = 3;
+    int32 deadline_seconds = 4;
+}
+
+message PushResponse {
+    bool success = 1;
+    string message = 2;
+}

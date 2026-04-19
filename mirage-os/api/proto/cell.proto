@@ -1,0 +1,170 @@
+syntax = "proto3";
+
+package mirage.cell.v1;
+
+option go_package = "mirage-os/api/proto;pb";
+
+// 蜂窝管理服务
+service CellService {
+  // 注册蜂窝
+  rpc RegisterCell(RegisterCellRequest) returns (RegisterCellResponse);
+  
+  // 查询可用蜂窝
+  rpc ListCells(ListCellsRequest) returns (ListCellsResponse);
+  
+  // 分配 Gateway 到蜂窝
+  rpc AllocateGateway(AllocateRequest) returns (AllocateResponse);
+  
+  // 蜂窝健康检查
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+  
+  // 切换蜂窝（用户主动或威胁触发）
+  rpc SwitchCell(SwitchCellRequest) returns (SwitchCellResponse);
+}
+
+// ============================================
+// 蜂窝注册
+// ============================================
+
+message RegisterCellRequest {
+  string cell_id = 1;                 // 蜂窝 ID
+  string cell_name = 2;               // 蜂窝名称
+  CellLevel level = 3;                // 蜂窝等级
+  GeoLocation location = 4;           // 地理位置
+  float cost_multiplier = 5;          // 成本倍率
+  uint32 max_gateways = 6;            // 最大 Gateway 数量
+}
+
+enum CellLevel {
+  LEVEL_UNKNOWN = 0;
+  LEVEL_STANDARD = 1;                 // 标准蜂窝
+  LEVEL_PLATINUM = 2;                 // 白金蜂窝
+  LEVEL_DIAMOND = 3;                  // 钻石蜂窝
+}
+
+message GeoLocation {
+  string country = 1;                 // 国家代码（ISO 3166-1）
+  string region = 2;                  // 地区（如 "US-West"）
+  string city = 3;                    // 城市
+  float latitude = 4;                 // 纬度
+  float longitude = 5;                // 经度
+  string jurisdiction = 6;            // 司法管辖区
+}
+
+message RegisterCellResponse {
+  bool success = 1;
+  string message = 2;
+  string cell_id = 3;                 // 蜂窝 ID
+  int64 registered_at = 4;            // 注册时间
+}
+
+// ============================================
+// 查询蜂窝
+// ============================================
+
+message ListCellsRequest {
+  CellLevel level = 1;                // 筛选等级（可选）
+  string country = 2;                 // 筛选国家（可选）
+  bool online_only = 3;               // 仅在线蜂窝
+}
+
+message ListCellsResponse {
+  bool success = 1;
+  string message = 2;
+  repeated CellInfo cells = 3;        // 蜂窝列表
+}
+
+message CellInfo {
+  string cell_id = 1;                 // 蜂窝 ID
+  string cell_name = 2;               // 蜂窝名称
+  CellLevel level = 3;                // 等级
+  GeoLocation location = 4;           // 位置
+  CellStatus status = 5;              // 状态
+  uint32 gateway_count = 6;           // Gateway 数量
+  uint32 max_gateways = 7;            // 最大容量
+  float cost_multiplier = 8;          // 成本倍率
+  float load_percent = 9;             // 负载率 (0-100)
+  int64 last_heartbeat = 10;          // 最后心跳时间
+}
+
+message CellStatus {
+  bool online = 1;                    // 是否在线
+  uint32 active_connections = 2;      // 活跃连接数
+  uint64 total_bandwidth_bps = 3;     // 总带宽（bps）
+  uint32 threat_level = 4;            // 威胁等级 (0-5)
+  repeated string blocked_ips = 5;    // 封禁 IP 列表
+}
+
+// ============================================
+// Gateway 分配
+// ============================================
+
+message AllocateRequest {
+  string user_id = 1;                 // 用户 ID
+  string gateway_id = 2;              // Gateway ID
+  CellLevel preferred_level = 3;      // 偏好等级
+  string preferred_country = 4;       // 偏好国家
+}
+
+message AllocateResponse {
+  bool success = 1;
+  string message = 2;
+  string cell_id = 3;                 // 分配的蜂窝 ID
+  CellInfo cell_info = 4;             // 蜂窝信息
+  string connection_token = 5;        // 连接令牌
+  int64 allocated_at = 6;             // 分配时间
+}
+
+// ============================================
+// 健康检查
+// ============================================
+
+message HealthCheckRequest {
+  string cell_id = 1;                 // 蜂窝 ID（可选，空则检查全部）
+}
+
+message HealthCheckResponse {
+  bool success = 1;
+  string message = 2;
+  repeated CellHealth health_status = 3;
+}
+
+message CellHealth {
+  string cell_id = 1;                 // 蜂窝 ID
+  bool healthy = 2;                   // 是否健康
+  uint32 gateway_count = 3;           // Gateway 数量
+  uint32 failed_gateways = 4;         // 失败 Gateway 数量
+  float avg_latency_ms = 5;           // 平均延迟（毫秒）
+  uint32 threat_count_24h = 6;        // 24小时威胁计数
+  int64 last_check = 7;               // 最后检查时间
+}
+
+// ============================================
+// 蜂窝切换
+// ============================================
+
+message SwitchCellRequest {
+  string user_id = 1;                 // 用户 ID
+  string gateway_id = 2;              // Gateway ID
+  string current_cell_id = 3;         // 当前蜂窝 ID
+  string target_cell_id = 4;          // 目标蜂窝 ID（可选）
+  SwitchReason reason = 5;            // 切换原因
+}
+
+enum SwitchReason {
+  REASON_UNKNOWN = 0;
+  REASON_USER_REQUEST = 1;            // 用户主动切换
+  REASON_THREAT_DETECTED = 2;         // 威胁检测
+  REASON_CELL_OVERLOAD = 3;           // 蜂窝过载
+  REASON_CELL_OFFLINE = 4;            // 蜂窝离线
+  REASON_JURISDICTION_CHANGE = 5;     // 司法管辖区变更
+}
+
+message SwitchCellResponse {
+  bool success = 1;
+  string message = 2;
+  string new_cell_id = 3;             // 新蜂窝 ID
+  CellInfo new_cell_info = 4;         // 新蜂窝信息
+  string connection_token = 5;        // 新连接令牌
+  int64 switched_at = 6;              // 切换时间
+}

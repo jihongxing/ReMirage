@@ -1,0 +1,43 @@
+# 任务清单：Phase 3 — 核心链路加固 + 极简控制台
+
+- [x] 1. Raft 集群模块
+  - [x] 1.1 扩展 `mirage-os/configs/mirage-os.yaml`：添加 raft 配置段（node_id、bind_addr、data_dir、bootstrap、peers 列表含 id/address/voter）
+  - [x] 1.2 扩展 `mirage-os/gateway-bridge/pkg/config/config.go`：添加 RaftConfig 结构体（NodeID/BindAddr/DataDir/Bootstrap/Peers）到 Config，更新 Load 函数解析 raft 段
+  - [x] 1.3 创建 `mirage-os/gateway-bridge/pkg/raft/fsm.go`：CommandType 枚举（CmdQuotaUpdate/CmdBlacklistUpdate/CmdStrategyUpdate）、FSMCommand 结构体、QuotaUpdateData/BlacklistUpdateData/StrategyUpdateData 数据结构、FSM 结构体（quotas/blacklist/strategies map + RWMutex）、NewFSM、Apply（反序列化命令 → 按 Type 分发更新对应 map）、Snapshot（深拷贝 → JSON 序列化）、Restore（JSON 反序列化 → 替换 map）、GetQuota/GetBlacklist/GetStrategy 读方法
+  - [x] 1.4 创建 `mirage-os/gateway-bridge/pkg/raft/cluster.go`：ClusterConfig/PeerConfig 结构体、Cluster 结构体（raft.Raft/FSM/Transport/LogStore/StableStore/SnapshotStore）、NewCluster（初始化 BoltDB store + FileSnapshotStore + TCP Transport + raft.NewRaft）、Start（Bootstrap 判断 + BootstrapCluster）、IsLeader、Apply（JSON 序列化 FSMCommand → raft.Apply 超时 10s）、GetLeaderAddr、Shutdown
+  - [x] 1.5 创建 `mirage-os/gateway-bridge/pkg/raft/fsm_test.go`：Property 5（FSM 快照往返一致性，rapid 生成随机命令序列 → Apply → Snapshot → Restore → 断言状态相同）、Property 6（FSM 命令幂等性，相同 QuotaUpdate 连续 Apply 两次 → 值等于命令值）
+  - [x] 1.6 更新 `mirage-os/gateway-bridge/cmd/bridge/main.go`：在 gRPC Server 启动前初始化 Raft Cluster（加载 RaftConfig → NewCluster → Start），在 Enforcer.Settle 后通过 Cluster.Apply 复制配额变更，在 Distributor.CheckAndBan 后通过 Cluster.Apply 复制黑名单变更，优雅退出时调用 Cluster.Shutdown
+  - [x] 1.7 更新 `mirage-os/gateway-bridge/go.mod`：添加 github.com/hashicorp/raft、github.com/hashicorp/raft-boltdb/v2 依赖
+- [x] 2. Shamir 密钥模块
+  - [x] 2.1 创建 `mirage-os/gateway-bridge/pkg/crypto/shamir.go`：GF(256) 预计算表（gfExp/gfLog，init 函数初始化，AES 不可约多项式 0x11B）、gfAdd（XOR）、gfMul（查表）、gfDiv、gfInv、Share 结构体（X byte/Y []byte）、ShamirEngine 结构体（threshold/total）、NewShamirEngine（参数校验）、Split（对每字节生成随机多项式 → 计算 f(1)..f(total)）、Combine（校验份额数/重复 x → 拉格朗日插值 GF(256)）
+  - [x] 2.2 创建 `mirage-os/gateway-bridge/pkg/crypto/hot_key.go`：HotKey 结构体（key []byte/active bool/mu RWMutex）、NewHotKey、Activate（复制密钥 → Mlock → active=true，Mlock 失败记录告警继续）、Deactivate（逐字节清零 → Munlock → active=false）、IsActive、Encrypt（校验 active → AES-256-GCM → 随机 nonce + 密文）、Decrypt（校验 active → 提取 nonce → AES-256-GCM 解密）、RecoverFromShares（Combine → Activate）
+  - [x] 2.3 创建 `mirage-os/gateway-bridge/pkg/crypto/shamir_test.go`：Property 1（Shamir 往返一致性，rapid 生成 32 字节密钥 → Split → 任意 3-of-5 Combine → 断言等于原始密钥）、Property 2（份额不足拒绝，Split → 取 2 个份额 → Combine → 断言返回 error）、Property 3（GF(256) 封闭性，rapid 生成 a/b → gfMul 结果 0-255 + 非零 a 的 gfMul(a, gfInv(a))==1）、Property 7（份额唯一性，Split → 断言 5 个 x 坐标互不相同）
+  - [x] 2.4 创建 `mirage-os/gateway-bridge/pkg/crypto/hot_key_test.go`：Property 4（AES-GCM 往返一致性，rapid 生成 1-10000 字节明文 → Encrypt → Decrypt → 断言等于原始明文）、Property 8（内存清零，Activate → Deactivate → 断言 key 缓冲区全零）+ 未激活时 Encrypt 返回 error 单元测试
+  - [x] 2.5 更新 `mirage-os/gateway-bridge/cmd/bridge/main.go`：在 Raft Cluster 启动后初始化 ShamirEngine（3-of-5）和 HotKey，尝试从本地份额文件恢复热密钥（RecoverFromShares），优雅退出时调用 HotKey.Deactivate
+- [x] 3. 极简控制台
+  - [x] 3.1 初始化 `mirage-os/web/` 项目：package.json（react/react-dom/react-router-dom/tailwindcss/vite/@vitejs/plugin-react/typescript 依赖）、vite.config.ts、tsconfig.json、tailwind.config.js、index.html、src/main.tsx
+  - [x] 3.2 创建 `mirage-os/web/src/hooks/useApi.ts`：useApi<T> hook（url/interval 参数 → useState + useEffect + fetch + setInterval 5s → 返回 data/loading/error/refetch）、apiPost<T> 函数（fetch POST + JSON body）
+  - [x] 3.3 创建 `mirage-os/web/src/components/StatusIndicator.tsx`：接受 status（online/degraded/offline）→ 渲染对应 emoji + TailwindCSS 样式文字标签
+  - [x] 3.4 创建 `mirage-os/web/src/components/DataTable.tsx`：接受 columns（key/title/render）和 data → 渲染 TailwindCSS 表格（表头 + 数据行 + loading 状态 + 空数据提示）
+  - [x] 3.5 创建 `mirage-os/web/src/components/ControlPanel.tsx`：接受 controls 数组（select/button 类型）→ 渲染水平排列的控件组
+  - [x] 3.6 创建 `mirage-os/web/src/components/Layout.tsx`：侧边栏导航（Dashboard/Gateways/Cells/Billing/Threats/Strategy 链接 + 当前页面高亮）+ 右侧内容区（Outlet）
+  - [x] 3.7 创建 `mirage-os/web/src/pages/Dashboard.tsx`：useApi 调用 /gateways + /cells + /threats/stats → 4 个指标卡片（在线 Gateway 数/蜂窝数/活跃用户数/封禁 IP 数）+ StatusIndicator
+  - [x] 3.8 创建 `mirage-os/web/src/pages/Gateways.tsx`：useApi 调用 /gateways → DataTable（IP/状态/心跳/连接数/内存/威胁等级）+ 状态过滤下拉框
+  - [x] 3.9 创建 `mirage-os/web/src/pages/Cells.tsx`：useApi 调用 /cells → DataTable（名称/区域/级别/用户数/Gateway 数/健康状态）
+  - [x] 3.10 创建 `mirage-os/web/src/pages/Billing.tsx`：useApi 调用 /billing/logs + /billing/quota → DataTable（流水列表）+ 配额信息卡片 + 充值按钮（弹出表单 → apiPost /billing/recharge）
+  - [x] 3.11 创建 `mirage-os/web/src/pages/Threats.tsx`：useApi 调用 /threats → DataTable（源 IP/类型/严重程度/命中次数/封禁状态/最后发现）+ 威胁类型/封禁状态过滤
+  - [x] 3.12 创建 `mirage-os/web/src/pages/Strategy.tsx`：useApi 调用 /cells → 蜂窝选择下拉框 + 防御等级下拉框（0-4）+ 拟态模板下拉框（Zoom/Chrome/Teams）+ 应用按钮（apiPost）+ 成功/失败提示
+  - [x] 3.13 创建 `mirage-os/web/src/App.tsx`：React Router 配置（Layout 包裹所有页面路由：/ → Dashboard、/gateways → Gateways、/cells → Cells、/billing → Billing、/threats → Threats、/strategy → Strategy）
+- [x] 4. 集成测试
+  - [x] 4.1 创建 `mirage-os/tests/integration_test.go`：TestMain（启动 PostgreSQL + Redis testcontainer → 初始化 schema → 运行测试 → 清理）、setupBridge 辅助函数（创建 Enforcer/Distributor/Dispatcher → 启动 gRPC Server → 返回清理函数）
+  - [x] 4.2 创建 `mirage-os/tests/lifecycle_test.go`：TestLifecycleRuling（创建用户 quota=1.0 → ReportTraffic 消耗全部 → SyncHeartbeat → 断言 remaining_quota==0）
+  - [x] 4.3 创建 `mirage-os/tests/immunity_test.go`：TestGlobalImmunity（发送 100 次 ReportThreat 同一 IP → 查询 threat_intel 断言 is_banned==true → 订阅 Redis 断言收到封禁事件）
+  - [x] 4.4 创建 `mirage-os/tests/reincarnation_test.go`：TestDomainReincarnation（注册 Gateway → PushReincarnation → 断言 Gateway 收到 new_domain/new_ip/deadline_seconds>0）
+  - [x] 4.5 创建 `mirage-os/tests/selfdestruct_test.go`：TestNodeSelfDestruct（启动心跳 → 停止心跳 → 等待超时 → 断言状态 OFFLINE + 自毁触发 mock 验证）
+  - [x] 4.6 创建 `mirage-os/tests/raft_failover_test.go`：TestRaftFailover（启动 3 节点 Raft → 确认 Leader → 停止 Leader → 断言 10s 内新 Leader 选举 → 向新 Leader 发送 SyncHeartbeat 断言正常响应）
+  - [x] 4.7 更新 `mirage-os/gateway-bridge/go.mod`：添加 testcontainers-go 依赖（github.com/testcontainers/testcontainers-go）
+- [x] 5. 构建与部署配置
+  - [x] 5.1 更新 `mirage-os/docker-compose.yaml`：为 gateway-bridge 添加 raft 端口映射（7000）、raft 数据卷挂载、raft 环境变量（RAFT_NODE_ID/RAFT_BIND_ADDR/RAFT_BOOTSTRAP）
+  - [x] 5.2 添加 web 服务到 `mirage-os/docker-compose.yaml`：基于 nginx:alpine 的静态文件服务，端口 8080，依赖 api-server，构建上下文 ./web
+  - [x] 5.3 创建 `mirage-os/web/Dockerfile`：多阶段构建（node:20-alpine 构建 → nginx:alpine 部署，VITE_API_BASE 构建参数）
+  - [x] 5.4 创建 `mirage-os/web/nginx.conf`：SPA 路由配置（所有路径 fallback 到 index.html）、API 反向代理（/api → api-server:3000）

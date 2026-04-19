@@ -1,0 +1,26 @@
+# 任务清单：Phase 1 — Gateway 闭环
+
+- [x] 1. pkg/security 模块
+  - [x] 1.1 创建 `pkg/security/tls_manager.go`：TLSConfig 结构体、NewTLSManager、GetClientTLSConfig、GetServerTLSConfig、StartCertWatcher、Close
+  - [x] 1.2 创建 `pkg/security/shadow_auth.go`：ShadowAuth 结构体、Challenge 结构体、NewShadowAuth、GenerateChallenge、VerifySignature、CleanExpired
+  - [x] 1.3 创建 `pkg/security/security_test.go`：Property 1-4 属性测试 + TLS 配置加载单元测试
+- [x] 2. pkg/threat 模块
+  - [x] 2.1 创建 `pkg/threat/types.go`：UnifiedThreatEvent、ThreatEventType、EventSource、ThreatLevel 类型定义
+  - [x] 2.2 创建 `pkg/threat/aggregator.go`：NewAggregator、Start、Subscribe、IngestEBPF、IngestCortex、IngestEvaluator、60 秒去重窗口、10000 队列上限
+  - [x] 2.3 创建 `pkg/threat/responder.go`：NewResponder、Start、5 级威胁等级→参数映射、调用 StrategyEngine.UpdateByThreat、调用 Loader.UpdateStrategy、120 秒降级冷却期、严重/极限等级 gRPC 通知
+  - [x] 2.4 创建 `pkg/threat/blacklist.go`：NewBlacklistManager、Add（1 秒内同步 eBPF LPM Trie）、Remove、MergeGlobal（全局优先）、StartExpiry、65536 容量淘汰
+  - [x] 2.5 创建 `pkg/threat/threat_test.go`：Property 5-10 属性测试 + 冷却期/过期清理单元测试
+- [x] 3. pkg/api 模块
+  - [x] 3.1 创建 `pkg/api/proto/mirage.proto`：GatewayUplink 服务（SyncHeartbeat/ReportTraffic/ReportThreat）、GatewayDownlink 服务（PushBlacklist/PushStrategy/PushQuota/PushReincarnation）、所有消息和枚举定义
+  - [x] 3.2 生成 Go protobuf 代码：运行 protoc 生成 `pkg/api/proto/*.pb.go`，更新 go.mod 添加 google.golang.org/grpc 和 google.golang.org/protobuf 依赖
+  - [x] 3.3 创建 `pkg/api/grpc_client.go`：NewGRPCClient、Connect（指数退避重连）、StartHeartbeat（30s）、StartTrafficReport（60s）、ReportThreat（5s 内）、断连缓存（最多 1000 条）、300s 不可达标记 DEGRADED
+  - [x] 3.4 创建 `pkg/api/grpc_server.go`：NewGRPCServer（mTLS）、Start、Stop
+  - [x] 3.5 创建 `pkg/api/handlers.go`：NewCommandHandler、PushStrategy（写 eBPF Map < 100ms）、PushBlacklist（调用 BlacklistManager.MergeGlobal）、PushQuota（写 quota_map）、PushReincarnation（调用 GSwitch.TriggerEscape）、参数校验返回 InvalidArgument
+  - [x] 3.6 创建 `pkg/api/api_test.go`：Property 11-13 属性测试 + gRPC 集成测试
+- [x] 4. main.go 集成
+  - [x] 4.1 重构 `cmd/gateway/main.go`：添加配置加载（gateway.yaml 解析）、mTLS 初始化、威胁编排模块初始化、gRPC 客户端/服务端初始化、事件源注册（monitor→aggregator、cortex→aggregator）
+  - [x] 4.2 实现启动序列：mTLS → eBPF → 策略引擎 → 威胁编排 → gRPC Client → gRPC Server → 健康检查；关键模块失败终止、非关键模块降级
+  - [x] 4.3 实现优雅关闭：SIGINT/SIGTERM 处理、逆序关闭、30 秒超时
+  - [x] 4.4 增强健康检查：/status 返回完整 JSON（ebpf_loaded/grpc_client_connected/grpc_server_running/threat_level/blacklist_count/uptime）、gRPC 断开时 /readyz 返回 503
+- [x] 5. go.mod 依赖更新
+  - [x] 5.1 添加依赖：google.golang.org/grpc、google.golang.org/protobuf、github.com/fsnotify/fsnotify、pgregory.net/rapid、gopkg.in/yaml.v3

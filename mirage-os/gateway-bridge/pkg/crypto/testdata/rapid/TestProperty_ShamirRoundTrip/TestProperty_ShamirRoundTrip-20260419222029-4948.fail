@@ -1,0 +1,143 @@
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 0
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 0
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 0
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 0
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 0
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 0
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 5
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 213
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 118
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 29
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 1
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 255
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 212
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 56
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 5
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 177
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 14
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 201
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 53
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 1
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 119
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 21
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 48
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 84
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 39
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 1
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 121
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 16
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 2
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 172
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 2
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw byte: 4
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw i0: 3
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw i1: 4
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] [rapid] draw i2: 2
+# 2026/04/19 22:20:29.798600 [TestProperty_ShamirRoundTrip] mismatch at byte 0: want 0, got 1
+# 
+v0.4.8#5421606498462583773
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x1b77caf02bbbf2
+0x863b9579793a2
+0x5
+0xe262819c40990
+0x1265f9c258cdfa
+0xd5
+0xdab03fffd1e2c
+0x11471d22a82731
+0x76
+0x41598074a1bdb
+0xcfd2046ecfcd8
+0x1d
+0x987593e761cda
+0x35e88f8436993
+0x1
+0x188ae857debe25
+0x1f496e8e89b1e2
+0xffffffffffffffff
+0xaa845d676f787
+0x1d1a536c1c810a
+0xd4
+0x18a904e273e30c
+0x1a707a4b53e323
+0x38
+0xc51ae33a21289
+0x8be9bce5b04f4
+0x5
+0x1ef2b0fdbe1201
+0x13d94a0006ec7a
+0xb1
+0x1fc8e37d6149cc
+0xf1c02f65a2c89
+0xe
+0xb697c0f0ceccd
+0x1aa8f4339eeb22
+0xc9
+0x1472341d0134a4
+0x14389de39612d3
+0x35
+0x9ebabbe60546e
+0x247750687b5f7
+0x1
+0x1a8df2ac878104
+0x16f626cdb935a1
+0x77
+0x142b5da06f7cd8
+0xe3ab24479c2cb
+0x15
+0x1fca7134834983
+0x184c941b6b2d1f
+0x30
+0x13ae81b529c0d4
+0x1c4f606c37e06f
+0x54
+0x3d62e6739fcbd
+0xe9a643dddab9f
+0x27
+0x57475bbfaf2f2
+0x25d7efe8f4f75
+0x1
+0x1b045cd82ea8f
+0x1d9ad7abe7fe28
+0x79
+0xc6016aa356ee8
+0xedcbe903231f4
+0x10
+0x81ffefa83e38c
+0x863773f709f5e
+0x2
+0xcf09dc90cd78a
+0x12fa0ac6ee40f7
+0xac
+0x97f9ad58f7772
+0x70222df65e46e
+0x2
+0x16703f472581ad
+0x19d277d941d7db
+0x4
+0x8f429c3e6ceb
+0x13e8fb82347a0e
+0x3
+0x1aaea5f90a1b3d
+0x1d2de2183a3e0b
+0x4
+0x19fdc92e956b62
+0x83a3fbfeb18e7
+0x2

@@ -1,0 +1,75 @@
+# Mirage-Gateway 配置文件 - 由 Ansible 生成
+# 节点: {{ node_id }}
+# 生成时间: {{ ansible_date_time.iso8601 }}
+
+network:
+  interface: "{{ network_interface | default('eth0') }}"
+  mtu: 1500
+  queue_size: 1024
+
+defense:
+  level: 20
+  auto_adjust: false
+  update_interval: 60s
+
+npm:
+  enabled: true
+  padding_rate: 20
+
+jitter:
+  enabled: true
+  interval: 50ms
+  distribution: "gaussian"
+  stddev: 15ms
+
+vpc:
+  enabled: true
+  amplitude: 10ms
+  frequency: 100
+
+gtunnel:
+  enabled: true
+  path_count: 3
+  fec_ratio: 1.2
+
+bdna:
+  enabled: true
+
+gswitch:
+  enabled: false
+
+monitoring:
+  enabled: true
+  stats_interval: 10s
+  ringbuf_size: 1048576
+
+logging:
+  level: "warn"
+  memory_only: true
+  max_entries: 10000
+
+security:
+  self_destruct: true
+  heartbeat_timeout: 300s
+  max_idle_days: 30
+  ram_shield:
+    enabled: true
+    disable_core_dump: true
+    check_swap_interval: 60s
+  cert_pinning:
+    enabled: true
+    preset_hash: "{{ os_cert_hash | default('') }}"
+  anti_debug:
+    enabled: true
+    check_interval: 30s
+  graceful_shutdown:
+    timeout: 30s
+
+mcc:
+  endpoint: "{{ os_endpoint }}"
+  tls:
+    enabled: true
+    cert_file: "{{ cert_dir }}/gateway.crt"
+    key_file: "{{ cert_dir }}/gateway.key"
+    ca_file: "{{ cert_dir }}/ca.crt"
+    server_name: mirage-os

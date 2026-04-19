@@ -1,0 +1,13 @@
+{
+  "name": "自动测试 C/eBPF 文件",
+  "version": "1.0.0",
+  "description": "新增或修改 C/eBPF 文件时自动编译验证",
+  "when": {
+    "type": "fileEdited",
+    "patterns": ["**/*.c", "**/*.h"]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "检测到 C/eBPF 文件变更，请执行以下操作：1. 使用 clang -target bpf 编译 eBPF 程序 2. 检查语法错误 3. 验证 Map 和 Ring Buffer 定义是否正确 4. 确认是否符合协议语言分工规则（C 做数据面）"
+  }
+}

@@ -1,0 +1,38 @@
+---
+- name: 复制证书生成脚本
+  copy:
+    src: "{{ playbook_dir }}/../../certs/{{ item }}"
+    dest: "/tmp/mirage-certs/{{ item }}"
+    mode: '0755'
+  loop:
+    - gen_root_ca.sh
+    - gen_gateway_cert.sh
+    - gen_os_cert.sh
+    - openssl.cnf
+
+- name: 生成 Root CA（幂等）
+  command: /tmp/mirage-certs/gen_root_ca.sh {{ cert_dir }}
+  args:
+    creates: "{{ cert_dir }}/ca.key"
+
+- name: 生成 Gateway 节点证书
+  command: /tmp/mirage-certs/gen_gateway_cert.sh {{ node_id }} {{ cert_dir }}
+  args:
+    creates: "{{ cert_dir }}/gateway.crt"
+
+- name: 设置证书权限
+  file:
+    path: "{{ cert_dir }}/{{ item.name }}"
+    mode: "{{ item.mode }}"
+    owner: root
+    group: root
+  loop:
+    - { name: "ca.key", mode: "0600" }
+    - { name: "ca.crt", mode: "0644" }
+    - { name: "gateway.key", mode: "0600" }
+    - { name: "gateway.crt", mode: "0644" }
+
+- name: 清理临时脚本
+  file:
+    path: /tmp/mirage-certs
+    state: absent

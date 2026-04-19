@@ -1,0 +1,77 @@
+#!/usr/bin/env bpftrace
+/*
+ * Mirage Gateway - eBPF 延迟测量脚本
+ * 测量 XDP 和 TC 程序执行延迟
+ * 用法: sudo bpftrace ebpf_latency.bt
+ * 验证: P99 < 1ms (1,000,000 ns)
+ */
+
+BEGIN
+{
+    printf("开始测量 eBPF 程序延迟...\n");
+    printf("按 Ctrl+C 停止\n\n");
+    @samples = 0;
+}
+
+kprobe:bpf_prog_run_xdp
+{
+    @xdp_start[tid] = nsecs;
+}
+
+kretprobe:bpf_prog_run_xdp
+/@xdp_start[tid]/
+{
+    $delta = nsecs - @xdp_start[tid];
+    @xdp_latency_ns = hist($delta);
+    @xdp_p50 = lhist($delta, 0, 2000000, 10000);
+    @xdp_count = count();
+    @xdp_avg = avg($delta);
+    @xdp_max = max($delta);
+    @samples++;
+    delete(@xdp_start[tid]);
+}
+
+kprobe:bpf_prog_run_generic_xdp
+{
+    @tc_start[tid] = nsecs;
+}
+
+kretprobe:bpf_prog_run_generic_xdp
+/@tc_start[tid]/
+{
+    $delta = nsecs - @tc_start[tid];
+    @tc_latency_ns = hist($delta);
+    @tc_count = count();
+    @tc_avg = avg($delta);
+    @tc_max = max($delta);
+    @samples++;
+    delete(@tc_start[tid]);
+}
+
+interval:s:10
+{
+    printf("\n--- 中间报告 (采样数: %d) ---\n", @samples);
+    print(@xdp_latency_ns);
+    print(@tc_latency_ns);
+}
+
+END
+{
+    printf("\n=== 最终报告 ===\n");
+    printf("总采样数: %d\n", @samples);
+    printf("\n--- XDP 延迟分布 ---\n");
+    print(@xdp_latency_ns);
+    printf("XDP 平均延迟: ");
+    print(@xdp_avg);
+    printf("XDP 最大延迟: ");
+    print(@xdp_max);
+    printf("\n--- TC 延迟分布 ---\n");
+    print(@tc_latency_ns);
+    printf("TC 平均延迟: ");
+    print(@tc_avg);
+    printf("TC 最大延迟: ");
+    print(@tc_max);
+
+    clear(@xdp_start);
+    clear(@tc_start);
+}

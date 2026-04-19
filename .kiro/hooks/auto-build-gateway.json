@@ -1,0 +1,13 @@
+{
+  "name": "自动构建 Gateway",
+  "version": "1.0.0",
+  "description": "Gateway 核心文件变更时自动构建",
+  "when": {
+    "type": "fileEdited",
+    "patterns": ["mirage-gateway/bpf/*.c", "mirage-gateway/pkg/**/*.go", "mirage-gateway/cmd/**/*.go"]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "检测到 Gateway 核心文件变更，请执行以下操作：1. 编译 eBPF 程序（make -C mirage-gateway bpf）2. 编译 Go 程序（cd mirage-gateway && go build）3. 运行快速验证测试（./quick-test.sh）4. 报告编译结果和潜在问题"
+  }
+}

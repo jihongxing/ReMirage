@@ -1,0 +1,13 @@
+{
+  "name": "自动测试前端文件",
+  "version": "1.0.0",
+  "description": "新增或修改前端文件时自动检查",
+  "when": {
+    "type": "fileEdited",
+    "patterns": ["mirage-os/web/src/**/*.ts", "mirage-os/web/src/**/*.tsx"]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "检测到前端文件变更，请执行以下操作：1. 检查 TypeScript 类型错误 2. 验证 React 组件语法 3. 确认 WebSocket 连接逻辑是否正确"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -lh /d/codeSpace/ReMirage/mirage-gateway/bpf/*.c)",
+      "Bash(wc -l /d/codeSpace/ReMirage/mirage-gateway/bpf/*.c)",
+      "Bash(xargs wc -l)",
+      "Bash(llvm-objdump -S bpf/jitter.o)",
+      "Bash(file bpf/*.o)",
+      "Bash(go mod tidy)",
+      "Bash(go build -o bin/mirage-gateway ./cmd/gateway)",
+      "Bash(docker build -t mirage-gateway:latest .)",
+      "Bash(npm run dev)"
+    ]
+  }
+}

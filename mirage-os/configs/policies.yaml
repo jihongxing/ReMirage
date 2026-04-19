@@ -1,0 +1,54 @@
+# Mirage Project 运维克制策略
+# 核心原则：真实用户体验 > 攻击者戏耍
+
+governance:
+  # 1. 资源熔断 - QoS 优先级保护
+  resource_limit:
+    max_cpu_percent: 15          # 影子系统 CPU 上限
+    max_mem_mb: 2048             # 内存上限 2GB
+    io_priority: "low"           # 影子流量优先级始终低于业务流量
+    max_goroutines: 500          # Goroutine 数量限制
+    circuit_breaker:
+      enabled: true
+      threshold_cpu: 80          # 系统 CPU > 80% 时触发熔断
+      threshold_mem: 85          # 系统内存 > 85% 时触发熔断
+      action: "drop_phantom"     # 熔断动作：丢弃影子流量
+
+  # 2. 指纹库生命周期衰减 - Data Decay
+  cortex_retention:
+    high_risk_ttl: 90d           # 高危指纹保留 90 天
+    medium_risk_ttl: 30d         # 中危指纹保留 30 天
+    low_risk_ttl: 15d            # 低危/探测指纹保留 15 天
+    inactive_ttl: 7d             # 无活动指纹 7 天后清理
+    max_db_records: 1000000      # 数据库最大记录数
+    cleanup_interval: 1h         # 清理任务执行间隔
+    cleanup_batch_size: 10000    # 单次清理批量大小
+
+  # 3. 心理战阈值退出 - Deception Ceasefire
+  phantom_warfare:
+    max_session_duration: 6h     # 单次诱导不超过 6 小时
+    max_total_duration: 24h      # 累计诱导不超过 24 小时
+    auto_refresh_seed: true      # 定期更换迷宫随机种子
+    seed_refresh_interval: 4h    # 种子刷新间隔
+    canary_trace_depth: 3        # 追踪令牌嵌套深度限制
+    ceasefire_action: "deadend"  # 超时动作: deadend/504/blackhole
+    deadend_response: "static_404"
+
+  # 克苏鲁模式限制
+  cthulhu_mode:
+    max_activations_per_uid: 10  # 单 UID 最大激活次数
+    cooldown_period: 30m         # 冷却期
+    max_response_size_kb: 64     # 响应大小限制
+    payload_mirror_limit: 3      # 载荷回显次数限制
+
+  # 影子重生限制
+  reincarnation:
+    max_generations: 50          # 单 UID 最大重生代数
+    min_interval_ms: 100         # 最小重生间隔
+    max_active_shadows: 100      # 最大活跃影子数
+
+# 监控告警
+alerting:
+  phantom_cpu_threshold: 12      # 影子 CPU > 12% 告警
+  cortex_size_threshold: 800000  # 指纹库 > 80 万条告警
+  session_duration_threshold: 4h # 单会话 > 4 小时告警

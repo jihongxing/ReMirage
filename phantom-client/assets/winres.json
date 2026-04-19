@@ -1,0 +1,19 @@
+{
+    "RT_VERSION": {
+        "#1": {
+            "0000": {
+                "CompanyName": "Contoso Enterprise Solutions",
+                "FileDescription": "Enterprise Sync Agent",
+                "FileVersion": "3.2.1.0",
+                "InternalName": "enterprise-sync",
+                "LegalCopyright": "© 2026 Contoso Inc. All rights reserved.",
+                "OriginalFilename": "enterprise-sync.exe",
+                "ProductName": "Contoso Sync",
+                "ProductVersion": "3.2.1.0"
+            }
+        }
+    },
+    "RT_GROUP_ICON": {
+        "#1": "app.ico"
+    }
+}

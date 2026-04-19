@@ -1,0 +1,94 @@
+# Mirage-Gateway 配置文件
+
+# 网络接口
+network:
+  interface: "eth0"           # 监听的网络接口
+  mtu: 1500                   # MTU 大小
+  queue_size: 1024            # 队列大小
+
+# 防御策略
+defense:
+  level: 20                   # 防御强度 (10=经济, 20=平衡, 30=极限)
+  auto_adjust: false          # 自动调节
+  update_interval: 60s        # 策略更新间隔
+
+# NPM (流量伪装)
+npm:
+  enabled: true
+  padding_rate: 20            # 填充率 (%)
+  min_padding: 50             # 最小填充 (字节)
+  max_padding: 500            # 最大填充 (字节)
+
+# Jitter-Lite (时域扰动)
+jitter:
+  enabled: true
+  interval: 50ms              # 扰动区间
+  distribution: "gaussian"    # 分布类型 (gaussian/poisson)
+  stddev: 15ms                # 标准差
+
+# VPC (噪声注入)
+vpc:
+  enabled: true
+  amplitude: 10ms             # 噪声幅度
+  frequency: 100              # 注入频率 (次/秒)
+  threat_threshold: 5         # 威胁阈值
+
+# G-Tunnel (多路径)
+gtunnel:
+  enabled: true
+  path_count: 3               # 路径数量
+  fec_ratio: 1.2              # FEC 冗余率
+  reorder_buffer: 256         # 重组缓冲区大小
+
+# B-DNA (指纹识别)
+bdna:
+  enabled: true
+  ja4_database: "/etc/mirage/ja4.db"  # JA4 指纹库
+  update_interval: 24h        # 更新间隔
+
+# G-Switch (域名转生)
+gswitch:
+  enabled: false              # 由 Mirage-OS 控制
+  api_endpoint: "https://mirage-os:8443/api/v1/domains"
+  heartbeat_interval: 30s
+
+# 监控
+monitoring:
+  enabled: true
+  stats_interval: 10s         # 统计输出间隔
+  ringbuf_size: 1048576       # Ring Buffer 大小 (1MB，防止高威胁场景溢出)
+
+# 日志
+logging:
+  level: "info"               # debug/info/warn/error
+  memory_only: true           # 仅内存日志
+  max_entries: 10000          # 最大日志条数
+
+# 安全
+security:
+  self_destruct: true         # 启用自毁机制
+  heartbeat_timeout: 300s     # 心跳超时
+  max_idle_days: 30           # 最大空闲天数
+  ram_shield:
+    enabled: true
+    disable_core_dump: true
+    check_swap_interval: 60s
+  cert_pinning:
+    enabled: true
+    preset_hash: ""           # 预设 OS 证书 SHA-256 指纹（hex，可选）
+  anti_debug:
+    enabled: true
+    check_interval: 30s
+    silent_mode_action: "noise"
+  graceful_shutdown:
+    timeout: 30s
+
+# M.C.C. 连接配置（mTLS）
+mcc:
+  endpoint: ${MCC_ENDPOINT:https://mirage-os:50847}
+  tls:
+    enabled: ${MCC_TLS_ENABLED:true}     # 生产环境强制启用
+    cert_file: ${MCC_TLS_CERT:/etc/mirage/certs/gateway.crt}
+    key_file: ${MCC_TLS_KEY:/etc/mirage/certs/gateway.key}
+    ca_file: ${MCC_TLS_CA:/etc/mirage/certs/ca.crt}
+    server_name: mirage-os               # SNI 验证

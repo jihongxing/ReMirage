@@ -1,0 +1,54 @@
+---
+- name: 停止 mirage-gateway 服务
+  systemd:
+    name: "{{ gateway_service_name }}"
+    state: stopped
+
+- name: 备份旧二进制
+  copy:
+    src: "{{ gateway_bin_path }}"
+    dest: "{{ gateway_bin_path }}.bak"
+    remote_src: yes
+  ignore_errors: true
+
+- name: 编译新版本 eBPF
+  shell: |
+    cd {{ mirage_dir }}/src/mirage-gateway/bpf
+    for f in *.c; do
+      [ -f "$f" ] || continue
+      clang {{ clang_flags }} -c "$f" -o "${f%.c}.o"
+    done
+  args:
+    executable: /bin/bash
+
+- name: 复制新 eBPF 对象文件
+  shell: cp {{ mirage_dir }}/src/mirage-gateway/bpf/*.o {{ mirage_dir }}/bpf/
+  args:
+    executable: /bin/bash
+
+- name: 编译新版本 Go 二进制
+  shell: |
+    export PATH=$PATH:/usr/local/go/bin
+    cd {{ mirage_dir }}/src/mirage-gateway
+    CGO_ENABLED=1 go build -o {{ gateway_bin_path }} cmd/gateway/main.go
+  args:
+    executable: /bin/bash
+  environment:
+    GOPATH: /tmp/go
+
+- name: 重启 mirage-gateway 服务
+  systemd:
+    name: "{{ gateway_service_name }}"
+    state: started
+
+- name: 验证服务状态
+  command: systemctl is-active {{ gateway_service_name }}
+  register: service_status
+  changed_when: false
+  failed_when: service_status.stdout != "active"
+
+- name: 升级成功，删除备份
+  file:
+    path: "{{ gateway_bin_path }}.bak"
+    state: absent
+  when: service_status.stdout == "active"

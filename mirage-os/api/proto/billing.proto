@@ -1,0 +1,156 @@
+syntax = "proto3";
+
+package mirage.billing.v1;
+
+option go_package = "mirage-os/api/proto;pb";
+
+// 计费服务
+service BillingService {
+  // 创建账户
+  rpc CreateAccount(CreateAccountRequest) returns (CreateAccountResponse);
+  
+  // 充值（Monero）
+  rpc Deposit(DepositRequest) returns (DepositResponse);
+  
+  // 查询余额
+  rpc GetBalance(BalanceRequest) returns (BalanceResponse);
+  
+  // 购买流量包
+  rpc PurchaseQuota(PurchaseRequest) returns (PurchaseResponse);
+  
+  // 查询计费流水
+  rpc GetBillingLogs(BillingLogsRequest) returns (BillingLogsResponse);
+}
+
+// ============================================
+// 账户管理
+// ============================================
+
+message CreateAccountRequest {
+  string user_id = 1;                 // 用户 ID（匿名哈希）
+  string public_key = 2;              // 公钥（用于验证）
+}
+
+message CreateAccountResponse {
+  bool success = 1;
+  string message = 2;
+  string account_id = 3;              // 账户 ID
+  int64 created_at = 4;               // 创建时间
+}
+
+// ============================================
+// 充值
+// ============================================
+
+message DepositRequest {
+  string account_id = 1;              // 账户 ID
+  string tx_hash = 2;                 // Monero 交易哈希
+  uint64 amount_xmr = 3;              // 充值金额（XMR，单位：皮摩尔）
+  int64 timestamp = 4;                // 时间戳
+}
+
+message DepositResponse {
+  bool success = 1;
+  string message = 2;
+  uint64 balance_usd = 3;             // 余额（美元，单位：美分）
+  float exchange_rate = 4;            // 汇率（XMR/USD）
+  int64 confirmed_at = 5;             // 确认时间
+}
+
+// ============================================
+// 余额查询
+// ============================================
+
+message BalanceRequest {
+  string account_id = 1;              // 账户 ID
+}
+
+message BalanceResponse {
+  bool success = 1;
+  string message = 2;
+  uint64 balance_usd = 3;             // 余额（美分）
+  QuotaInfo quota = 4;                // 配额信息
+  repeated CellAllocation cells = 5;  // 蜂窝分配
+}
+
+message QuotaInfo {
+  uint64 total_bytes = 1;             // 总配额（字节）
+  uint64 used_bytes = 2;              // 已用流量
+  uint64 remaining_bytes = 3;         // 剩余流量
+  int64 expires_at = 4;               // 过期时间
+}
+
+message CellAllocation {
+  string cell_id = 1;                 // 蜂窝 ID
+  string cell_level = 2;              // 等级（standard/platinum/diamond）
+  uint64 allocated_bytes = 3;         // 分配流量
+  uint64 used_bytes = 4;              // 已用流量
+  float cost_multiplier = 5;          // 成本倍率
+}
+
+// ============================================
+// 购买流量包
+// ============================================
+
+message PurchaseRequest {
+  string account_id = 1;              // 账户 ID
+  PackageType package_type = 2;       // 流量包类型
+  string cell_level = 3;              // 蜂窝等级
+  uint32 quantity = 4;                // 购买数量
+}
+
+enum PackageType {
+  PACKAGE_UNKNOWN = 0;
+  PACKAGE_10GB = 1;                   // 10GB 包
+  PACKAGE_50GB = 2;                   // 50GB 包
+  PACKAGE_100GB = 3;                  // 100GB 包
+  PACKAGE_500GB = 4;                  // 500GB 包
+  PACKAGE_1TB = 5;                    // 1TB 包
+}
+
+message PurchaseResponse {
+  bool success = 1;
+  string message = 2;
+  uint64 cost_usd = 3;                // 费用（美分）
+  uint64 remaining_balance = 4;       // 剩余余额
+  uint64 quota_added = 5;             // 增加的配额（字节）
+  int64 expires_at = 6;               // 过期时间
+}
+
+// ============================================
+// 计费流水
+// ============================================
+
+message BillingLogsRequest {
+  string account_id = 1;              // 账户 ID
+  int64 start_time = 2;               // 开始时间
+  int64 end_time = 3;                 // 结束时间
+  uint32 limit = 4;                   // 返回条数限制
+}
+
+message BillingLogsResponse {
+  bool success = 1;
+  string message = 2;
+  repeated BillingLog logs = 3;       // 流水记录
+  uint32 total_count = 4;             // 总记录数
+}
+
+message BillingLog {
+  string log_id = 1;                  // 流水 ID
+  string gateway_id = 2;              // Gateway ID
+  int64 timestamp = 3;                // 时间戳
+  uint64 base_traffic_bytes = 4;      // 业务流量
+  uint64 defense_traffic_bytes = 5;   // 防御流量
+  uint64 cost_usd = 6;                // 费用（美分）
+  string cell_id = 7;                 // 蜂窝 ID
+  float cost_multiplier = 8;          // 成本倍率
+  LogType log_type = 9;               // 流水类型
+}
+
+enum LogType {
+  LOG_UNKNOWN = 0;
+  LOG_TRAFFIC = 1;                    // 流量消费
+  LOG_DEPOSIT = 2;                    // 充值
+  LOG_PURCHASE = 3;                   // 购买流量包
+  LOG_REFUND = 4;                     // 退款
+}

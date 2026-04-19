@@ -1,0 +1,70 @@
+# Mirage Monero 支付服务栈
+# 启动: docker-compose -f docker-compose.monero.yml up -d
+
+version: '3.8'
+
+services:
+  # 门罗币全节点 - 同步区块链数据
+  monerod:
+    image: sethforprivacy/simple-monerod:latest
+    container_name: mirage-monerod
+    restart: unless-stopped
+    volumes:
+      - monero-data:/home/monero/.bitmonero
+    ports:
+      - "127.0.0.1:28081:28081"  # RPC (仅本地)
+    command:
+      - "--rpc-bind-ip=0.0.0.0"
+      - "--rpc-bind-port=28081"
+      - "--confirm-external-bind"
+      - "--restricted-rpc"
+      - "--prune-blockchain"      # 剪裁模式，节省磁盘空间
+      - "--sync-pruned-blocks"
+      - "--no-igd"
+      - "--enable-dns-blocklist"
+    networks:
+      - mirage-monero
+    healthcheck:
+      test: ["CMD", "curl", "-s", "http://localhost:28081/get_info"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # 钱包 RPC - 对账服务
+  monero-wallet-rpc:
+    image: sethforprivacy/simple-monero-wallet-rpc:latest
+    container_name: mirage-wallet-rpc
+    restart: unless-stopped
+    depends_on:
+      monerod:
+        condition: service_healthy
+    volumes:
+      - wallet-data:/wallet
+    ports:
+      - "127.0.0.1:28083:28083"  # Wallet RPC (仅本地)
+    environment:
+      # 从环境变量注入敏感信息
+      WALLET_RPC_USER: ${MONERO_RPC_USER:-mirage}
+      WALLET_RPC_PASSWORD: ${MONERO_RPC_PASSWORD:-}
+    command:
+      - "--daemon-address=monerod:28081"
+      - "--rpc-bind-ip=0.0.0.0"
+      - "--rpc-bind-port=28083"
+      - "--wallet-dir=/wallet"
+      - "--disable-rpc-login"     # 内网环境可禁用登录
+      # View-Only 钱包模式 (需要手动配置)
+      # - "--generate-from-view-key=/wallet/mirage-viewonly"
+      # - "--address=${MONERO_ADDRESS}"
+      # - "--viewkey=${MONERO_VIEW_KEY}"
+    networks:
+      - mirage-monero
+
+volumes:
+  monero-data:
+    driver: local
+  wallet-data:
+    driver: local
+
+networks:
+  mirage-monero:
+    driver: bridge

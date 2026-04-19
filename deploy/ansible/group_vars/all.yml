@@ -1,0 +1,41 @@
+---
+# 证书配置
+root_ca_bits: 4096
+root_ca_days: 3650
+gateway_cert_bits: 2048
+gateway_cert_days: 365
+
+# OS 端点（Raft 集群，客户端自动发现 Leader）
+os_endpoints:
+  - "https://10.0.1.20:50847"  # 冰岛
+  - "https://10.0.2.20:50847"  # 瑞士
+  - "https://10.0.4.20:50847"  # 新加坡
+os_endpoint: "https://{{ groups['os_nodes'] | map('extract', hostvars, 'ansible_host') | first }}:50847"
+os_cert_hash: ""
+
+# Raft 集群配置
+raft_cluster_peers:
+  - { id: 1, addr: "10.0.1.20:50848" }
+  - { id: 2, addr: "10.0.2.20:50848" }
+  - { id: 3, addr: "10.0.4.20:50848" }
+
+# 编译配置
+go_version: "1.21"
+clang_flags: "-O2 -target bpf -g -D__TARGET_ARCH_x86"
+
+# 部署路径
+mirage_dir: /opt/mirage-gateway
+gateway_bin_path: /opt/mirage-gateway/bin/mirage-gateway
+gateway_config_path: /etc/mirage/gateway.yaml
+gateway_service_name: mirage-gateway
+cert_dir: /etc/mirage/certs
+min_kernel: "5.15"
+
+# tmpfs 无盘运行
+tmpfs_enabled: true
+tmpfs_data_size: "256M"
+tmpfs_log_size: "64M"
+
+# 心跳超时自毁
+heartbeat_timeout_sec: 300
+self_destruct_enabled: true

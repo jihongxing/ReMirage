@@ -1,0 +1,67 @@
+version: '3.8'
+
+services:
+  mirage-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.alpine
+    container_name: mirage-gateway-tmpfs
+    
+    # 网络模式：host（需要访问网卡）
+    network_mode: host
+    
+    # 特权模式（加载 eBPF）
+    privileged: true
+    
+    # 资源限制
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 512M
+        reservations:
+          cpus: '1'
+          memory: 256M
+    
+    # tmpfs 挂载（内存文件系统）
+    tmpfs:
+      - /var/mirage:size=256M,mode=0700
+      - /tmp:size=64M,mode=1777
+    
+    # 只读根文件系统
+    read_only: true
+    
+    # 禁用 swap
+    mem_swappiness: 0
+    
+    # 环境变量
+    environment:
+      - MIRAGE_TMPFS_MODE=1
+      - MIRAGE_NO_PERSIST=1
+      - MIRAGE_BPF_PATH=/tmp/mirage-bpf
+      - MIRAGE_OS_ENDPOINT=https://mirage-os:8443
+    
+    # 配置文件（只读挂载）
+    volumes:
+      - ./configs/gateway.yaml:/etc/mirage/gateway.yaml:ro
+    
+    # 安全选项
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:unconfined  # eBPF 需要
+    
+    # 能力
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+      - BPF
+    
+    # 重启策略
+    restart: unless-stopped
+    
+    # 日志配置（不持久化）
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "1"

@@ -1,0 +1,13 @@
+{
+  "name": "自动测试 Go 文件",
+  "version": "1.0.0",
+  "description": "新增或修改 Go 文件时自动运行测试",
+  "when": {
+    "type": "fileEdited",
+    "patterns": ["**/*.go"]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "检测到 Go 文件变更，请执行以下操作：1. 运行 go fmt 格式化代码 2. 运行 go vet 检查代码 3. 如果是 mirage-gateway 目录，编译 eBPF 程序并检查语法 4. 如果是 mirage-os 目录，检查 gRPC 服务是否正常"
+  }
+}

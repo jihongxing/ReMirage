@@ -1,0 +1,142 @@
+# Mirage-OS 配置文件
+
+# 服务配置
+server:
+  grpc_port: 50847
+  http_port: 18443
+  environment: development
+
+# 数据库配置
+database:
+  host: localhost
+  port: 54329
+  user: postgres
+  password: postgres
+  dbname: mirage_os
+  sslmode: disable
+  timezone: UTC
+
+# Redis 配置
+redis:
+  host: ${REDIS_HOST:localhost}
+  port: ${REDIS_PORT:63791}
+  password: ${REDIS_PASSWORD:}           # 生产环境必须设置
+  db: 0
+  tls:
+    enabled: ${REDIS_TLS_ENABLED:false}  # 生产环境建议启用
+    cert_file: ${REDIS_TLS_CERT:}
+    key_file: ${REDIS_TLS_KEY:}
+    ca_file: ${REDIS_TLS_CA:}
+
+# 日志配置
+logging:
+  level: info
+  format: json
+  output: stdout
+
+# 计费配置
+billing:
+  base_traffic_rate: 0.10      # 业务流量 $0.10/GB
+  defense_traffic_rate: 0.05   # 防御流量 $0.05/GB
+  
+  # 蜂窝等级定价
+  cell_levels:
+    standard:
+      multiplier: 1.0
+      name: "标准蜂窝"
+    platinum:
+      multiplier: 1.5
+      name: "白金蜂窝"
+    diamond:
+      multiplier: 2.0
+      name: "钻石蜂窝"
+  
+  # 流量包定价
+  packages:
+    10GB:
+      bytes: 10737418240
+      price_usd: 9.00
+      discount: 0.10
+    50GB:
+      bytes: 53687091200
+      price_usd: 40.00
+      discount: 0.20
+    100GB:
+      bytes: 107374182400
+      price_usd: 70.00
+      discount: 0.30
+    500GB:
+      bytes: 536870912000
+      price_usd: 300.00
+      discount: 0.40
+    1TB:
+      bytes: 1099511627776
+      price_usd: 500.00
+      discount: 0.50
+
+# Gateway 配置
+gateway:
+  heartbeat_interval: 30       # 心跳间隔（秒）
+  heartbeat_timeout: 60        # 心跳超时（秒）
+  traffic_report_interval: 10  # 流量上报间隔（秒）
+  
+  # 防御等级配置
+  defense_levels:
+    0:
+      jitter_mean_us: 10000
+      jitter_stddev_us: 3000
+      noise_intensity: 5
+      padding_rate: 5
+    1:
+      jitter_mean_us: 20000
+      jitter_stddev_us: 6000
+      noise_intensity: 10
+      padding_rate: 10
+    2:
+      jitter_mean_us: 30000
+      jitter_stddev_us: 9000
+      noise_intensity: 15
+      padding_rate: 15
+    3:
+      jitter_mean_us: 50000
+      jitter_stddev_us: 15000
+      noise_intensity: 20
+      padding_rate: 20
+    4:
+      jitter_mean_us: 80000
+      jitter_stddev_us: 24000
+      noise_intensity: 25
+      padding_rate: 25
+    5:
+      jitter_mean_us: 100000
+      jitter_stddev_us: 30000
+      noise_intensity: 30
+      padding_rate: 30
+
+# Monero 配置
+monero:
+  rpc_url: http://localhost:28081
+  wallet_rpc_url: http://localhost:28083
+  confirmations_required: 10
+  exchange_rate_api: https://api.coingecko.com/api/v3/simple/price?ids=monero&vs_currencies=usd
+
+# 安全配置
+security:
+  jwt_secret: ${JWT_SECRET:change-this-in-production}
+  jwt_expiry: 86400            # JWT 过期时间（秒）
+  rate_limit: 100              # 每分钟请求限制
+
+# gRPC mTLS 配置
+grpc:
+  tls:
+    enabled: ${GRPC_TLS_ENABLED:false}   # 生产环境必须启用
+    cert_file: ${GRPC_TLS_CERT:/etc/mirage/certs/server.crt}
+    key_file: ${GRPC_TLS_KEY:/etc/mirage/certs/server.key}
+    ca_file: ${GRPC_TLS_CA:/etc/mirage/certs/ca.crt}
+    client_auth: true          # 强制客户端证书验证（mTLS）
+  
+# 威胁检测配置
+threat:
+  auto_adjust_defense: true    # 自动调整防御等级
+  threat_threshold: 10         # 威胁阈值（触发防御提升）
+  cooldown_period: 300         # 冷却期（秒）

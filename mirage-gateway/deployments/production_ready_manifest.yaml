@@ -1,0 +1,352 @@
+# Mirage-Gateway Production Manifest
+# 生产环境部署配置 - Kubernetes / Docker Compose 兼容
+# Version: 1.0.0
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mirage-system
+  labels:
+    app.kubernetes.io/name: mirage
+    app.kubernetes.io/component: gateway
+
+---
+# 密钥初始化 - Shamir 分片存储
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mirage-master-key
+  namespace: mirage-system
+type: Opaque
+data:
+  # Base64 编码的 Shamir 分片 (部署时替换)
+  shard_1: "REPLACE_WITH_SHARD_1"
+  shard_2: "REPLACE_WITH_SHARD_2"
+  shard_3: "REPLACE_WITH_SHARD_3"
+  # XMR 钱包视图密钥
+  xmr_view_key: "REPLACE_WITH_XMR_VIEW_KEY"
+  # Tor 隐藏服务私钥
+  tor_private_key: "REPLACE_WITH_TOR_KEY"
+
+---
+# ConfigMap - 运行时配置
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mirage-gateway-config
+  namespace: mirage-system
+data:
+  gateway.yaml: |
+    # 网关核心配置
+    gateway:
+      node_id: "${NODE_ID}"
+      region: "${REGION}"
+      listen_addr: "0.0.0.0:443"
+      
+    # eBPF 配置
+    ebpf:
+      xdp_interface: "eth0"
+      tc_interface: "eth0"
+      programs:
+        - npm.o
+        - bdna.o
+        - jitter.o
+        - sockmap.o
+      
+    # G-Tunnel 多路径
+    gtunnel:
+      paths:
+        - id: "primary"
+          interface: "eth0"
+        - id: "backup"
+          interface: "eth1"
+      dual_send_duration_ms: 100
+      fec_enabled: true
+      
+    # G-Switch 域名转生
+    gswitch:
+      shadow_pool_size: 5
+      warmup_interval_sec: 300
+      reputation_threshold: 40
+      cooldown_sec: 3
+      
+    # M.C.C. 信令
+    mcc:
+      tor_socks_proxy: "127.0.0.1:19050"
+      hidden_service_port: 18443
+      quorum_size: 3
+      sync_timeout_ms: 500
+      
+    # 健康检测
+    health:
+      probe_interval_sec: 10
+      rtt_threshold_ms: 200
+      loss_threshold_percent: 10
+      
+    # 日志 (Ephemeral)
+    logging:
+      level: "warn"
+      ephemeral: true
+      max_memory_mb: 50
+
+---
+# DaemonSet - 每节点部署一个 Gateway
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: mirage-gateway
+  namespace: mirage-system
+spec:
+  selector:
+    matchLabels:
+      app: mirage-gateway
+  template:
+    metadata:
+      labels:
+        app: mirage-gateway
+    spec:
+      hostNetwork: true
+      hostPID: true
+      
+      # 节点亲和性 - 仅部署到标记节点
+      nodeSelector:
+        mirage.io/role: gateway
+        
+      tolerations:
+        - key: "node-role.kubernetes.io/master"
+          effect: NoSchedule
+          
+      initContainers:
+        # 初始化容器 - 编译 eBPF 程序
+        - name: ebpf-compiler
+          image: mirage/ebpf-builder:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              cd /bpf
+              for f in npm.c bdna.c jitter.c sockmap.c chameleon.c phantom.c; do
+                clang -O2 -g -target bpf -c $f -o ${f%.c}.o
+              done
+              cp *.o /ebpf-out/
+          volumeMounts:
+            - name: bpf-source
+              mountPath: /bpf
+            - name: ebpf-objects
+              mountPath: /ebpf-out
+              
+      containers:
+        # 主容器 - Mirage Gateway
+        - name: gateway
+          image: mirage/gateway:latest
+          securityContext:
+            privileged: true
+            capabilities:
+              add:
+                - NET_ADMIN
+                - SYS_ADMIN
+                - BPF
+                - PERFMON
+          env:
+            - name: NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: REGION
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['topology.kubernetes.io/region']
+            - name: GOMAXPROCS
+              value: "4"
+            - name: GODEBUG
+              value: "gctrace=0"
+          ports:
+            - containerPort: 443
+              hostPort: 443
+              protocol: TCP
+            - containerPort: 443
+              hostPort: 443
+              protocol: UDP
+          volumeMounts:
+            - name: ebpf-objects
+              mountPath: /opt/mirage/bpf
+            - name: config
+              mountPath: /opt/mirage/config
+            - name: secrets
+              mountPath: /opt/mirage/secrets
+              readOnly: true
+            # tmpfs - 内存文件系统 (无痕)
+            - name: tmpfs-data
+              mountPath: /opt/mirage/data
+            - name: tmpfs-logs
+              mountPath: /opt/mirage/logs
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "500m"
+            limits:
+              memory: "512Mi"
+              cpu: "2000m"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+            
+        # Sidecar - Tor 隐藏服务
+        - name: tor-sidecar
+          image: mirage/tor:latest
+          securityContext:
+            runAsUser: 100
+            runAsGroup: 100
+          volumeMounts:
+            - name: tor-data
+              mountPath: /var/lib/tor
+            - name: secrets
+              mountPath: /etc/tor/secrets
+              readOnly: true
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "100m"
+            limits:
+              memory: "128Mi"
+              cpu: "500m"
+              
+      volumes:
+        - name: bpf-source
+          configMap:
+            name: mirage-bpf-source
+        - name: ebpf-objects
+          emptyDir: {}
+        - name: config
+          configMap:
+            name: mirage-gateway-config
+        - name: secrets
+          secret:
+            secretName: mirage-master-key
+        # tmpfs 卷 - 纯内存存储
+        - name: tmpfs-data
+          emptyDir:
+            medium: Memory
+            sizeLimit: 100Mi
+        - name: tmpfs-logs
+          emptyDir:
+            medium: Memory
+            sizeLimit: 50Mi
+        - name: tor-data
+          emptyDir:
+            medium: Memory
+            sizeLimit: 50Mi
+
+---
+# Service - 内部通信
+apiVersion: v1
+kind: Service
+metadata:
+  name: mirage-gateway-internal
+  namespace: mirage-system
+spec:
+  clusterIP: None
+  selector:
+    app: mirage-gateway
+  ports:
+    - name: mcc
+      port: 18443
+      targetPort: 18443
+
+---
+# NetworkPolicy - 网络隔离
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mirage-gateway-policy
+  namespace: mirage-system
+spec:
+  podSelector:
+    matchLabels:
+      app: mirage-gateway
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # 允许外部流量
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: 443
+          protocol: UDP
+    # 允许 M.C.C. 内部通信
+    - from:
+        - podSelector:
+            matchLabels:
+              app: mirage-gateway
+      ports:
+        - port: 18443
+  egress:
+    # 允许 DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+    # 允许 Tor 网络
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - port: 9001
+        - port: 9030
+    # 允许 M.C.C. 通信
+    - to:
+        - podSelector:
+            matchLabels:
+              app: mirage-gateway
+      ports:
+        - port: 18443
+
+---
+# PodDisruptionBudget - 高可用保障
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mirage-gateway-pdb
+  namespace: mirage-system
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: mirage-gateway
+
+---
+# HorizontalPodAutoscaler - 自动扩缩 (可选)
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mirage-gateway-hpa
+  namespace: mirage-system
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: DaemonSet
+    name: mirage-gateway
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

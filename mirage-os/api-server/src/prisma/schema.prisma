@@ -1,0 +1,163 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CellLevel {
+  STANDARD
+  PLATINUM
+  DIAMOND
+}
+
+enum GatewayStatus {
+  ONLINE
+  DEGRADED
+  OFFLINE
+}
+
+enum DepositStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+}
+
+model User {
+  id              String    @id @default(uuid())
+  username        String    @unique
+  passwordHash    String    @map("password_hash")
+  ed25519Pubkey   String?   @map("ed25519_pubkey")
+  totpSecret      String?   @map("totp_secret")
+  remainingQuota  Decimal   @default(0) @map("remaining_quota") @db.Decimal(20, 8)
+  totalDeposit    Decimal   @default(0) @map("total_deposit") @db.Decimal(20, 8)
+  totalConsumed   Decimal   @default(0) @map("total_consumed") @db.Decimal(20, 8)
+  cellId          String?   @map("cell_id")
+  cell            Cell?     @relation(fields: [cellId], references: [id])
+  inviteCodeUsed  String?   @map("invite_code_used")
+  isActive        Boolean   @default(true) @map("is_active")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  billingLogs     BillingLog[]
+  deposits        Deposit[]
+  quotaPurchases  QuotaPurchase[]
+  createdInvites  InviteCode[]  @relation("CreatedBy")
+  usedInvite      InviteCode?   @relation("UsedBy")
+
+  @@map("users")
+}
+
+model Cell {
+  id             String    @id @default(uuid())
+  name           String    @unique
+  region         String
+  level          CellLevel @default(STANDARD)
+  costMultiplier Decimal   @default(1.0) @map("cost_multiplier") @db.Decimal(20, 8)
+  maxUsers       Int       @default(50) @map("max_users")
+  maxDomains     Int       @default(15) @map("max_domains")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  users    User[]
+  gateways Gateway[]
+
+  @@map("cells")
+}
+
+model Gateway {
+  id                String        @id
+  cellId            String?       @map("cell_id")
+  cell              Cell?         @relation(fields: [cellId], references: [id])
+  ipAddress         String?       @map("ip_address")
+  status            GatewayStatus @default(OFFLINE)
+  lastHeartbeat     DateTime?     @map("last_heartbeat")
+  ebpfLoaded        Boolean       @default(false) @map("ebpf_loaded")
+  threatLevel       Int           @default(0) @map("threat_level")
+  activeConnections BigInt        @default(0) @map("active_connections")
+  memoryUsageMb     Int           @default(0) @map("memory_usage_mb")
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt @map("updated_at")
+
+  billingLogs BillingLog[]
+
+  @@map("gateways")
+}
+
+model BillingLog {
+  id            String   @id @default(uuid())
+  userId        String   @map("user_id")
+  user          User     @relation(fields: [userId], references: [id])
+  gatewayId     String   @map("gateway_id")
+  gateway       Gateway  @relation(fields: [gatewayId], references: [id])
+  businessBytes BigInt   @map("business_bytes")
+  defenseBytes  BigInt   @map("defense_bytes")
+  businessCost  Decimal  @map("business_cost") @db.Decimal(20, 8)
+  defenseCost   Decimal  @map("defense_cost") @db.Decimal(20, 8)
+  totalCost     Decimal  @map("total_cost") @db.Decimal(20, 8)
+  periodSeconds Int      @map("period_seconds")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@map("billing_logs")
+}
+
+model ThreatIntel {
+  id                String   @id @default(uuid())
+  sourceIp          String   @map("source_ip")
+  sourcePort        Int?     @map("source_port")
+  threatType        String   @map("threat_type")
+  severity          Int      @default(0)
+  hitCount          Int      @default(1) @map("hit_count")
+  isBanned          Boolean  @default(false) @map("is_banned")
+  firstSeen         DateTime @default(now()) @map("first_seen")
+  lastSeen          DateTime @default(now()) @map("last_seen")
+  reportedByGateway String?  @map("reported_by_gateway")
+
+  @@unique([sourceIp, threatType])
+  @@map("threat_intel")
+}
+
+model Deposit {
+  id            String        @id @default(uuid())
+  userId        String        @map("user_id")
+  user          User          @relation(fields: [userId], references: [id])
+  amount        Decimal       @db.Decimal(20, 8)
+  amountXmr     Decimal?      @map("amount_xmr") @db.Decimal(20, 12)
+  exchangeRate  Decimal?      @map("exchange_rate") @db.Decimal(20, 8)
+  currency      String        @default("XMR")
+  txHash        String?       @unique @map("tx_hash")
+  paymentId     String?       @map("payment_id")
+  confirmations Int           @default(0)
+  status        DepositStatus @default(PENDING)
+  confirmedAt   DateTime?     @map("confirmed_at")
+  createdAt     DateTime      @default(now()) @map("created_at")
+
+  @@map("deposits")
+}
+
+model QuotaPurchase {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id])
+  quotaGb   Decimal  @map("quota_gb") @db.Decimal(20, 8)
+  price     Decimal  @db.Decimal(20, 8)
+  cellLevel String   @map("cell_level")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("quota_purchases")
+}
+
+model InviteCode {
+  id        String    @id @default(uuid())
+  code      String    @unique
+  createdBy String    @map("created_by")
+  creator   User      @relation("CreatedBy", fields: [createdBy], references: [id])
+  usedBy    String?   @unique @map("used_by")
+  usedUser  User?     @relation("UsedBy", fields: [usedBy], references: [id])
+  isUsed    Boolean   @default(false) @map("is_used")
+  createdAt DateTime  @default(now()) @map("created_at")
+  usedAt    DateTime? @map("used_at")
+
+  @@map("invite_codes")
+}

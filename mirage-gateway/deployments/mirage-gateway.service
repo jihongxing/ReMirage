@@ -1,0 +1,51 @@
+[Unit]
+Description=Mirage Gateway - Network Privacy Protection Service
+Documentation=https://github.com/mirage-project/mirage-gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+# 工作目录
+WorkingDirectory=/opt/mirage-gateway
+
+# 启动命令
+ExecStart=/opt/mirage-gateway/bin/mirage-gateway --config /etc/mirage/gateway.yaml
+
+# 重启策略
+Restart=on-failure
+RestartSec=5
+StartLimitInterval=60
+StartLimitBurst=3
+
+# 安全加固
+NoNewPrivileges=false
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+# 无盘运行：仅允许 tmpfs 写入，禁止任何持久化路径
+TemporaryFileSystem=/var/run/mirage:size=16M
+ReadWritePaths=
+
+# eBPF 所需权限
+AmbientCapabilities=CAP_BPF CAP_NET_ADMIN CAP_SYS_ADMIN CAP_PERFMON
+CapabilityBoundingSet=CAP_BPF CAP_NET_ADMIN CAP_SYS_ADMIN CAP_PERFMON
+
+# 资源限制
+LimitNOFILE=65535
+LimitMEMLOCK=infinity
+
+# 日志
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mirage-gateway
+
+# 环境变量
+Environment=GOMAXPROCS=4
+
+[Install]
+WantedBy=multi-user.target

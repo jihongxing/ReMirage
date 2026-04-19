@@ -1,0 +1,218 @@
+---
+- name: Deploy Mirage Gateway (Core + Edge)
+  hosts: gateways:edge_nodes
+  become: true
+  vars:
+    mirage_user: mirage
+    mirage_dir: /opt/mirage-gateway
+    cert_dir: /etc/mirage/certs
+    min_kernel: "5.15"
+
+  roles:
+    - role: common
+    - role: certs
+    - role: gateway
+
+- name: Deploy Mirage-OS Raft Cluster
+  hosts: os_nodes
+  become: true
+  serial: 1
+  vars:
+    mirage_dir: /opt/mirage-os
+    cert_dir: /etc/mirage/certs
+
+  tasks:
+    - name: 确保 tmpfs 数据目录存在
+      mount:
+        path: /opt/mirage-os/data
+        src: tmpfs
+        fstype: tmpfs
+        opts: "size={{ tmpfs_data_size | default('256M') }},mode=0700,noexec,nosuid"
+        state: mounted
+
+    - name: 确保 tmpfs 日志目录存在
+      mount:
+        path: /opt/mirage-os/logs
+        src: tmpfs
+        fstype: tmpfs
+        opts: "size={{ tmpfs_log_size | default('64M') }},mode=0700,noexec,nosuid"
+        state: mounted
+
+    - name: 部署 Mirage-OS（含 Raft 配置）
+      template:
+        src: mirage-os.yaml.j2
+        dest: /etc/mirage/os.yaml
+        mode: '0600'
+
+    - name: 启动 Mirage-OS 服务
+      systemd:
+        name: mirage-os
+        state: started
+        enabled: yes
+
+- name: Deploy API Server + Web Console
+  hosts: os_nodes
+  become: true
+  vars:
+    mirage_dir: /opt/mirage-os
+    api_server_port: 3000
+    web_port: 8080
+
+  tasks:
+    - name: 安装 Node.js 20.x
+      shell: |
+        curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+        apt-get install -y nodejs
+      args:
+        creates: /usr/bin/node
+
+    - name: 部署 api-server
+      copy:
+        src: "{{ playbook_dir }}/../../mirage-os/api-server/"
+        dest: "{{ mirage_dir }}/api-server/"
+        mode: '0755'
+
+    - name: 安装 api-server 依赖
+      shell: npm install --production=false
+      args:
+        chdir: "{{ mirage_dir }}/api-server"
+
+    - name: 生成 Prisma Client
+      shell: npx prisma generate
+      args:
+        chdir: "{{ mirage_dir }}/api-server"
+
+    - name: 构建 api-server
+      shell: npm run build
+      args:
+        chdir: "{{ mirage_dir }}/api-server"
+
+    - name: 清理 devDependencies
+      shell: npm prune --production
+      args:
+        chdir: "{{ mirage_dir }}/api-server"
+
+    - name: 配置 api-server 环境变量
+      template:
+        src: api-server.env.j2
+        dest: "{{ mirage_dir }}/api-server/.env"
+        mode: '0600'
+
+    - name: 执行数据库迁移
+      shell: npx prisma migrate deploy
+      args:
+        chdir: "{{ mirage_dir }}/api-server"
+      environment:
+        DATABASE_URL: "{{ database_url }}"
+
+    - name: 创建 api-server systemd 服务
+      copy:
+        content: |
+          [Unit]
+          Description=Mirage API Server
+          After=network.target postgresql.service redis.service
+          Wants=postgresql.service redis.service
+
+          [Service]
+          Type=simple
+          User=mirage
+          WorkingDirectory={{ mirage_dir }}/api-server
+          EnvironmentFile={{ mirage_dir }}/api-server/.env
+          ExecStart=/usr/bin/node dist/main.js
+          Restart=always
+          RestartSec=5
+          MemoryMax=512M
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/mirage-api.service
+        mode: '0644'
+
+    - name: 启动 api-server
+      systemd:
+        name: mirage-api
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+    - name: 确保 web 目录存在
+      file:
+        path: "{{ mirage_dir }}/web"
+        state: directory
+        mode: '0755'
+
+    - name: 部署 web 源码
+      copy:
+        src: "{{ playbook_dir }}/../../mirage-os/web/"
+        dest: "{{ mirage_dir }}/web-src/"
+        mode: '0755'
+
+    - name: 安装 web 依赖
+      shell: npm install
+      args:
+        chdir: "{{ mirage_dir }}/web-src"
+
+    - name: 构建 web 静态文件
+      shell: npm run build
+      args:
+        chdir: "{{ mirage_dir }}/web-src"
+
+    - name: 部署 web 构建产物
+      shell: cp -r {{ mirage_dir }}/web-src/dist/* {{ mirage_dir }}/web/
+      args:
+        creates: "{{ mirage_dir }}/web/index.html"
+
+    - name: 配置 Nginx 反向代理
+      copy:
+        content: |
+          server {
+              listen {{ web_port }};
+              server_name _;
+
+              root {{ mirage_dir }}/web;
+              index index.html;
+
+              # SPA 路由
+              location / {
+                  try_files $uri $uri/ /index.html;
+              }
+
+              # API 代理
+              location /api/ {
+                  proxy_pass http://127.0.0.1:{{ api_server_port }}/api/;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+              }
+
+              # WebSocket 代理
+              location /ws {
+                  proxy_pass http://127.0.0.1:8080/ws;
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection "upgrade";
+              }
+
+              # 安全头
+              add_header X-Frame-Options DENY;
+              add_header X-Content-Type-Options nosniff;
+              add_header X-XSS-Protection "1; mode=block";
+              add_header Referrer-Policy no-referrer;
+          }
+        dest: /etc/nginx/sites-available/mirage-web
+        mode: '0644'
+      notify: reload nginx
+
+    - name: 启用 Nginx 站点
+      file:
+        src: /etc/nginx/sites-available/mirage-web
+        dest: /etc/nginx/sites-enabled/mirage-web
+        state: link
+      notify: reload nginx
+
+  handlers:
+    - name: reload nginx
+      systemd:
+        name: nginx
+        state: reloaded

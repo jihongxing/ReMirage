@@ -1,0 +1,84 @@
+---
+- name: 复制源代码到目标节点
+  synchronize:
+    src: "{{ playbook_dir }}/../../.."
+    dest: "{{ mirage_dir }}/src"
+    rsync_opts:
+      - "--exclude=.git"
+      - "--exclude=bin/"
+
+- name: 挂载 tmpfs 数据目录（无盘运行）
+  mount:
+    path: "{{ mirage_dir }}/data"
+    src: tmpfs
+    fstype: tmpfs
+    opts: "size={{ tmpfs_data_size | default('256M') }},mode=0700,noexec,nosuid"
+    state: mounted
+  when: tmpfs_enabled | default(true)
+
+- name: 挂载 tmpfs 日志目录（无盘运行）
+  mount:
+    path: "{{ mirage_dir }}/logs"
+    src: tmpfs
+    fstype: tmpfs
+    opts: "size={{ tmpfs_log_size | default('64M') }},mode=0700,noexec,nosuid"
+    state: mounted
+  when: tmpfs_enabled | default(true)
+
+- name: 禁用 swap（防止敏感数据落盘）
+  command: swapoff -a
+  changed_when: false
+  ignore_errors: true
+
+- name: 编译 eBPF 程序
+  shell: |
+    cd {{ mirage_dir }}/src/mirage-gateway/bpf
+    for f in *.c; do
+      [ -f "$f" ] || continue
+      clang {{ clang_flags }} -c "$f" -o "${f%.c}.o"
+    done
+  args:
+    executable: /bin/bash
+
+- name: 复制 eBPF 对象文件
+  shell: cp {{ mirage_dir }}/src/mirage-gateway/bpf/*.o {{ mirage_dir }}/bpf/
+  args:
+    executable: /bin/bash
+
+- name: 编译 Go 二进制
+  shell: |
+    export PATH=$PATH:/usr/local/go/bin
+    cd {{ mirage_dir }}/src/mirage-gateway
+    CGO_ENABLED=1 go build -o {{ gateway_bin_path }} cmd/gateway/main.go
+  args:
+    executable: /bin/bash
+  environment:
+    GOPATH: /tmp/go
+
+- name: 生成 gateway.yaml 配置
+  template:
+    src: gateway.yaml.j2
+    dest: "{{ gateway_config_path }}"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: 部署 systemd 服务文件
+  copy:
+    src: "{{ mirage_dir }}/src/mirage-gateway/deployments/mirage-gateway.service"
+    dest: /etc/systemd/system/mirage-gateway.service
+    remote_src: yes
+    mode: '0644'
+  notify: reload systemd
+
+- name: 启动 mirage-gateway 服务
+  systemd:
+    name: "{{ gateway_service_name }}"
+    state: started
+    enabled: yes
+
+- name: 验证服务状态
+  command: systemctl is-active {{ gateway_service_name }}
+  register: service_status
+  changed_when: false
+  failed_when: service_status.stdout != "active"

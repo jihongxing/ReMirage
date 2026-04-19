@@ -1,0 +1,71 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.o
+*.a
+*.out
+
+# Go
+vendor/
+go.work
+go.work.sum
+
+# Build output
+mirage-gateway/bin/
+mirage-os/bin/
+phantom-client/bin/
+mirage-cli/mirage-cli.exe
+sdk/**/bin/
+sdk/**/dist/
+
+# Node.js
+node_modules/
+dist/
+.next/
+*.tsbuildinfo
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+.vscode/settings.json
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+!deploy/certs/*.sh
+!deploy/certs/*.cnf
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+/tmp/
+
+# Test & coverage
+coverage/
+*.cover
+*.prof
+__debug_bin*
+
+# eBPF compiled (keep tracked ones)
+# mirage-gateway/bpf/*.o is tracked intentionally
+
+# Docker
+.docker/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup

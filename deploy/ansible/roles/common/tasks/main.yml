@@ -1,0 +1,74 @@
+---
+- name: 获取内核版本
+  command: uname -r
+  register: kernel_version
+  changed_when: false
+
+- name: 检查内核版本 >= {{ min_kernel }}
+  assert:
+    that:
+      - kernel_version.stdout is version(min_kernel, '>=')
+    fail_msg: "内核版本 {{ kernel_version.stdout }} < {{ min_kernel }}，终止部署"
+    success_msg: "内核版本 {{ kernel_version.stdout }} 满足要求"
+
+- name: 更新 apt 缓存
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: 安装编译依赖
+  apt:
+    name:
+      - clang
+      - llvm
+      - libelf-dev
+      - libbpf-dev
+      - build-essential
+      - pkg-config
+    state: present
+
+- name: 检查 Go 是否已安装
+  command: go version
+  register: go_check
+  ignore_errors: true
+  changed_when: false
+
+- name: 安装 Go {{ go_version }}
+  when: go_check.rc != 0
+  block:
+    - name: 下载 Go
+      get_url:
+        url: "https://go.dev/dl/go{{ go_version }}.linux-amd64.tar.gz"
+        dest: /tmp/go.tar.gz
+
+    - name: 解压 Go
+      unarchive:
+        src: /tmp/go.tar.gz
+        dest: /usr/local
+        remote_src: yes
+
+    - name: 配置 Go PATH
+      copy:
+        content: 'export PATH=$PATH:/usr/local/go/bin'
+        dest: /etc/profile.d/go.sh
+        mode: '0644'
+
+- name: 创建 mirage 用户
+  user:
+    name: "{{ mirage_user }}"
+    system: yes
+    shell: /usr/sbin/nologin
+    create_home: no
+
+- name: 创建部署目录
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - "{{ mirage_dir }}"
+    - "{{ mirage_dir }}/bin"
+    - "{{ mirage_dir }}/bpf"
+    - "{{ cert_dir }}"

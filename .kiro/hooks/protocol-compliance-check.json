@@ -1,0 +1,13 @@
+{
+  "name": "协议语言合规检查",
+  "version": "1.0.0",
+  "description": "检查是否违反协议语言分工规则",
+  "when": {
+    "type": "fileCreated",
+    "patterns": ["mirage-gateway/pkg/**/*.go", "mirage-gateway/bpf/**/*.c"]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "检测到新文件创建，请执行协议语言合规检查：1. 如果是 Go 文件，确认不包含 XDP/TC 层数据包处理、内核态 skb 操作、纳秒级定时控制 2. 如果是 C 文件，确认不包含 HTTP API 调用、数据库操作、Raft 协议 3. 验证 Go 和 C 之间的通信是否使用 eBPF Map 或 Ring Buffer 4. 报告任何违反语言分工规则的代码"
+  }
+}

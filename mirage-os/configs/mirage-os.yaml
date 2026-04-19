@@ -1,0 +1,45 @@
+grpc:
+  port: 50051
+  tls_enabled: false
+  cert_file: ""
+  key_file: ""
+  ca_file: ""
+
+database:
+  dsn: "postgres://mirage:mirage_dev@localhost:5432/mirage_os?sslmode=disable"
+
+redis:
+  addr: "localhost:6379"
+  password: ""
+  db: 0
+
+quota:
+  business_price_per_gb: 0.10
+  defense_price_per_gb: 0.05
+
+intel:
+  ban_threshold: 100
+  cleanup_days: 30
+  cleanup_min_hits: 10
+
+raft:
+  node_id: "node-1"
+  bind_addr: "0.0.0.0:7000"
+  data_dir: "/var/lib/mirage/raft"
+  bootstrap: true
+  peers:
+    - id: "node-1"
+      address: "iceland.mirage.internal:7000"
+      voter: true
+    - id: "node-2"
+      address: "switzerland.mirage.internal:7000"
+      voter: true
+    - id: "node-3"
+      address: "singapore.mirage.internal:7000"
+      voter: true
+    - id: "node-4"
+      address: "panama.mirage.internal:7000"
+      voter: false
+    - id: "node-5"
+      address: "seychelles.mirage.internal:7000"
+      voter: false
