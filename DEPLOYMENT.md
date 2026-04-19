@@ -201,6 +201,88 @@ MONERO_RPC_PASSWORD=your_monero_password
 
 ## 🔍 故障排查
 
+### UDP 网络连通性（关键前置检查）
+
+G-Tunnel 使用 QUIC 协议（基于 UDP）传输加密流量。**如果客户端所在网络封锁了 UDP 出站，整个隧道将无法建立。**
+
+#### 症状
+
+- Phantom Client 反复打印 `timeout: no recent network activity`
+- 服务器侧 `tcpdump -i eth0 udp port <端口> -n` 完全无输出
+- 但同一客户端 `ping` 服务器正常（ICMP 不受影响）
+
+#### 根因
+
+部分网络环境会完全封锁 UDP 出站流量：
+- 国内部分 ISP（尤其企业宽带、校园网）
+- 公司内网防火墙
+- 某些家庭路由器的 UDP 限速/拦截策略
+- VPN/代理软件残留的 WFP（Windows Filtering Platform）驱动规则
+
+#### 诊断步骤
+
+```bash
+# 1. 服务器侧开启抓包
+sudo tcpdump -i eth0 udp port 443 -n
+
+# 2. 客户端发送测试 UDP 包（PowerShell）
+$udp = New-Object System.Net.Sockets.UdpClient
+$udp.Send([byte[]](1,2,3,4,5), 5, "<服务器IP>", 443)
+$udp.Close()
+
+# 3. 如果 tcpdump 无输出 → UDP 被封锁
+# 4. 换高端口（51234）重试，确认是端口级还是协议级封锁
+```
+
+#### 服务器选择要求
+
+| 检查项 | 要求 | 验证方式 |
+|--------|------|---------|
+| UDP 入站 | 安全组/防火墙放行目标端口 | `ss -ulnp \| grep <端口>` |
+| UDP 出站 | 安全组允许 ALL 出站 | 安全组规则确认 |
+| 无 UDP QoS | ISP 不限速/不拦截 UDP | tcpdump 抓包验证 |
+| QUIC 友好 | 不做 UDP 深度包检测 | QUIC 握手成功 |
+
+#### 客户端网络要求
+
+| 检查项 | 风险 | 解决方案 |
+|--------|------|---------|
+| ISP 封锁 UDP | 所有 UDP 端口不可达 | 换 4G/5G 热点、或使用 TCP fallback |
+| VPN 软件残留 | WFP 驱动拦截 UDP | 重启电脑清除；卸载残留驱动 |
+| 企业防火墙 | 仅放行 TCP 80/443 | 需要 QUIC-over-TCP fallback 方案 |
+| Windows 防火墙 | 拦截入站 UDP 回复 | 关闭或添加放行规则 |
+
+#### 部署前必做的 UDP 连通性验证
+
+```bash
+# 在目标服务器上启动 UDP 回显测试
+sudo ./bin/loopback-test 0.0.0.0:443
+
+# 从客户端网络环境发送测试包
+# 如果 loopback-test 打印 "🔗 客户端" → UDP 通路正常
+# 如果无任何输出 → 该网络环境不支持 UDP，需要换网络或启用 TCP fallback
+```
+
+#### 多网卡环境的源 IP 绑定
+
+当客户端存在虚拟网卡（如 Wintun/TAP）时，Windows 可能将 UDP 包的源 IP 绑定到虚拟网卡 IP，导致包在 NAT 或防火墙处被丢弃（Martian Packet）。
+
+解决方案：QUIC 拨号时显式绑定物理网卡 IP：
+
+```go
+// 探测物理出站 IP
+probeConn, _ := net.Dial("udp4", "8.8.8.8:53")
+physicalIP := probeConn.LocalAddr().(*net.UDPAddr).IP
+probeConn.Close()
+
+// 绑定物理网卡
+localAddr := &net.UDPAddr{IP: physicalIP, Port: 0}
+udpConn, _ := net.ListenUDP("udp4", localAddr)
+
+// 使用绑定的 socket 拨号
+conn, _ := quic.Dial(ctx, udpConn, remoteAddr, tlsConf, quicConf)
+```
+
 ### 常见问题
 
 1. **eBPF加载失败**
