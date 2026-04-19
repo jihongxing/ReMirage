@@ -576,9 +576,10 @@ int vpc_ingress_detect(struct __sk_buff *skb) {
 static __always_inline int wipe_map_entries(void *map, __u32 max_entries) {
     // 注意：eBPF 不支持动态迭代删除
     // 这里采用覆盖策略：将所有 key 对应的 value 置零
+    // 使用 64 字节零缓冲区，覆盖所有可能的 value 大小
+    __u8 zero[64] = {};
     for (__u32 i = 0; i < max_entries && i < 16; i++) {
         __u32 key = i;
-        __u64 zero = 0;
         bpf_map_update_elem(map, &key, &zero, BPF_ANY);
     }
     return 0;

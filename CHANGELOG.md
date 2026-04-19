@@ -59,6 +59,15 @@
 
 ---
 
+## [0.9.1] - 2026-04-20
+
+### 验证
+- Linux 编译验证通过（OpenCloudOS 9, kernel 6.6.119, clang 17, Go 1.24.2）
+- eBPF 数据面：7 个 .o 全部编译成功（bdna/chameleon/h3_shaper/jitter/npm/phantom/sockmap）
+- Go 控制面：bin/mirage-gateway 二进制生成，零错误
+
+---
+
 ## [Unreleased]
 
 ### 待完成
