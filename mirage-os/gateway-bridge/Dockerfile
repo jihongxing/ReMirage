@@ -11,5 +11,6 @@ RUN apk add --no-cache ca-certificates
 WORKDIR /app
 COPY --from=builder /gateway-bridge .
 COPY --from=builder /app/proto ./proto
+COPY configs/ ./configs/
 EXPOSE 50051
 CMD ["./gateway-bridge"]

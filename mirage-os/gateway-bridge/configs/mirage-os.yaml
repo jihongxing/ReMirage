@@ -1,0 +1,31 @@
+# Mirage-OS Gateway Bridge 配置（混沌测试用）
+grpc:
+  port: 50051
+  tls_enabled: false
+
+rest:
+  addr: ":7000"
+
+database:
+  dsn: "postgres://mirage:chaos_test_pw@10.99.1.10:5432/mirage_os?sslmode=disable"
+
+redis:
+  addr: "10.99.1.11:6379"
+  password: ""
+  db: 0
+
+quota:
+  business_price_per_gb: 0.10
+  defense_price_per_gb: 0.05
+
+intel:
+  ban_threshold: 100
+  cleanup_days: 30
+  cleanup_min_hits: 10
+
+raft:
+  node_id: "os-1"
+  bind_addr: "0.0.0.0:7000"
+  data_dir: "/var/lib/mirage/raft"
+  bootstrap: true
+  peers: []
