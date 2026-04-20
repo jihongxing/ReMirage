@@ -1,4 +1,4 @@
-FROM golang:1.24 AS gobuilder
+FROM golang:1.25 AS gobuilder
 
 # 安装 eBPF 编译依赖
 RUN apt update && apt install -y \
