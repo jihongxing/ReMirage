@@ -327,11 +327,17 @@
 - [x] Gateway 配置修复（gateway_id 环境变量、mcc endpoint 去 scheme、TLS 禁用）
 
 #### 待验证（下次继续）
-- [ ] 服务器全量 `--no-cache` 重建后重新跑演习
-- [ ] 确认 Gateway 心跳成功注册到 OS（endpoint 修复后）
-- [ ] 确认 Phantom chaos-harness 正常启动并暴露 :9090 状态 API
-- [ ] 确认 XMR Webhook 正确分配配额
-- [ ] genesis-drill.sh 中 `/shared/signal_payload.json` volume 挂载问题
+- [x] 服务器全量 `--no-cache` 重建后重新跑演习
+- [x] 确认 Gateway 心跳成功注册到 OS（endpoint 修复后）
+- [x] 确认 Phantom chaos-harness 正常启动并暴露 :9090 状态 API
+- [x] 确认 XMR Webhook 正确分配配额
+- [x] genesis-drill.sh 中容器名修复（Docker Compose v2 `-1` 后缀）
+
+#### E2E 最终测试结果（2026-04-21）
+- **13/13 ALL CLEAR — 系统具备完整战斗力**
+- 第一幕 Golden Path（7/7）：OS 健康 ✅ | Gateway 注册 ✅ | XMR 充值 ✅ | 配额分配 ✅ | Phantom 连接 ✅ | 流量发送 ✅ | 计费记录 ✅
+- 第二幕 Protocol Asphyxiation（3/3）：QUIC→TCP 降级 1s ✅ | 降级后数据传输 ✅ | 网络恢复后连接恢复 ✅
+- 第三幕 Scorched Earth & Resonance（3/3）：Gateway A 焦土自毁 ✅ | 信令共振复活 15s ✅ | 复活后数据传输+计费 ✅
 
 ---
 
