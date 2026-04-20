@@ -1,6 +1,6 @@
 // chaos-harness — Phantom Client 混沌测试 Harness
 // 暴露 HTTP 状态 API 供 genesis-drill 脚本查询
-// 模拟 G-Tunnel 连接并报告传输协议状态
+// 模拟 G-Tunnel 多路径连接：UDP(QUIC) → TCP(WSS) → 信令共振发现
 package main
 
 import (
@@ -12,53 +12,36 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 )
 
-var (
-	state = &ClientState{
-		Transport: "quic",
-		Status:    "connecting",
-	}
-)
+var state = &ClientState{
+	Transport: "unknown",
+	Status:    "connecting",
+}
 
 // ClientState 客户端状态
 type ClientState struct {
 	mu        sync.RWMutex
-	GatewayIP string `json:"gateway_ip"`
-	Transport string `json:"transport"`
-	Status    string `json:"status"`
-	Connected bool   `json:"connected"`
-	TxBytes   int64  `json:"tx_bytes"`
-	RxBytes   int64  `json:"rx_bytes"`
+	GatewayIP string
+	Transport string
+	Status    string
+	Connected bool
 	txCounter atomic.Int64
 	rxCounter atomic.Int64
 }
 
-func (s *ClientState) SetConnected(ip, transport string) {
+func (s *ClientState) Set(ip, transport, status string, connected bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.GatewayIP = ip
 	s.Transport = transport
-	s.Status = "connected"
-	s.Connected = true
-}
-
-func (s *ClientState) SetDisconnected() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.Status = "dead"
-	s.Connected = false
-	s.GatewayIP = ""
-}
-
-func (s *ClientState) SetTransport(t string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.Transport = t
+	s.Status = status
+	s.Connected = connected
 }
 
 func (s *ClientState) Snapshot() map[string]interface{} {
@@ -79,17 +62,19 @@ func main() {
 	if bootstrapGW == "" {
 		bootstrapGW = "10.99.0.20:443"
 	}
-
-	// 提取 Gateway IP
 	gwHost, _, _ := net.SplitHostPort(bootstrapGW)
+
+	// 备用 Gateway 列表（从环境变量或信令共振获取）
+	backupGateways := []string{"10.99.0.30"}
+	if env := os.Getenv("BACKUP_GATEWAYS"); env != "" {
+		backupGateways = strings.Split(env, ",")
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 启动连接探测
-	go connectLoop(ctx, gwHost)
+	go connectLoop(ctx, gwHost, backupGateways)
 
-	// 启动 HTTP 状态 API
 	mux := http.NewServeMux()
 	mux.HandleFunc("/status", handleStatus)
 	mux.HandleFunc("/test/send", handleTestSend)
@@ -102,7 +87,6 @@ func main() {
 		}
 	}()
 
-	// 等待退出信号
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
@@ -110,10 +94,50 @@ func main() {
 	server.Close()
 }
 
-// connectLoop 持续探测 Gateway 连接状态
-func connectLoop(ctx context.Context, gwIP string) {
-	// 初始等待 Gateway 启动
-	time.Sleep(5 * time.Second)
+// probeUDP 探测 UDP 连通性（模拟 QUIC）
+func probeUDP(host string, port string, timeout time.Duration) bool {
+	addr, err := net.ResolveUDPAddr("udp", host+":"+port)
+	if err != nil {
+		return false
+	}
+	conn, err := net.DialUDP("udp", nil, addr)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+	// 发送一个探测包，检查是否被 iptables DROP
+	conn.SetDeadline(time.Now().Add(timeout))
+	// 发送 QUIC Initial 风格的探测
+	conn.Write([]byte{0xc0, 0x00, 0x00, 0x01})
+	buf := make([]byte, 64)
+	_, err = conn.Read(buf)
+	// UDP 是无连接的，如果没被 DROP，Write 会成功
+	// 但如果 iptables DROP 了出站 UDP，Write 也会成功（本地缓冲）
+	// 所以我们用 ICMP unreachable 来判断：如果端口不可达会收到错误
+	// 最可靠的方式：尝试 TCP 到同一端口作为 fallback 判断
+	if err != nil {
+		// 超时 = 可能被 DROP（无 ICMP 回复）
+		return false
+	}
+	return true
+}
+
+// probeTCP 探测 TCP 连通性（模拟 WSS/H2）
+func probeTCP(host string, port string, timeout time.Duration) bool {
+	conn, err := net.DialTimeout("tcp", host+":"+port, timeout)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
+// connectLoop 多路径探测循环
+// 优先级：UDP:443(QUIC) → TCP:443(WSS) → TCP:50847(gRPC) → 备用 Gateway
+func connectLoop(ctx context.Context, primaryGW string, backupGWs []string) {
+	time.Sleep(3 * time.Second) // 等待 Gateway 启动
+
+	failCount := 0
 
 	for {
 		select {
@@ -122,22 +146,50 @@ func connectLoop(ctx context.Context, gwIP string) {
 		default:
 		}
 
-		// 尝试 TCP 连接到 Gateway（模拟 QUIC 握手）
-		conn, err := net.DialTimeout("tcp", gwIP+":443", 3*time.Second)
-		if err != nil {
-			// 尝试备用端口
-			conn, err = net.DialTimeout("tcp", gwIP+":50847", 3*time.Second)
+		// 1. 尝试 UDP (QUIC) 到主 Gateway
+		if probeUDP(primaryGW, "443", 2*time.Second) {
+			state.Set(primaryGW, "quic", "connected", true)
+			failCount = 0
+			time.Sleep(2 * time.Second)
+			continue
 		}
 
-		if err == nil {
-			conn.Close()
-			state.SetConnected(gwIP, "quic")
+		// 2. UDP 失败，尝试 TCP (WSS 降级)
+		if probeTCP(primaryGW, "443", 2*time.Second) {
+			state.Set(primaryGW, "wss", "connected", true)
+			failCount = 0
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		// 3. TCP:443 也失败，尝试 gRPC 端口
+		if probeTCP(primaryGW, "50847", 2*time.Second) {
+			state.Set(primaryGW, "tcp", "connected", true)
+			failCount = 0
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		// 4. 主 Gateway 完全不可达，尝试备用 Gateway（信令共振模拟）
+		failCount++
+		if failCount >= 2 {
+			for _, bkGW := range backupGWs {
+				if probeTCP(bkGW, "443", 2*time.Second) || probeTCP(bkGW, "50847", 2*time.Second) {
+					log.Printf("[chaos-harness] 信令共振：切换到备用 Gateway %s", bkGW)
+					state.Set(bkGW, "quic", "connected", true)
+					failCount = 0
+					break
+				}
+			}
+			// 所有 Gateway 都不可达
+			if failCount > 0 {
+				state.Set("", "dead", "dead", false)
+			}
 		} else {
-			// 检查是否能通过其他方式连接
-			state.SetDisconnected()
+			state.Set(primaryGW, "dead", "dead", false)
 		}
 
-		time.Sleep(3 * time.Second)
+		time.Sleep(2 * time.Second)
 	}
 }
 
@@ -151,7 +203,6 @@ func handleTestSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
 	var req struct {
 		Bytes int64 `json:"bytes"`
 	}
@@ -160,14 +211,17 @@ func handleTestSend(w http.ResponseWriter, r *http.Request) {
 		req.Bytes = 1024
 	}
 
-	if !state.Connected {
+	state.mu.RLock()
+	connected := state.Connected
+	state.mu.RUnlock()
+
+	if !connected {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "error", "reason": "not connected"})
 		return
 	}
 
 	state.txCounter.Add(req.Bytes)
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":   "sent",
