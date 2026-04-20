@@ -9,6 +9,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
+# 创建空的 wintun.dll 占位（仅 Windows 使用，Linux 构建需要文件存在以满足 go:embed）
+RUN touch cmd/phantom/wintun.dll
 RUN CGO_ENABLED=0 go build -o /phantom-client ./cmd/phantom
 
 # 构建测试 harness（暴露状态 API）
