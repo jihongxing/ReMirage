@@ -162,8 +162,8 @@ act2_protocol_asphyxiation() {
     # Scene 2: 切断 UDP（杀死 QUIC）
     log_scene "Scene 2: 切断 UDP 出站 — 模拟 ISP 阻断 QUIC"
     # 在 phantom 容器的网络命名空间中注入 iptables 规则
-    docker exec genesis-phantom iptables -A OUTPUT -p udp --dport 443 -j DROP 2>/dev/null || \
-        nsenter_exec "phantom" "iptables -A OUTPUT -p udp --dport 443 -j DROP"
+    docker exec genesis-phantom-1 iptables -A OUTPUT -p udp --dport 443 -j DROP 2>/dev/null || \
+        nsenter_exec "phantom-1" "iptables -A OUTPUT -p udp --dport 443 -j DROP"
 
     log_wait "等待降级触发 (最多 15s)..."
     local degraded=false
@@ -194,8 +194,8 @@ act2_protocol_asphyxiation() {
 
     # Scene 4: 加大绞杀 — 切断 TCP
     log_scene "Scene 4: 切断 TCP 出站 — 模拟全协议阻断"
-    docker exec genesis-phantom iptables -A OUTPUT -p tcp -d "$GW_A" -j DROP 2>/dev/null || \
-        nsenter_exec "phantom" "iptables -A OUTPUT -p tcp -d $GW_A -j DROP"
+    docker exec genesis-phantom-1 iptables -A OUTPUT -p tcp -d "$GW_A" -j DROP 2>/dev/null || \
+        nsenter_exec "phantom-1" "iptables -A OUTPUT -p tcp -d $GW_A -j DROP"
 
     log_wait "等待极端降级 (最多 20s)..."
     sleep 10
@@ -213,8 +213,8 @@ act2_protocol_asphyxiation() {
 
     # Scene 5: 恢复网络
     log_scene "Scene 5: 恢复网络"
-    docker exec genesis-phantom iptables -F OUTPUT 2>/dev/null || \
-        nsenter_exec "phantom" "iptables -F OUTPUT"
+    docker exec genesis-phantom-1 iptables -F OUTPUT 2>/dev/null || \
+        nsenter_exec "phantom-1" "iptables -F OUTPUT"
     sleep 5
 
     transport=$(curl -sf "http://${PHANTOM}:9090/status" 2>/dev/null | \
@@ -271,7 +271,9 @@ act3_scorched_earth() {
 
     # 方式 2: 直接停止容器（模拟物理封锁）
     sleep 2
-    docker stop genesis-gateway-a --time=1 2>/dev/null || \
+    docker stop genesis-gateway-a-1 --timeout=1 2>/dev/null || \
+        docker stop genesis-gateway-a --time=1 2>/dev/null || \
+        docker kill genesis-gateway-a-1 2>/dev/null || \
         docker kill genesis-gateway-a 2>/dev/null || true
     log_info "Gateway A 已阵亡"
 
@@ -339,7 +341,7 @@ act3_scorched_earth() {
 
     # Scene 6: 恢复 Gateway A（为后续测试）
     log_scene "Scene 6: 恢复 Gateway A"
-    docker start genesis-gateway-a 2>/dev/null || true
+    docker start genesis-gateway-a-1 2>/dev/null || true
 
     echo ""
     log_info "第三幕完成: 焦土与复活验证结束"
