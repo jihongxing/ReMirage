@@ -1,5 +1,8 @@
 # Mirage-Gateway 配置文件
 
+# Gateway ID（环境变量覆盖）
+gateway_id: "${MIRAGE_GATEWAY_ID}"
+
 # 网络接口
 network:
   interface: "eth0"           # 监听的网络接口
@@ -123,10 +126,10 @@ security:
 # SSD 磨损均衡机制导致普通文件系统的 3-pass 覆写无法保证物理擦除
 # docker-compose.tmpfs.yml 已将 /var/mirage 挂载为 tmpfs
 mcc:
-  endpoint: ${MCC_ENDPOINT:mirage-os:50847}
+  endpoint: "10.99.0.10:50051"
   tls:
-    enabled: ${MCC_TLS_ENABLED:true}     # 生产环境强制启用
-    cert_file: ${MCC_TLS_CERT:/var/mirage/certs/gateway.crt}
-    key_file: ${MCC_TLS_KEY:/var/mirage/certs/gateway.key}
-    ca_file: ${MCC_TLS_CA:/var/mirage/certs/ca.crt}
-    server_name: mirage-os               # SNI 验证
+    enabled: false
+    cert_file: ""
+    key_file: ""
+    ca_file: ""
+    server_name: mirage-os
