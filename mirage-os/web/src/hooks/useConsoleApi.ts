@@ -1,5 +1,5 @@
 // Console API 钩子 - 对接影子控制台后端
-import { useApi, apiPost, apiGet } from './useApi';
+import { useApi, apiPost } from './useApi';
 
 // ═══ 类型定义 ═══
 
