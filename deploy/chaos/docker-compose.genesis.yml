@@ -120,8 +120,8 @@ services:
   # ============================================================
   os-node:
     build:
-      context: ../../mirage-os/gateway-bridge
-      dockerfile: Dockerfile
+      context: ../../
+      dockerfile: mirage-os/gateway-bridge/Dockerfile
     networks:
       mirage-net:
         ipv4_address: 10.99.0.10
@@ -153,8 +153,8 @@ services:
   # ============================================================
   gateway-a:
     build:
-      context: ../../mirage-gateway
-      dockerfile: Dockerfile
+      context: ../../
+      dockerfile: mirage-gateway/Dockerfile
     networks:
       mirage-net:
         ipv4_address: 10.99.0.20
@@ -184,8 +184,8 @@ services:
   # ============================================================
   gateway-b:
     build:
-      context: ../../mirage-gateway
-      dockerfile: Dockerfile
+      context: ../../
+      dockerfile: mirage-gateway/Dockerfile
     networks:
       mirage-net:
         ipv4_address: 10.99.0.30

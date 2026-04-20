@@ -12,7 +12,15 @@ RUN apt update && apt install -y \
 ENV CGO_ENABLED=1
 
 WORKDIR /build
-COPY . .
+
+# 先复制 mirage-proto（共享依赖）
+COPY mirage-proto/ /mirage-proto/
+
+# 复制 mirage-gateway 源码
+COPY mirage-gateway/ .
+
+# 修正 Docker 构建中的 replace 路径
+RUN sed -i 's|=> ../mirage-proto|=> /mirage-proto|' go.mod
 
 # 下载 Go 依赖
 RUN go mod download
