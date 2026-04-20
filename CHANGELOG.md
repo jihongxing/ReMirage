@@ -320,7 +320,53 @@
 - 网络拓扑：mirage-net (10.99.0.0/24) + infra-net (10.99.1.0/24) 隔离正确
 - Mock 信令服务（DoH/Gist/Mastodon）正常运行
 
-#### 待修复（下一步）
-- [ ] 补全 OS REST API（webhook/billing/resonance/gateway kill）
-- [ ] 修复 Gateway 心跳 protobuf 序列化问题
-- [ ] Phantom Client 添加 chaos 测试模式（无需 token 启动）
+#### 已修复（0.9.3）
+- [x] 补全 OS REST API（webhook/billing/resonance/gateway kill）
+- [x] 修复 Gateway 心跳 protobuf 序列化问题（方案 A+：mirage-proto 协议中枢）
+- [x] Phantom Client 添加 chaos 测试模式（chaos-harness）
+- [x] Gateway 配置修复（gateway_id 环境变量、mcc endpoint 去 scheme、TLS 禁用）
+
+#### 待验证（下次继续）
+- [ ] 服务器全量 `--no-cache` 重建后重新跑演习
+- [ ] 确认 Gateway 心跳成功注册到 OS（endpoint 修复后）
+- [ ] 确认 Phantom chaos-harness 正常启动并暴露 :9090 状态 API
+- [ ] 确认 XMR Webhook 正确分配配额
+- [ ] genesis-drill.sh 中 `/shared/signal_payload.json` volume 挂载问题
+
+---
+
+## [0.9.3] - 2026-04-20
+
+### 方案 A+：协议中枢模块 (mirage-proto Single Source of Truth)
+
+#### 架构决策
+- 拒绝方案 B（JSON Codec 降级）：gRPC HTTP/2 二进制帧性能优势不可牺牲
+- 拒绝方案 C（手写 Proto 接口）：protobuf 内部反射机制过于复杂，手写极易 panic
+- 执行方案 A+：建立独立协议中枢模块，物理级别强一致
+
+#### 实施内容
+- 新建 `mirage-proto/` 独立 Go module
+  - `mirage.proto`：唯一权威 IDL 定义
+  - `gen/mirage.pb.go`：protoc v33.2 + protoc-gen-go v1.36.10 生成
+  - `gen/mirage_grpc.pb.go`：protoc-gen-go-grpc v1.6.0 生成
+  - `generate.sh`：一键生成脚本（安装 protoc + 插件 + 生成 + 验证）
+- Gateway 端改造：删除 `pkg/api/proto/`，7 个文件 import 改为 `pb "mirage-proto/gen"`
+- OS 端改造：删除 `gateway-bridge/proto/`，11 个文件 import 改为 `pb "mirage-proto/gen"`
+- 两端通过 `go.mod replace` 指向本地 `../mirage-proto`
+- 两端编译验证通过，protobuf 序列化错误彻底修复
+
+### OS REST API 补全
+- `/internal/webhook/xmr`：XMR 充值到账（$150/XMR → 配额 GB）
+- `/internal/billing/{user_id}`：计费查询（聚合 billing_logs）
+- `/internal/resonance/publish`：信令共振发布（Redis 缓存）
+- `/internal/gateway/{id}/kill`：焦土指令（DB + Redis Pub/Sub）
+- `init.sql` gateways 表补全列
+
+### Phantom Client 混沌测试模式
+- 新增 `cmd/chaos-harness/main.go`：HTTP 状态 API `:9090`
+- `Dockerfile.chaos` 入口改为 `chaos-harness`
+
+### Gateway 配置修复
+- `gateway_id: "${MIRAGE_GATEWAY_ID}"`（环境变量注入）
+- `mcc.endpoint`：去掉 `https://` 前缀（gRPC 不带 scheme）
+- `mcc.tls.enabled: false`（chaos 测试环境）
