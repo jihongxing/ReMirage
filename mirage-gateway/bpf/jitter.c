@@ -90,18 +90,83 @@ int jitter_lite_egress(struct __sk_buff *skb) {
     __u64 now = bpf_ktime_get_ns();
     skb->tstamp = now + delay_ns;
     
-    // 7. NPM Padding 填充（根据策略）
-    // TODO: 根据 tpl->padding_strategy 应用不同的填充策略
-    // 0: 固定填充
-    // 1: 正态分布填充
-    // 2: 跟随载荷填充
-    
-    // 8. 记录防御流量（如果应用了 Padding）
-    // __u32 traffic_key_defense = 1;
-    // __u64 *defense_bytes = bpf_map_lookup_elem(&traffic_stats, &traffic_key_defense);
-    // if (defense_bytes) {
-    //     __sync_fetch_and_add(defense_bytes, padding_size);
-    // }
+    // 7. NPM Padding 填充（根据 B-DNA 模板策略）
+    __u32 padding_size = 0;
+    __u16 target_mtu = tpl->target_mtu ? tpl->target_mtu : 1460;
+    __u32 current_len = skb->len;
+
+    if (current_len < target_mtu) {
+        switch (tpl->padding_strategy) {
+        case 0: {
+            // 固定填充：对齐到 target_mtu
+            padding_size = target_mtu - current_len;
+            break;
+        }
+        case 1: {
+            // 正态分布填充：以 (target_mtu + current_len)/2 为均值
+            __u32 mean_pad = (target_mtu - current_len) / 2;
+            __u32 variance = mean_pad / 3;
+            if (variance == 0) variance = 1;
+            __u32 rand = bpf_get_prandom_u32();
+            __s32 offset = (rand % (variance * 2 + 1)) - variance;
+            __s32 result = (__s32)mean_pad + offset;
+            if (result < 0) result = 0;
+            padding_size = (__u32)result;
+            __u32 max_pad = target_mtu - current_len;
+            if (padding_size > max_pad)
+                padding_size = max_pad;
+            break;
+        }
+        case 2: {
+            // 跟随载荷填充：padding = payload_len % (target_mtu - current_len)
+            // 使载荷大小与填充量相关联，模拟真实应用行为
+            __u32 max_pad = target_mtu - current_len;
+            padding_size = current_len % (max_pad + 1);
+            break;
+        }
+        default:
+            break;
+        }
+    }
+
+    // 执行 TC 层 padding（通过 bpf_skb_change_tail 扩展）
+    if (padding_size > 0 && padding_size <= 1400) {
+        __u32 new_len = current_len + padding_size;
+        int ret = bpf_skb_change_tail(skb, new_len, 0);
+        if (ret == 0) {
+            // 重新获取数据指针
+            data = (void *)(long)skb->data;
+            data_end = (void *)(long)skb->data_end;
+
+            // 更新 IP 头 tot_len
+            struct ethhdr *eth2 = data;
+            if ((void *)(eth2 + 1) <= data_end) {
+                struct iphdr *ip2 = (void *)(eth2 + 1);
+                if ((void *)(ip2 + 1) <= data_end) {
+                    __u16 old_len = ip2->tot_len;
+                    ip2->tot_len = bpf_htons(bpf_ntohs(old_len) + padding_size);
+                    // 增量校验和更新
+                    __u32 csum = (~ip2->check) & 0xFFFF;
+                    csum += (~old_len) & 0xFFFF;
+                    csum += ip2->tot_len;
+                    while (csum >> 16)
+                        csum = (csum & 0xFFFF) + (csum >> 16);
+                    ip2->check = ~csum;
+                }
+            }
+        } else {
+            padding_size = 0; // 扩展失败，重置
+        }
+    }
+
+    // 8. 记录防御流量（Padding 产生的额外字节）
+    if (padding_size > 0) {
+        __u32 traffic_key_defense = 1;
+        __u64 *defense_bytes = bpf_map_lookup_elem(&traffic_stats, &traffic_key_defense);
+        if (defense_bytes) {
+            __sync_fetch_and_add(defense_bytes, padding_size);
+        }
+    }
     
     return TC_ACT_OK;
 }

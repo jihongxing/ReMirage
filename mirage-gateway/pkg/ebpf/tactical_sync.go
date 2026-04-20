@@ -44,6 +44,7 @@ func NewTacticalSyncer(loader *Loader) *TacticalSyncer {
 }
 
 // UpdateGlobalPolicy 更新全局策略到 eBPF Map
+// 写入失败时不更新内存状态，并尝试写入 emergency_ctrl_map 触发降级
 func (ts *TacticalSyncer) UpdateGlobalPolicy(mode TacticalMode) error {
 	policy := ts.getConfigForMode(mode)
 	policy.Timestamp = uint64(time.Now().UnixNano())
@@ -63,6 +64,9 @@ func (ts *TacticalSyncer) UpdateGlobalPolicy(mode TacticalMode) error {
 		if policyMap != nil {
 			key := uint32(0)
 			if err := policyMap.Put(&key, data); err != nil {
+				log.Printf("🚨 [TacticalSyncer] 写入 global_policy_map 失败: %v（Raft 已 commit 但内核未同步）", err)
+				// 尝试写入紧急降级标志
+				ts.triggerEmergencyOnWriteFailure()
 				return fmt.Errorf("写入 global_policy_map 失败: %w", err)
 			}
 			log.Printf("[TacticalSyncer] 已同步战术模式: %d → global_policy_map", mode)
@@ -71,6 +75,22 @@ func (ts *TacticalSyncer) UpdateGlobalPolicy(mode TacticalMode) error {
 
 	ts.currentMode = mode
 	return nil
+}
+
+// triggerEmergencyOnWriteFailure Map 写入失败时尝试触发紧急降级
+func (ts *TacticalSyncer) triggerEmergencyOnWriteFailure() {
+	if ts.loader == nil {
+		return
+	}
+	emergencyMap := ts.loader.GetMap("emergency_ctrl_map")
+	if emergencyMap == nil {
+		return
+	}
+	key := uint32(0)
+	value := uint32(1) // 降级模式
+	if err := emergencyMap.Put(&key, &value); err != nil {
+		log.Printf("🚨 [TacticalSyncer] emergency_ctrl_map 写入也失败: %v", err)
+	}
 }
 
 // SetGhostMode 设置 Ghost Mode

@@ -140,3 +140,20 @@ threat:
   auto_adjust_defense: true    # 自动调整防御等级
   threat_threshold: 10         # 威胁阈值（触发防御提升）
   cooldown_period: 300         # 冷却期（秒）
+
+# ═══════════════════════════════════════════════════════════════
+# 影子控制台配置
+# ═══════════════════════════════════════════════════════════════
+console:
+  # 监听地址（默认仅本地绑定，生产环境通过 SSH 隧道访问）
+  listen_addr: ${CONSOLE_ADDR:127.0.0.1:8443}
+  
+  # TLS 证书（不配置则 HTTP 明文，仅本地安全）
+  cert_file: ${CONSOLE_CERT:}
+  key_file: ${CONSOLE_KEY:}
+  
+  # mTLS 客户端 CA（配置后启用双向认证）
+  # 无客户端证书的请求直接返回 400 Bad Request（连登录框都不给看）
+  # 方案 A: mTLS（浏览器导入 admin.p12）
+  # 方案 B: 不配置此项，仅绑定 127.0.0.1 + SSH 隧道
+  client_ca: ${CONSOLE_CLIENT_CA:}

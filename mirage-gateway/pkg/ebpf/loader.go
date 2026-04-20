@@ -1,3 +1,5 @@
+//go:build linux
+
 // Package ebpf - eBPF 加载器与管理器
 // Go 控制面：负责加载 C 数据面到内核
 //
@@ -126,6 +128,12 @@ func (l *Loader) LoadAndAttach() error {
 			path:     "bpf/h3_shaper.o",
 			critical: false,
 			attachFn: l.attachH3Shaper,
+		},
+		{
+			name:     "ICMP Tunnel 数据面 (TC)",
+			path:     "bpf/icmp_tunnel.o",
+			critical: false, // 非 critical，加载失败时 ICMP 传输标记不可用
+			attachFn: l.attachICMPTunnel,
 		},
 	}
 
@@ -304,6 +312,30 @@ func (l *Loader) attachChameleon(loader *Loader, objs *ebpf.Collection) error {
 // attachH3Shaper 挂载 H3 流量整形 (TC egress)
 func (l *Loader) attachH3Shaper(loader *Loader, objs *ebpf.Collection) error {
 	return l.attachTCFilter(objs, "h3_shaper_egress", netlink.HANDLE_MIN_EGRESS)
+}
+
+// attachICMPTunnel 挂载 ICMP Tunnel 数据面 (TC ingress + egress)
+func (l *Loader) attachICMPTunnel(loader *Loader, objs *ebpf.Collection) error {
+	// 挂载 egress（构造 ICMP Echo Request）
+	if err := l.attachTCFilter(objs, "icmp_tunnel_egress", netlink.HANDLE_MIN_EGRESS); err != nil {
+		return fmt.Errorf("挂载 icmp_tunnel_egress 失败: %w", err)
+	}
+	// 挂载 ingress（截获 ICMP Echo Reply）
+	if err := l.attachTCFilter(objs, "icmp_tunnel_ingress", netlink.HANDLE_MIN_INGRESS); err != nil {
+		return fmt.Errorf("挂载 icmp_tunnel_ingress 失败: %w", err)
+	}
+	// 注册 ICMP 专有 Map
+	for name, m := range objs.Maps {
+		if name == "icmp_config_map" || name == "icmp_tx_map" || name == "icmp_data_events" {
+			l.maps[name] = m
+		}
+	}
+	return nil
+}
+
+// GetMap 获取指定名称的 Map（供外部模块使用）
+func (l *Loader) GetMap(name string) *ebpf.Map {
+	return l.maps[name]
 }
 
 // ============================================================
@@ -505,9 +537,41 @@ func (l *Loader) attachSkMsg(objs *ebpf.Collection) error {
 // ============================================================
 
 // UpdateStrategy 更新防御策略（写入 eBPF Map）
+// 实现 write-all-or-rollback：任一 Map 写入失败则回滚已写入的 Map
 func (l *Loader) UpdateStrategy(strategy *DefenseStrategy) error {
 	key := uint32(0)
 
+	// 保存旧值用于回滚
+	type mapSnapshot struct {
+		m      *ebpf.Map
+		key    interface{}
+		oldVal []byte
+	}
+	var snapshots []mapSnapshot
+
+	// 辅助函数：写入前先读取旧值
+	writeWithSnapshot := func(m *ebpf.Map, k *uint32, val interface{}, valSize int) error {
+		if m == nil {
+			return nil
+		}
+		// 读取旧值
+		oldVal := make([]byte, valSize)
+		_ = m.Lookup(k, &oldVal) // 首次可能不存在，忽略错误
+		snapshots = append(snapshots, mapSnapshot{m: m, key: k, oldVal: oldVal})
+		// 写入新值
+		return m.Put(k, val)
+	}
+
+	// 回滚函数
+	rollback := func() {
+		for _, snap := range snapshots {
+			if err := snap.m.Put(snap.key, &snap.oldVal); err != nil {
+				log.Printf("⚠️ [eBPF] 回滚 Map 失败: %v", err)
+			}
+		}
+	}
+
+	// 写入 Jitter 配置
 	if jitterMap := l.maps["jitter_config_map"]; jitterMap != nil {
 		jitterCfg := JitterConfig{
 			Enabled:     1,
@@ -515,11 +579,13 @@ func (l *Loader) UpdateStrategy(strategy *DefenseStrategy) error {
 			StddevIATUs: strategy.JitterStddevUs,
 			TemplateID:  strategy.TemplateID,
 		}
-		if err := jitterMap.Put(&key, &jitterCfg); err != nil {
+		if err := writeWithSnapshot(jitterMap, &key, &jitterCfg, 16); err != nil {
+			rollback()
 			return fmt.Errorf("更新 Jitter 配置失败: %w", err)
 		}
 	}
 
+	// 写入 VPC 配置
 	if vpcMap := l.maps["vpc_config_map"]; vpcMap != nil {
 		vpcCfg := VPCConfig{
 			Enabled:        1,
@@ -527,7 +593,8 @@ func (l *Loader) UpdateStrategy(strategy *DefenseStrategy) error {
 			RouterDelayUs:  strategy.RouterDelayUs,
 			NoiseIntensity: strategy.NoiseIntensity,
 		}
-		if err := vpcMap.Put(&key, &vpcCfg); err != nil {
+		if err := writeWithSnapshot(vpcMap, &key, &vpcCfg, 16); err != nil {
+			rollback()
 			return fmt.Errorf("更新 VPC 配置失败: %w", err)
 		}
 	}
@@ -535,11 +602,6 @@ func (l *Loader) UpdateStrategy(strategy *DefenseStrategy) error {
 	log.Printf("✅ 防御策略已更新: Jitter=%dus±%dus, Noise=%d%%",
 		strategy.JitterMeanUs, strategy.JitterStddevUs, strategy.NoiseIntensity)
 	return nil
-}
-
-// GetMap 获取 Map 引用
-func (l *Loader) GetMap(name string) *ebpf.Map {
-	return l.maps[name]
 }
 
 // GetSockMap 获取 Sockmap 引用（供 TPROXY 使用）

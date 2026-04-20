@@ -1,0 +1,10 @@
+FROM golang:1.24-alpine AS builder
+
+WORKDIR /build
+COPY . .
+RUN go build -o /mock-server main.go
+
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates
+COPY --from=builder /mock-server /usr/local/bin/mock-server
+ENTRYPOINT ["mock-server"]

@@ -1,0 +1,31 @@
+# Phantom Client — 混沌测试镜像
+# 包含完整客户端 + 状态暴露 HTTP 端口（仅测试用）
+FROM golang:1.24-alpine AS builder
+
+RUN apk add --no-cache gcc musl-dev
+
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 go build -o /phantom-client ./cmd/phantom
+
+# 构建测试 harness（暴露状态 API）
+RUN CGO_ENABLED=0 go build -o /chaos-harness ./cmd/chaos-harness 2>/dev/null || true
+
+FROM alpine:3.19
+
+RUN apk add --no-cache \
+    iptables \
+    iproute2 \
+    curl \
+    tcpdump
+
+COPY --from=builder /phantom-client /usr/local/bin/phantom-client
+COPY --from=builder /chaos-harness /usr/local/bin/chaos-harness 2>/dev/null || true
+
+# TUN 设备需要
+RUN mkdir -p /dev/net && mknod /dev/net/tun c 10 200 2>/dev/null || true
+
+ENTRYPOINT ["phantom-client"]

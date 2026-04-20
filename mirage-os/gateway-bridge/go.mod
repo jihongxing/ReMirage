@@ -15,6 +15,7 @@ require (
 )
 
 require (
+	github.com/alicebob/miniredis/v2 v2.37.0 // indirect
 	github.com/armon/go-metrics v0.4.1 // indirect
 	github.com/boltdb/bolt v1.3.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -29,6 +30,7 @@ require (
 	github.com/mattn/go-isatty v0.0.14 // indirect
 	github.com/rogpeppe/go-internal v1.8.1 // indirect
 	github.com/stretchr/testify v1.9.0 // indirect
+	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go.etcd.io/bbolt v1.3.5 // indirect
 	golang.org/x/net v0.32.0 // indirect
 	golang.org/x/text v0.21.0 // indirect

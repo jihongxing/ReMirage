@@ -16,10 +16,27 @@ import (
 
 // CommandHandler 下行指令处理器
 type CommandHandler struct {
-	loader    *ebpf.Loader
-	blacklist *threat.BlacklistManager
-	gswitch   *gswitch.GSwitchManager
+	loader        *ebpf.Loader
+	blacklist     *threat.BlacklistManager
+	gswitch       *gswitch.GSwitchManager
+	motorDownlink MotorDownlinkApplier
 	proto.UnimplementedGatewayDownlinkServer
+}
+
+// MotorDownlinkApplier 下行状态映射接口
+type MotorDownlinkApplier interface {
+	ApplyDesiredState(cfg *DesiredStatePayload) (bool, error)
+}
+
+// DesiredStatePayload 期望状态载荷（避免循环依赖）
+type DesiredStatePayload struct {
+	JitterMeanUs   uint32
+	JitterStddevUs uint32
+	NoiseIntensity uint32
+	PaddingRate    uint32
+	TemplateID     uint32
+	FiberJitterUs  uint32
+	RouterDelayUs  uint32
 }
 
 // NewCommandHandler 创建处理器
@@ -35,12 +52,39 @@ func NewCommandHandler(
 	}
 }
 
-// PushStrategy 处理策略下发 → 写入 eBPF Map（< 100ms）
+// SetMotorDownlink 设置下行状态映射器
+func (h *CommandHandler) SetMotorDownlink(md MotorDownlinkApplier) {
+	h.motorDownlink = md
+}
+
+// PushStrategy 处理策略下发 → 通过 MotorDownlink 幂等写入 eBPF Map（< 100ms）
 func (h *CommandHandler) PushStrategy(ctx context.Context, req *proto.StrategyPush) (*proto.PushResponse, error) {
 	if req.DefenseLevel < 0 || req.DefenseLevel > 5 {
 		return nil, status.Errorf(codes.InvalidArgument, "defense_level 越界: %d", req.DefenseLevel)
 	}
 
+	// 优先使用 MotorDownlink（幂等 Hash 校验）
+	if h.motorDownlink != nil {
+		applied, err := h.motorDownlink.ApplyDesiredState(&DesiredStatePayload{
+			JitterMeanUs:   req.JitterMeanUs,
+			JitterStddevUs: req.JitterStddevUs,
+			NoiseIntensity: req.NoiseIntensity,
+			PaddingRate:    req.PaddingRate,
+			TemplateID:     req.TemplateId,
+		})
+		if err != nil {
+			log.Printf("[Handler] PushStrategy MotorDownlink 失败: %v", err)
+			return &proto.PushResponse{Success: false, Message: err.Error()}, nil
+		}
+		if !applied {
+			log.Printf("[Handler] 策略未变化（幂等跳过）: level=%d", req.DefenseLevel)
+		} else {
+			log.Printf("[Handler] 策略已更新（MotorDownlink）: level=%d", req.DefenseLevel)
+		}
+		return &proto.PushResponse{Success: true, Message: "ok"}, nil
+	}
+
+	// Fallback: 直接写入 eBPF Map
 	strat := &ebpf.DefenseStrategy{
 		JitterMeanUs:   req.JitterMeanUs,
 		JitterStddevUs: req.JitterStddevUs,
@@ -53,7 +97,7 @@ func (h *CommandHandler) PushStrategy(ctx context.Context, req *proto.StrategyPu
 		return &proto.PushResponse{Success: false, Message: err.Error()}, nil
 	}
 
-	log.Printf("[Handler] 策略已更新: level=%d", req.DefenseLevel)
+	log.Printf("[Handler] 策略已更新（直写）: level=%d", req.DefenseLevel)
 	return &proto.PushResponse{Success: true, Message: "ok"}, nil
 }
 

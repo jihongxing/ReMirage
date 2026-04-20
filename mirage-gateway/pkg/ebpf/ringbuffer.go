@@ -50,29 +50,24 @@ func (r *RingBufferReader) readLoop() {
 	log.Println("[Ring Buffer] 开始监听威胁事件...")
 
 	for {
-		select {
-		case <-r.stopCh:
-			log.Println("[Ring Buffer] 停止监听")
-			return
-		default:
-			record, err := r.reader.Read()
-			if err != nil {
-				if err == ringbuf.ErrClosed {
-					return
-				}
-				log.Printf("[Ring Buffer] 读取错误: %v\n", err)
-				continue
+		record, err := r.reader.Read()
+		if err != nil {
+			if err == ringbuf.ErrClosed {
+				log.Println("[Ring Buffer] 停止监听")
+				return
 			}
+			log.Printf("[Ring Buffer] 读取错误: %v\n", err)
+			continue
+		}
 
-			event, err := r.parseEvent(record.RawSample)
-			if err != nil {
-				log.Printf("[Ring Buffer] 解析事件失败: %v\n", err)
-				continue
-			}
+		event, err := r.parseEvent(record.RawSample)
+		if err != nil {
+			log.Printf("[Ring Buffer] 解析事件失败: %v\n", err)
+			continue
+		}
 
-			if err := r.handler(event); err != nil {
-				log.Printf("[Ring Buffer] 处理事件失败: %v\n", err)
-			}
+		if err := r.handler(event); err != nil {
+			log.Printf("[Ring Buffer] 处理事件失败: %v\n", err)
 		}
 	}
 }

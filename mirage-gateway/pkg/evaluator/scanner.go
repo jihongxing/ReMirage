@@ -18,12 +18,18 @@ type ScanResult struct {
 	Anomalies      []string
 }
 
+// TrafficStatsProvider 流量统计数据源接口（从 eBPF Map 读取）
+type TrafficStatsProvider interface {
+	GetTrafficStats() map[string]float64
+}
+
 // Scanner AI 审计评估器
 type Scanner struct {
 	mu              sync.RWMutex
 	results         []ScanResult
 	threshold       float64
 	feedbackChannel chan<- FeedbackSignal
+	statsProvider   TrafficStatsProvider
 	ctx             context.Context
 	cancel          context.CancelFunc
 }
@@ -64,7 +70,7 @@ func (s *Scanner) Stop() {
 func (s *Scanner) continuousScan() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -79,16 +85,16 @@ func (s *Scanner) continuousScan() {
 func (s *Scanner) performScan() {
 	// 1. 捕获流量特征
 	features := s.captureFeatures()
-	
+
 	// 2. 计算异常分数
 	confidence := s.calculateAnomalyScore(features)
-	
+
 	// 3. 分类
 	classification := s.classify(features, confidence)
-	
+
 	// 4. 检测异常
 	anomalies := s.detectAnomalies(features)
-	
+
 	result := ScanResult{
 		Timestamp:      time.Now(),
 		Confidence:     confidence,
@@ -96,7 +102,7 @@ func (s *Scanner) performScan() {
 		Features:       features,
 		Anomalies:      anomalies,
 	}
-	
+
 	// 5. 保存结果
 	s.mu.Lock()
 	s.results = append(s.results, result)
@@ -104,9 +110,9 @@ func (s *Scanner) performScan() {
 		s.results = s.results[1:]
 	}
 	s.mu.Unlock()
-	
+
 	log.Printf("[Scanner] 扫描完成: 置信度=%.2f%%, 分类=%s", confidence, classification)
-	
+
 	// 6. 触发反馈
 	if confidence > s.threshold {
 		s.triggerFeedback(result)
@@ -115,23 +121,29 @@ func (s *Scanner) performScan() {
 
 // captureFeatures 捕获流量特征
 func (s *Scanner) captureFeatures() map[string]float64 {
-	// TODO: 实际实现需要从 eBPF 或 pcap 捕获
-	// 这里使用模拟数据
-	
-	features := map[string]float64{
-		"packet_size_mean":     512.5,
-		"packet_size_std":      128.3,
-		"iat_mean":             45.2,  // 毫秒
-		"iat_std":              12.8,
-		"entropy":              7.85,  // 0-8
-		"tls_version":          1.3,
-		"cipher_suite_count":   7,
-		"extension_count":      11,
-		"tcp_window_size":      65535,
-		"burst_size":           5,
-		"flow_duration":        120.5, // 秒
+	// 优先从 eBPF 统计数据源读取
+	if s.statsProvider != nil {
+		stats := s.statsProvider.GetTrafficStats()
+		if len(stats) > 0 {
+			return stats
+		}
 	}
-	
+
+	// 降级：使用基线模拟数据（eBPF 未就绪时）
+	features := map[string]float64{
+		"packet_size_mean":   512.5,
+		"packet_size_std":    128.3,
+		"iat_mean":           45.2, // 毫秒
+		"iat_std":            12.8,
+		"entropy":            7.85, // 0-8
+		"tls_version":        1.3,
+		"cipher_suite_count": 7,
+		"extension_count":    11,
+		"tcp_window_size":    65535,
+		"burst_size":         5,
+		"flow_duration":      120.5, // 秒
+	}
+
 	return features
 }
 
@@ -139,15 +151,15 @@ func (s *Scanner) captureFeatures() map[string]float64 {
 func (s *Scanner) calculateAnomalyScore(features map[string]float64) float64 {
 	// 使用简化的异常检测算法
 	// 实际应该使用 ML 模型（随机森林/CNN）
-	
+
 	score := 0.0
-	
+
 	// 1. 熵检查（加密流量熵应该接近 8）
 	entropy := features["entropy"]
 	if entropy < 7.5 || entropy > 7.99 {
 		score += 15.0
 	}
-	
+
 	// 2. IAT 规律性检查
 	iatMean := features["iat_mean"]
 	iatStd := features["iat_std"]
@@ -155,27 +167,27 @@ func (s *Scanner) calculateAnomalyScore(features map[string]float64) float64 {
 	if cv < 0.1 || cv > 0.5 {
 		score += 20.0
 	}
-	
+
 	// 3. 包大小分布
 	sizeMean := features["packet_size_mean"]
 	sizeStd := features["packet_size_std"]
 	if sizeStd < 50 || sizeMean > 1400 {
 		score += 10.0
 	}
-	
+
 	// 4. TLS 指纹异常
 	cipherCount := features["cipher_suite_count"]
 	extCount := features["extension_count"]
 	if cipherCount < 5 || extCount < 8 {
 		score += 25.0
 	}
-	
+
 	// 5. 突发模式
 	burstSize := features["burst_size"]
 	if burstSize > 10 || burstSize < 2 {
 		score += 10.0
 	}
-	
+
 	return math.Min(score, 100.0)
 }
 
@@ -195,36 +207,36 @@ func (s *Scanner) classify(features map[string]float64, confidence float64) stri
 // detectAnomalies 检测异常
 func (s *Scanner) detectAnomalies(features map[string]float64) []string {
 	anomalies := make([]string, 0)
-	
+
 	// 熵异常
 	if entropy := features["entropy"]; entropy > 7.95 {
 		anomalies = append(anomalies, "high_entropy")
 	}
-	
+
 	// IAT 规律性异常
 	iatMean := features["iat_mean"]
 	iatStd := features["iat_std"]
 	if cv := iatStd / iatMean; cv < 0.15 {
 		anomalies = append(anomalies, "regular_iat_pattern")
 	}
-	
+
 	// 包大小异常
 	if sizeMean := features["packet_size_mean"]; sizeMean > 1200 {
 		anomalies = append(anomalies, "large_packet_size")
 	}
-	
+
 	// TLS 指纹异常
 	if cipherCount := features["cipher_suite_count"]; cipherCount < 6 {
 		anomalies = append(anomalies, "limited_cipher_suites")
 	}
-	
+
 	return anomalies
 }
 
 // triggerFeedback 触发反馈
 func (s *Scanner) triggerFeedback(result ScanResult) {
 	log.Printf("[Scanner] ⚠️ 检测到异常流量 (置信度: %.2f%%), 触发反馈", result.Confidence)
-	
+
 	signal := FeedbackSignal{
 		Type:       "anomaly_detected",
 		Confidence: result.Confidence,
@@ -234,7 +246,7 @@ func (s *Scanner) triggerFeedback(result ScanResult) {
 			"classification": result.Classification,
 		},
 	}
-	
+
 	// 非阻塞发送
 	select {
 	case s.feedbackChannel <- signal:
@@ -248,11 +260,11 @@ func (s *Scanner) triggerFeedback(result ScanResult) {
 func (s *Scanner) GetRecentResults(count int) []ScanResult {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	if count > len(s.results) {
 		count = len(s.results)
 	}
-	
+
 	start := len(s.results) - count
 	return s.results[start:]
 }
@@ -261,11 +273,11 @@ func (s *Scanner) GetRecentResults(count int) []ScanResult {
 func (s *Scanner) GetAverageConfidence(duration time.Duration) float64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	cutoff := time.Now().Add(-duration)
 	sum := 0.0
 	count := 0
-	
+
 	for i := len(s.results) - 1; i >= 0; i-- {
 		if s.results[i].Timestamp.Before(cutoff) {
 			break
@@ -273,11 +285,11 @@ func (s *Scanner) GetAverageConfidence(duration time.Duration) float64 {
 		sum += s.results[i].Confidence
 		count++
 	}
-	
+
 	if count == 0 {
 		return 0
 	}
-	
+
 	return sum / float64(count)
 }
 
@@ -285,19 +297,19 @@ func (s *Scanner) GetAverageConfidence(duration time.Duration) float64 {
 func (s *Scanner) GetStats() map[string]interface{} {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	if len(s.results) == 0 {
 		return map[string]interface{}{
 			"total_scans": 0,
 		}
 	}
-	
+
 	// 计算统计
 	totalScans := len(s.results)
 	avgConfidence := 0.0
 	maxConfidence := 0.0
 	anomalyCount := 0
-	
+
 	for _, result := range s.results {
 		avgConfidence += result.Confidence
 		if result.Confidence > maxConfidence {
@@ -307,15 +319,15 @@ func (s *Scanner) GetStats() map[string]interface{} {
 			anomalyCount++
 		}
 	}
-	
+
 	avgConfidence /= float64(totalScans)
-	
+
 	return map[string]interface{}{
-		"total_scans":      totalScans,
-		"avg_confidence":   avgConfidence,
-		"max_confidence":   maxConfidence,
-		"anomaly_count":    anomalyCount,
-		"anomaly_rate":     float64(anomalyCount) / float64(totalScans) * 100,
-		"last_scan":        s.results[len(s.results)-1].Timestamp,
+		"total_scans":    totalScans,
+		"avg_confidence": avgConfidence,
+		"max_confidence": maxConfidence,
+		"anomaly_count":  anomalyCount,
+		"anomaly_rate":   float64(anomalyCount) / float64(totalScans) * 100,
+		"last_scan":      s.results[len(s.results)-1].Timestamp,
 	}
 }

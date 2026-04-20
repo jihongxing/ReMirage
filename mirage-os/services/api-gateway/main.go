@@ -13,6 +13,7 @@ import (
 	"mirage-os/pkg/database"
 	"mirage-os/pkg/geo"
 	"mirage-os/services/billing"
+	"mirage-os/services/console"
 	"mirage-os/services/provisioning"
 
 	"github.com/go-redis/redis/v8"
@@ -108,6 +109,28 @@ func main() {
 		log.Printf("✅ Provisioner 内部 API: %s", provAddr)
 		if err := http.ListenAndServe(provAddr, provMux); err != nil {
 			log.Printf("⚠️ Provisioner HTTP 启动失败: %v", err)
+		}
+	}()
+
+	// 10.8 启动影子控制台（mTLS 管理入口）
+	inviteSvc := billing.NewInvitationService(database.GetDB())
+	tierRouter := provisioning.NewTierRouter(database.GetDB())
+	tierRouter.RefreshCache()
+
+	// 创建 BillingService 实例供控制台使用
+	moneroMgr := billing.NewMoneroManager(database.GetDB(), rdb, billing.NewHTTPMoneroRPCClient(""), billing.NewCoinGeckoProvider())
+	billingSvc := billing.NewBillingServiceImpl(database.GetDB(), rdb, moneroMgr)
+
+	consoleServer := console.NewConsoleServer(database.GetDB(), billingSvc, inviteSvc, tierRouter, prov)
+	go func() {
+		consoleCfg := console.Config{
+			ListenAddr: getEnv("CONSOLE_ADDR", "127.0.0.1:8443"),
+			CertFile:   getEnv("CONSOLE_CERT", ""),
+			KeyFile:    getEnv("CONSOLE_KEY", ""),
+			ClientCA:   getEnv("CONSOLE_CLIENT_CA", ""),
+		}
+		if err := consoleServer.Start(consoleCfg); err != nil {
+			log.Printf("⚠️ Console 启动失败: %v", err)
 		}
 	}()
 

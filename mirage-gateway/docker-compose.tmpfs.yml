@@ -24,8 +24,11 @@ services:
           memory: 256M
     
     # tmpfs 挂载（内存文件系统）
+    # 安全关键：证书/私钥必须在 tmpfs 中，断电即物理消失
+    # SSD 磨损均衡导致普通文件系统的覆写无法保证物理擦除
     tmpfs:
       - /var/mirage:size=256M,mode=0700
+      - /var/mirage/certs:size=16M,mode=0700,uid=0,gid=0
       - /tmp:size=64M,mode=1777
     
     # 只读根文件系统

@@ -216,6 +216,18 @@ func (c *GRPCClient) Close() error {
 	return nil
 }
 
+// ReportTrafficDirect 直接上报流量（由 SensoryUplink 调用）
+func (c *GRPCClient) ReportTrafficDirect(req *proto.TrafficRequest) {
+	if !c.connected.Load() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := c.uplinkClient.ReportTraffic(ctx, req); err != nil {
+		log.Printf("[gRPC Client] 流量直报失败: %v", err)
+	}
+}
+
 // SetHeartbeatCallback 设置心跳成功回调（用于喂看门狗）
 func (c *GRPCClient) SetHeartbeatCallback(fn func()) {
 	c.mu.Lock()

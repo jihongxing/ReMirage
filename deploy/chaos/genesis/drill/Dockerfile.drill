@@ -1,0 +1,17 @@
+FROM alpine:3.19
+
+RUN apk add --no-cache \
+    bash \
+    curl \
+    jq \
+    iptables \
+    docker-cli \
+    iproute2 \
+    bind-tools \
+    tcpdump
+
+WORKDIR /scripts
+COPY genesis-drill.sh /scripts/
+RUN chmod +x /scripts/genesis-drill.sh
+
+ENTRYPOINT ["sleep", "infinity"]

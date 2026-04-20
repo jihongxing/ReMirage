@@ -14,7 +14,7 @@ import (
 )
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin:     func(r *http.Request) bool { return true },
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 }
@@ -27,6 +27,7 @@ type Hub struct {
 	unregister chan *Client
 	mu         sync.RWMutex
 	rdb        *redis.Client
+	subscriber *ThrottledSubscriber
 }
 
 // Client WebSocket 客户端
@@ -38,19 +39,21 @@ type Client struct {
 
 // NewHub 创建 Hub
 func NewHub(rdb *redis.Client) *Hub {
-	return &Hub{
+	h := &Hub{
 		clients:    make(map[*Client]bool),
 		broadcast:  make(chan []byte, 256),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		rdb:        rdb,
 	}
+	h.subscriber = NewThrottledSubscriber(rdb, h)
+	return h
 }
 
 // Run 启动 Hub
 func (h *Hub) Run() {
-	// 启动 Redis 订阅
-	go h.subscribeRedis()
+	// 启动节流订阅器（替代旧的单频道订阅）
+	go h.subscriber.Start(context.Background())
 
 	for {
 		select {
@@ -59,6 +62,8 @@ func (h *Hub) Run() {
 			h.clients[client] = true
 			h.mu.Unlock()
 			log.Printf("📡 [WS] 新客户端连接，当前连接数: %d", len(h.clients))
+			// 冷启动快照：新连接立即发送全量状态
+			go h.subscriber.SendSnapshot(client)
 
 		case client := <-h.unregister:
 			h.mu.Lock()
@@ -84,22 +89,8 @@ func (h *Hub) Run() {
 	}
 }
 
-// subscribeRedis 订阅 Redis 频道
-func (h *Hub) subscribeRedis() {
-	ctx := context.Background()
-	
-	// 订阅全局频道
-	pubsub := h.rdb.Subscribe(ctx, "mirage:events:all")
-	defer pubsub.Close()
-
-	log.Println("📡 [Redis] 已订阅频道: mirage:events:all")
-
-	ch := pubsub.Channel()
-	for msg := range ch {
-		// 广播到所有 WebSocket 客户端
-		h.broadcast <- []byte(msg.Payload)
-	}
-}
+// subscribeRedis 已由 ThrottledSubscriber 替代
+func (h *Hub) subscribeRedis() {}
 
 // HandleWS 处理 WebSocket 连接
 func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {

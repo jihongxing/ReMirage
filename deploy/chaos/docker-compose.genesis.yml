@@ -1,0 +1,272 @@
+# ============================================================
+# The Genesis Drill — 创世演习混沌实验室
+# ============================================================
+# 隔离网络拓扑：
+#
+#   [mirage-net] 10.99.0.0/24
+#     ├── os-node       10.99.0.10  (Mirage-OS: bridge + api-server + web)
+#     ├── gateway-a     10.99.0.20  (Gateway A: 服役状态)
+#     ├── gateway-b     10.99.0.30  (Gateway B: 温储备)
+#     └── phantom       10.99.0.40  (Phantom Client)
+#
+#   [infra-net] 10.99.1.0/24 (内部基础设施)
+#     ├── postgres      10.99.1.10
+#     ├── redis         10.99.1.11
+#     ├── mock-doh      10.99.1.20  (模拟 DoH 服务器)
+#     ├── mock-gist     10.99.1.21  (模拟 GitHub Gist)
+#     └── mock-mastodon 10.99.1.22  (模拟 Mastodon)
+#
+# 使用方式：
+#   docker compose -f docker-compose.genesis.yml up -d
+#   docker compose -f docker-compose.genesis.yml exec drill ./genesis-drill.sh
+# ============================================================
+
+version: '3.8'
+
+networks:
+  mirage-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.99.0.0/24
+  infra-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.99.1.0/24
+
+services:
+  # ============================================================
+  # 基础设施层
+  # ============================================================
+  postgres:
+    image: postgres:15-alpine
+    networks:
+      infra-net:
+        ipv4_address: 10.99.1.10
+    environment:
+      POSTGRES_DB: mirage_os
+      POSTGRES_USER: mirage
+      POSTGRES_PASSWORD: chaos_test_pw
+    volumes:
+      - ./genesis/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mirage"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    networks:
+      infra-net:
+        ipv4_address: 10.99.1.11
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  # ============================================================
+  # 信令共振模拟服务（Phantom Client 的救命稻草）
+  # ============================================================
+  mock-doh:
+    build:
+      context: ./genesis/mock-services
+      dockerfile: Dockerfile.mock
+    networks:
+      infra-net:
+        ipv4_address: 10.99.1.20
+      mirage-net:
+        ipv4_address: 10.99.0.50
+    environment:
+      MOCK_TYPE: doh
+      LISTEN_ADDR: "0.0.0.0:443"
+    volumes:
+      - signal-state:/shared
+
+  mock-gist:
+    build:
+      context: ./genesis/mock-services
+      dockerfile: Dockerfile.mock
+    networks:
+      infra-net:
+        ipv4_address: 10.99.1.21
+      mirage-net:
+        ipv4_address: 10.99.0.51
+    environment:
+      MOCK_TYPE: gist
+      LISTEN_ADDR: "0.0.0.0:443"
+    volumes:
+      - signal-state:/shared
+
+  mock-mastodon:
+    build:
+      context: ./genesis/mock-services
+      dockerfile: Dockerfile.mock
+    networks:
+      infra-net:
+        ipv4_address: 10.99.1.22
+      mirage-net:
+        ipv4_address: 10.99.0.52
+    environment:
+      MOCK_TYPE: mastodon
+      LISTEN_ADDR: "0.0.0.0:443"
+    volumes:
+      - signal-state:/shared
+
+  # ============================================================
+  # Mirage-OS 控制中心
+  # ============================================================
+  os-node:
+    build:
+      context: ../../mirage-os
+      dockerfile: gateway-bridge/Dockerfile
+    networks:
+      mirage-net:
+        ipv4_address: 10.99.0.10
+      infra-net:
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_DSN: postgres://mirage:chaos_test_pw@10.99.1.10:5432/mirage_os?sslmode=disable
+      REDIS_ADDR: 10.99.1.11:6379
+      RAFT_NODE_ID: os-1
+      RAFT_BIND_ADDR: "0.0.0.0:7000"
+      RAFT_BOOTSTRAP: "true"
+      GRPC_PORT: "50051"
+      # 信令共振发布配置（指向 mock 服务）
+      RESONANCE_DOH_SERVER: "https://10.99.0.50/dns-query"
+      RESONANCE_GIST_URL: "https://10.99.0.51"
+      RESONANCE_MASTODON_URL: "https://10.99.0.52"
+    volumes:
+      - signal-state:/shared
+      - raft-data:/var/lib/mirage/raft
+    cap_add:
+      - NET_ADMIN
+
+  # ============================================================
+  # Gateway A（服役状态）
+  # ============================================================
+  gateway-a:
+    build:
+      context: ../../mirage-gateway
+      dockerfile: Dockerfile
+    networks:
+      mirage-net:
+        ipv4_address: 10.99.0.20
+      infra-net:
+    privileged: true
+    depends_on:
+      - os-node
+    environment:
+      MIRAGE_GATEWAY_ID: gateway-alpha
+      MIRAGE_OS_ENDPOINT: 10.99.0.10:50051
+      MIRAGE_IFACE: eth0
+      MIRAGE_DEFENSE_LEVEL: "20"
+      MIRAGE_HEARTBEAT_INTERVAL: "5"
+      MIRAGE_HEARTBEAT_TIMEOUT: "20"
+    tmpfs:
+      - /var/mirage:size=128M,mode=0700
+      - /tmp:size=64M
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+      - BPF
+    security_opt:
+      - seccomp:unconfined
+
+  # ============================================================
+  # Gateway B（温储备状态）
+  # ============================================================
+  gateway-b:
+    build:
+      context: ../../mirage-gateway
+      dockerfile: Dockerfile
+    networks:
+      mirage-net:
+        ipv4_address: 10.99.0.30
+      infra-net:
+    privileged: true
+    depends_on:
+      - os-node
+    environment:
+      MIRAGE_GATEWAY_ID: gateway-bravo
+      MIRAGE_OS_ENDPOINT: 10.99.0.10:50051
+      MIRAGE_IFACE: eth0
+      MIRAGE_DEFENSE_LEVEL: "20"
+      MIRAGE_HEARTBEAT_INTERVAL: "5"
+      MIRAGE_HEARTBEAT_TIMEOUT: "20"
+      MIRAGE_STANDBY: "true"
+    tmpfs:
+      - /var/mirage:size=128M,mode=0700
+      - /tmp:size=64M
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+      - BPF
+    security_opt:
+      - seccomp:unconfined
+
+  # ============================================================
+  # Phantom Client
+  # ============================================================
+  phantom:
+    build:
+      context: ../../phantom-client
+      dockerfile: Dockerfile.chaos
+    networks:
+      mirage-net:
+        ipv4_address: 10.99.0.40
+    depends_on:
+      - gateway-a
+      - gateway-b
+    environment:
+      # 初始 Bootstrap 指向 Gateway A
+      BOOTSTRAP_GATEWAY: "10.99.0.20:443"
+      # 信令共振发现配置（指向 mock 服务）
+      RESONANCE_DOH: "https://10.99.0.50/dns-query"
+      RESONANCE_DNS_NAME: "_sig.cdn-telemetry.example.com"
+      RESONANCE_GIST_ID: "chaos-test-gist"
+      RESONANCE_GIST_FILE: "telemetry.json"
+      RESONANCE_MASTODON_INSTANCE: "https://10.99.0.52"
+      RESONANCE_MASTODON_HASHTAG: "cdn_health"
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+
+  # ============================================================
+  # 混沌指挥官（执行演习剧本）
+  # ============================================================
+  drill:
+    build:
+      context: ./genesis/drill
+      dockerfile: Dockerfile.drill
+    networks:
+      mirage-net:
+        ipv4_address: 10.99.0.99
+      infra-net:
+    depends_on:
+      - os-node
+      - gateway-a
+      - gateway-b
+      - phantom
+    environment:
+      OS_ADDR: "10.99.0.10"
+      GATEWAY_A_ADDR: "10.99.0.20"
+      GATEWAY_B_ADDR: "10.99.0.30"
+      PHANTOM_ADDR: "10.99.0.40"
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./genesis/drill:/scripts:ro
+
+volumes:
+  signal-state:
+  raft-data:
+  pgdata:

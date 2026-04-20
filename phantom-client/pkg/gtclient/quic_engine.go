@@ -2,6 +2,7 @@ package gtclient
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"fmt"
 	"net"
@@ -28,6 +29,7 @@ type QUICEngine struct {
 type QUICEngineConfig struct {
 	GatewayAddr    string
 	PSK            []byte // used to derive TLS cert verification (or skip in dev)
+	PinnedCertHash []byte // SHA-256 of gateway's leaf certificate (nil = skip verify)
 	KeepAlive      time.Duration
 	RecvBufferSize int
 }
@@ -43,12 +45,32 @@ func NewQUICEngine(cfg *QUICEngineConfig) *QUICEngine {
 		bufSize = 4096
 	}
 
+	tlsConf := &tls.Config{
+		NextProtos: []string{"mirage-gtunnel"},
+	}
+
+	if len(cfg.PinnedCertHash) == 32 {
+		// Production: verify server cert via SHA-256 pin
+		tlsConf.InsecureSkipVerify = true
+		tlsConf.VerifyConnection = func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 {
+				return fmt.Errorf("no peer certificate")
+			}
+			leaf := cs.PeerCertificates[0]
+			hash := sha256.Sum256(leaf.Raw)
+			if !equal(hash[:], cfg.PinnedCertHash) {
+				return fmt.Errorf("certificate pin mismatch")
+			}
+			return nil
+		}
+	} else {
+		// Dev mode: skip verification
+		tlsConf.InsecureSkipVerify = true
+	}
+
 	return &QUICEngine{
-		addr: cfg.GatewayAddr,
-		tlsConf: &tls.Config{
-			InsecureSkipVerify: true, // TODO: production uses mTLS with pinned cert
-			NextProtos:         []string{"mirage-gtunnel"},
-		},
+		addr:    cfg.GatewayAddr,
+		tlsConf: tlsConf,
 		quicConf: &quic.Config{
 			EnableDatagrams: true,
 			KeepAlivePeriod: keepAlive,
@@ -56,6 +78,18 @@ func NewQUICEngine(cfg *QUICEngineConfig) *QUICEngine {
 		},
 		recvCh: make(chan []byte, bufSize),
 	}
+}
+
+// equal compares two byte slices in constant time.
+func equal(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	var v byte
+	for i := range a {
+		v |= a[i] ^ b[i]
+	}
+	return v == 0
 }
 
 // Connect establishes the QUIC connection and starts the receive pump.

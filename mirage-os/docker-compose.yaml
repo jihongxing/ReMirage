@@ -24,6 +24,7 @@ services:
     ports:
       - "50051:50051"
       - "7000:7000"
+      - "8443:8443"
     depends_on:
       - postgres
       - redis
@@ -33,6 +34,11 @@ services:
       RAFT_NODE_ID: node-1
       RAFT_BIND_ADDR: "0.0.0.0:7000"
       RAFT_BOOTSTRAP: "true"
+      # 影子控制台
+      CONSOLE_ADDR: "0.0.0.0:8443"
+      CONSOLE_CERT: ${CONSOLE_CERT:-}
+      CONSOLE_KEY: ${CONSOLE_KEY:-}
+      CONSOLE_CLIENT_CA: ${CONSOLE_CLIENT_CA:-}
     volumes:
       - ./configs:/app/configs
       - raft-data:/var/lib/mirage/raft

@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
 	"golang.org/x/crypto/chacha20poly1305"
 
+	"phantom-client/pkg/resonance"
 	"phantom-client/pkg/token"
 )
 
@@ -49,27 +51,34 @@ func (rt *RouteTable) Count() int {
 
 // GTunnelClient manages the G-Tunnel connection to a gateway.
 type GTunnelClient struct {
-	config     *token.BootstrapConfig
-	fec        *FECCodec
-	sampler    *OverlapSampler
-	routeTable *RouteTable
-	currentGW  token.GatewayEndpoint
-	psk        []byte
-	switchFn   func(newIP string)
-	quic       *QUICEngine
-	connected  bool
-	mu         sync.RWMutex
+	config      *token.BootstrapConfig
+	fec         *FECCodec
+	sampler     *OverlapSampler
+	reassembler *Reassembler
+	routeTable  *RouteTable
+	currentGW   token.GatewayEndpoint
+	psk         []byte
+	switchFn    func(newIP string)
+	quic        *QUICEngine
+	connected   bool
+	mu          sync.RWMutex
+	recvCancel  context.CancelFunc
+
+	// 信令共振发现器（绝境复活）
+	resonance *resonance.Resolver
 }
 
 // NewGTunnelClient creates a new G-Tunnel client.
 func NewGTunnelClient(config *token.BootstrapConfig) *GTunnelClient {
 	fec, _ := NewFECCodec(8, 4)
+	sampler := NewOverlapSampler()
 	return &GTunnelClient{
-		config:     config,
-		fec:        fec,
-		sampler:    NewOverlapSampler(),
-		routeTable: &RouteTable{},
-		psk:        config.PreSharedKey,
+		config:      config,
+		fec:         fec,
+		sampler:     sampler,
+		reassembler: NewReassembler(fec, sampler),
+		routeTable:  &RouteTable{},
+		psk:         config.PreSharedKey,
 	}
 }
 
@@ -150,6 +159,7 @@ func (c *GTunnelClient) Send(packet []byte) error {
 
 	// 1. Overlap sampling split
 	fragments := c.sampler.Split(packet)
+	fragCount := len(fragments)
 
 	// 2. For each fragment: FEC encode → encrypt → send
 	for _, frag := range fragments {
@@ -158,10 +168,9 @@ func (c *GTunnelClient) Send(packet []byte) error {
 			return fmt.Errorf("fec encode: %w", err)
 		}
 
-		// 3. Encrypt and fire each shard
-		for _, shard := range shards {
-			// Prepend fragment header before encryption
-			header := EncodeFragmentHeader(&frag)
+		// 3. Encrypt and fire each shard with 12-byte extended header
+		for shardIdx, shard := range shards {
+			header := EncodeShardHeader(frag.SeqNum, len(frag.Data), frag.OverlapID, shardIdx, fragCount)
 			payload := append(header, shard...)
 
 			encrypted, err := c.encrypt(payload)
@@ -181,32 +190,55 @@ func (c *GTunnelClient) Send(packet []byte) error {
 }
 
 // Receive reads and decrypts a packet from the tunnel.
-// Pipeline: QUIC Datagram → decrypt → strip header → FEC decode → reassemble
+// Pipeline: QUIC Datagram → decrypt → Reassembler (shard buffer → FEC decode → overlap reassemble)
+// Returns a complete reassembled IP packet.
 func (c *GTunnelClient) Receive(ctx context.Context) ([]byte, error) {
 	if c.quic == nil || !c.quic.IsConnected() {
 		return nil, fmt.Errorf("tunnel not connected")
 	}
 
-	// Read single datagram (one encrypted shard)
-	msg, err := c.quic.ReceiveDatagram(ctx)
-	if err != nil {
-		return nil, err
+	// Check if reassembler already has a completed packet
+	select {
+	case pkt := <-c.reassembler.Completed():
+		return pkt, nil
+	default:
 	}
 
-	// Decrypt
-	plaintext, err := c.decrypt(msg)
-	if err != nil {
-		return nil, fmt.Errorf("decrypt: %w", err)
-	}
+	// Feed shards into reassembler until a complete packet emerges
+	for {
+		select {
+		case pkt := <-c.reassembler.Completed():
+			return pkt, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
 
-	// Strip 8-byte fragment header to get raw shard data
-	if len(plaintext) <= 8 {
-		return nil, fmt.Errorf("payload too short")
-	}
+		// Read single datagram (one encrypted shard)
+		msg, err := c.quic.ReceiveDatagram(ctx)
+		if err != nil {
+			return nil, err
+		}
 
-	// For now, return the raw payload (full reassembly requires buffering multiple shards)
-	// TODO: implement full FEC decode + reassembly pipeline with shard buffer
-	return plaintext[8:], nil
+		// Decrypt
+		plaintext, err := c.decrypt(msg)
+		if err != nil {
+			continue // corrupted shard, skip
+		}
+
+		// Feed into reassembler (12-byte header + shard data)
+		if len(plaintext) > 12 {
+			c.reassembler.IngestShard(plaintext)
+		}
+
+		// Check if a packet was completed
+		select {
+		case pkt := <-c.reassembler.Completed():
+			return pkt, nil
+		default:
+			// Need more shards, continue loop
+		}
+	}
 }
 
 // PullRouteTable fetches the dynamic route table through the tunnel.
@@ -218,6 +250,7 @@ func (c *GTunnelClient) PullRouteTable(ctx context.Context) error {
 }
 
 // Reconnect attempts failover to next available gateway within 5s.
+// 三级降级策略：RouteTable → Bootstrap Pool → 信令共振发现（绝境复活）
 func (c *GTunnelClient) Reconnect(ctx context.Context) error {
 	c.mu.RLock()
 	currentIP := c.currentGW.IP
@@ -226,7 +259,7 @@ func (c *GTunnelClient) Reconnect(ctx context.Context) error {
 	reconnCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	// Try route table first
+	// Level 1: Try route table first
 	if c.routeTable.Count() > 0 {
 		next, err := c.routeTable.NextAvailable(currentIP)
 		if err == nil {
@@ -244,8 +277,46 @@ func (c *GTunnelClient) Reconnect(ctx context.Context) error {
 		}
 	}
 
-	// Fallback to bootstrap pool
-	return c.ProbeAndConnect(reconnCtx, c.config.BootstrapPool)
+	// Level 2: Fallback to bootstrap pool
+	if err := c.ProbeAndConnect(reconnCtx, c.config.BootstrapPool); err == nil {
+		return nil
+	}
+
+	// Level 3: 信令共振发现（绝境复活 — Doom Race）
+	if c.resonance != nil {
+		log.Println("[GTunnel] ⚠️ 所有已知节点不可达，启动信令共振发现...")
+		resCtx, resCancel := context.WithTimeout(ctx, 15*time.Second)
+		defer resCancel()
+
+		signal, err := c.resonance.Resolve(resCtx)
+		if err != nil {
+			return fmt.Errorf("信令共振发现失败: %w", err)
+		}
+
+		// 将发现的网关转换为 GatewayEndpoint 并尝试连接
+		pool := make([]token.GatewayEndpoint, 0, len(signal.Gateways))
+		for _, gw := range signal.Gateways {
+			pool = append(pool, token.GatewayEndpoint{
+				IP:   gw.IP,
+				Port: gw.Port,
+			})
+		}
+
+		if len(pool) > 0 {
+			// 更新路由表
+			c.routeTable.Update(pool)
+			return c.ProbeAndConnect(resCtx, pool)
+		}
+	}
+
+	return fmt.Errorf("all reconnection strategies exhausted")
+}
+
+// SetResonanceResolver 注入信令共振发现器
+func (c *GTunnelClient) SetResonanceResolver(resolver *resonance.Resolver) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.resonance = resolver
 }
 
 // CurrentGateway returns the currently connected gateway.

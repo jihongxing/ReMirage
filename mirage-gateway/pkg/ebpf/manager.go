@@ -13,10 +13,12 @@ import (
 
 // DefenseApplier 防御策略应用器
 type DefenseApplier struct {
-	loader   *Loader
-	config   *DefenseConfig
-	stopCh   chan struct{}
-	updateCh chan *DefenseConfig
+	loader           *Loader
+	config           *DefenseConfig
+	stopCh           chan struct{}
+	updateCh         chan *DefenseConfig
+	consecutiveFails int // 连续刷新失败计数
+	maxConsecFails   int // 触发紧急降级的阈值
 }
 
 // DefenseConfig 防御配置
@@ -32,10 +34,12 @@ type DefenseConfig struct {
 // NewDefenseApplier 创建防御应用器
 func NewDefenseApplier(loader *Loader, config *DefenseConfig) *DefenseApplier {
 	return &DefenseApplier{
-		loader:   loader,
-		config:   config,
-		stopCh:   make(chan struct{}),
-		updateCh: make(chan *DefenseConfig, 10),
+		loader:           loader,
+		config:           config,
+		stopCh:           make(chan struct{}),
+		updateCh:         make(chan *DefenseConfig, 10),
+		consecutiveFails: 0,
+		maxConsecFails:   3,
 	}
 }
 
@@ -87,8 +91,11 @@ func (da *DefenseApplier) updateLoop() {
 		case newConfig := <-da.updateCh:
 			if err := da.applyStrategy(newConfig); err != nil {
 				log.Printf("❌ 应用策略失败: %v", err)
+				da.consecutiveFails++
+				da.checkEmergencyDegradation()
 			} else {
 				da.config = newConfig
+				da.consecutiveFails = 0
 				log.Printf("✅ 策略已更新: Level=%d%%", newConfig.Level)
 			}
 
@@ -96,20 +103,48 @@ func (da *DefenseApplier) updateLoop() {
 			// 定期刷新策略（防止 Map 被意外清空）
 			if err := da.applyStrategy(da.config); err != nil {
 				log.Printf("⚠️  策略刷新失败: %v", err)
+				da.consecutiveFails++
+				da.checkEmergencyDegradation()
+			} else {
+				da.consecutiveFails = 0
 			}
 		}
+	}
+}
+
+// checkEmergencyDegradation 检查是否需要触发紧急降级
+func (da *DefenseApplier) checkEmergencyDegradation() {
+	if da.consecutiveFails < da.maxConsecFails {
+		return
+	}
+
+	log.Printf("🚨 [DefenseApplier] 连续 %d 次 eBPF Map 写入失败，触发紧急降级", da.consecutiveFails)
+
+	// 写入 emergency_ctrl_map 通知内核进入降级模式
+	emergencyMap := da.loader.GetMap("emergency_ctrl_map")
+	if emergencyMap == nil {
+		log.Printf("🚨 [DefenseApplier] emergency_ctrl_map 不存在，无法降级")
+		return
+	}
+
+	key := uint32(0)
+	value := uint32(1) // 1 = 降级模式（内核侧所有协议回退到 PASS-THROUGH）
+	if err := emergencyMap.Put(&key, &value); err != nil {
+		log.Printf("🚨 [DefenseApplier] 写入 emergency_ctrl_map 也失败: %v（内核可能内存耗尽）", err)
+	} else {
+		log.Printf("🚨 [DefenseApplier] 已写入紧急降级标志，内核数据面进入 PASS-THROUGH 模式")
 	}
 }
 
 // applyStrategy 应用防御策略
 func (da *DefenseApplier) applyStrategy(config *DefenseConfig) error {
 	strategy := &DefenseStrategy{
-		JitterMeanUs:    config.JitterMeanUs,
-		JitterStddevUs:  config.JitterStddevUs,
-		TemplateID:      1,
-		FiberJitterUs:   config.JitterMeanUs / 5,
-		RouterDelayUs:   config.JitterMeanUs / 10,
-		NoiseIntensity:  config.NoiseIntensity,
+		JitterMeanUs:   config.JitterMeanUs,
+		JitterStddevUs: config.JitterStddevUs,
+		TemplateID:     1,
+		FiberJitterUs:  config.JitterMeanUs / 5,
+		RouterDelayUs:  config.JitterMeanUs / 10,
+		NoiseIntensity: config.NoiseIntensity,
 	}
 
 	return da.loader.UpdateStrategy(strategy)
@@ -159,17 +194,13 @@ func (da *DefenseApplier) cleanup() {
 	log.Println("✅ 资源清理完成")
 }
 
-// cleanupTC 清理 TC 钩子
+// cleanupTC 清理 TC 钩子（委托给 Loader.Close）
 func (da *DefenseApplier) cleanupTC() error {
-	// 注意：这里需要使用 netlink 或 tc 命令清理
-	// 简化实现：记录日志
-	log.Printf("🧹 清理 TC 钩子: %s", da.loader.iface)
-
-	// TODO: 实现 TC 清理逻辑
-	// 可以使用: tc filter del dev eth0 egress
-	// 或使用 netlink 库
-
-	return nil
+	if da.loader == nil {
+		return nil
+	}
+	// Loader.Close() 已实现完整的 TC filter 卸载（netlink.FilterDel）
+	return da.loader.Close()
 }
 
 // GetCurrentConfig 获取当前配置

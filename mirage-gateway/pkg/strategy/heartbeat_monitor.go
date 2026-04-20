@@ -6,59 +6,108 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
 	"time"
 )
 
 const (
 	// HeartbeatTimeout 心跳超时时间（死信开关）
 	HeartbeatTimeout = 300 * time.Second // 5 分钟
-	
+
 	// HeartbeatInterval 心跳发送间隔
 	HeartbeatInterval = 30 * time.Second
 )
-
-// HeartbeatMonitor 心跳监控器
-type HeartbeatMonitor struct {
-	osEndpoint      string
-	lastHeartbeat   time.Time
-	emergencyMgr    EmergencyManager // 紧急自毁管理器
-	ramShield       *RAMShield       // 内存保护器
-	ctx             context.Context
-	cancel          context.CancelFunc
-	emergencyMode   bool
-}
 
 // EmergencyManager 紧急自毁管理器接口
 type EmergencyManager interface {
 	TriggerWipe() error
 }
 
+// SensitiveData 可擦除的敏感数据持有者
+type SensitiveData interface {
+	WipeSecrets()
+}
+
+// HeartbeatSender 心跳发送接口（解耦 api 包依赖）
+type HeartbeatSender interface {
+	// StartHeartbeatLoop 启动心跳循环，成功时调用 onSuccess
+	StartHeartbeatLoop(ctx context.Context, onSuccess func())
+	// IsConnected 是否已连接到 OS
+	IsConnected() bool
+}
+
+// HeartbeatMonitor 心跳监控器
+type HeartbeatMonitor struct {
+	sender        HeartbeatSender
+	gatewayID     string
+	lastHeartbeat time.Time
+	emergencyMgr  EmergencyManager
+	ramShield     *RAMShield
+	burnWiper     *BurnWiper
+	sensitives    []SensitiveData
+	ctx           context.Context
+	cancel        context.CancelFunc
+	emergencyMode bool
+}
+
 // NewHeartbeatMonitor 创建心跳监控器
-func NewHeartbeatMonitor(osEndpoint string, emergencyMgr EmergencyManager, ramShield *RAMShield) *HeartbeatMonitor {
+func NewHeartbeatMonitor(
+	sender HeartbeatSender,
+	gatewayID string,
+	emergencyMgr EmergencyManager,
+	ramShield *RAMShield,
+) *HeartbeatMonitor {
 	ctx, cancel := context.WithCancel(context.Background())
+	wiper := NewBurnWiper()
+
+	// 注册默认的敏感文件路径
+	wiper.RegisterGlob("/tmp/mirage-*")
+	wiper.RegisterGlob("/var/log/mirage-*")
+	wiper.RegisterPath("/tmp/mirage-gateway")
+	wiper.RegisterPath("/etc/mirage/gateway.yaml")
+
 	return &HeartbeatMonitor{
-		osEndpoint:    osEndpoint,
+		sender:        sender,
+		gatewayID:     gatewayID,
 		lastHeartbeat: time.Now(),
 		emergencyMgr:  emergencyMgr,
 		ramShield:     ramShield,
+		burnWiper:     wiper,
 		ctx:           ctx,
 		cancel:        cancel,
 		emergencyMode: false,
 	}
 }
 
+// GetBurnWiper 获取擦除引擎（供外部模块注册密钥）
+func (m *HeartbeatMonitor) GetBurnWiper() *BurnWiper {
+	return m.burnWiper
+}
+
+// RegisterSensitive 注册敏感数据持有者（自毁时擦除）
+func (m *HeartbeatMonitor) RegisterSensitive(s SensitiveData) {
+	m.sensitives = append(m.sensitives, s)
+}
+
 // Start 启动心跳监控
 func (m *HeartbeatMonitor) Start() error {
 	log.Println("[HeartbeatMonitor] 启动心跳监控")
-	
-	// 启动心跳发送
-	go m.sendHeartbeat()
-	
-	// 启动超时检测
+
+	if m.sender != nil {
+		// 通过 HeartbeatSender 启动心跳循环，成功时喂看门狗
+		m.sender.StartHeartbeatLoop(m.ctx, func() {
+			m.lastHeartbeat = time.Now()
+			m.emergencyMode = false
+		})
+	}
+
+	// 启动超时检测（死信开关）
 	go m.watchTimeout()
-	
+
 	return nil
 }
+
+// buildHeartbeatRequest 已移除 — 由外部 adapter 实现
 
 // Stop 停止心跳监控
 func (m *HeartbeatMonitor) Stop() {
@@ -66,57 +115,24 @@ func (m *HeartbeatMonitor) Stop() {
 	m.cancel()
 }
 
-// sendHeartbeat 发送心跳
-func (m *HeartbeatMonitor) sendHeartbeat() {
-	ticker := time.NewTicker(HeartbeatInterval)
-	defer ticker.Stop()
-	
-	for {
-		select {
-		case <-m.ctx.Done():
-			return
-		case <-ticker.C:
-			if err := m.sendHeartbeatToOS(); err != nil {
-				log.Printf("[HeartbeatMonitor] 心跳发送失败: %v", err)
-			} else {
-				m.lastHeartbeat = time.Now()
-			}
-		}
-	}
-}
-
-// sendHeartbeatToOS 向 Mirage-OS 发送心跳
-func (m *HeartbeatMonitor) sendHeartbeatToOS() error {
-	// TODO: 实现 gRPC/HTTP 心跳请求
-	// req := &pb.HeartbeatRequest{
-	//     GatewayId: getGatewayID(),
-	//     Timestamp: time.Now().Unix(),
-	//     Status: "online",
-	// }
-	// resp, err := client.Heartbeat(ctx, req)
-	
-	log.Println("[HeartbeatMonitor] 发送心跳到 Mirage-OS")
-	return nil
-}
-
 // watchTimeout 监控心跳超时
 func (m *HeartbeatMonitor) watchTimeout() {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-m.ctx.Done():
 			return
 		case <-ticker.C:
 			elapsed := time.Since(m.lastHeartbeat)
-			
+
 			if elapsed >= HeartbeatTimeout {
 				log.Printf("[HeartbeatMonitor] ⚠️ 心跳超时 %v，触发紧急自毁", elapsed)
 				m.triggerEmergencyShutdown()
 				return
 			}
-			
+
 			// 警告阈值（超时前 1 分钟）
 			if elapsed >= HeartbeatTimeout-60*time.Second && !m.emergencyMode {
 				log.Printf("[HeartbeatMonitor] ⚠️ 心跳即将超时 (%v)，进入紧急模式", elapsed)
@@ -126,26 +142,32 @@ func (m *HeartbeatMonitor) watchTimeout() {
 	}
 }
 
-// triggerEmergencyShutdown 触发紧急自毁
+// triggerEmergencyShutdown 触发紧急自毁（0xDEADBEEF 序列）
 func (m *HeartbeatMonitor) triggerEmergencyShutdown() {
-	log.Println("🔥 [HeartbeatMonitor] ========== 紧急自毁程序启动 ==========")
-	
-	// 1. 清空 eBPF Map
+	log.Printf("🔥 [HeartbeatMonitor] ========== 0x%X 紧急自毁程序启动 ==========", DeadBeef)
+
+	// 1. 写入 eBPF 自毁魔数（内核态立即停止转发）
 	if err := m.wipeEBPFMaps(); err != nil {
 		log.Printf("[HeartbeatMonitor] eBPF Map 清空失败: %v", err)
 	}
-	
-	// 2. 清空内存敏感数据
-	if err := m.wipeMemory(); err != nil {
-		log.Printf("[HeartbeatMonitor] 内存清空失败: %v", err)
+
+	// 2. BurnWiper 暴力擦除（内存密钥 3 遍 urandom + 磁盘 3 遍覆写）
+	if m.burnWiper != nil {
+		m.burnWiper.Burn()
 	}
-	
-	// 3. 删除临时文件
-	if err := m.cleanupFiles(); err != nil {
-		log.Printf("[HeartbeatMonitor] 文件清理失败: %v", err)
+
+	// 3. 通知其他敏感数据持有者
+	for _, s := range m.sensitives {
+		s.WipeSecrets()
 	}
-	
-	// 4. 进程自杀
+
+	// 4. RAM Shield 解锁 + 强制 GC
+	if m.ramShield != nil {
+		m.ramShield.UnlockAll()
+	}
+	runtime.GC()
+
+	// 5. 进程自杀
 	log.Println("🔥 [HeartbeatMonitor] 执行进程自杀")
 	os.Exit(1)
 }
@@ -153,62 +175,32 @@ func (m *HeartbeatMonitor) triggerEmergencyShutdown() {
 // wipeEBPFMaps 清空所有 eBPF Map
 func (m *HeartbeatMonitor) wipeEBPFMaps() error {
 	log.Println("[HeartbeatMonitor] 清空 eBPF Map")
-	
+
 	if m.emergencyMgr == nil {
 		return fmt.Errorf("紧急管理器未初始化")
 	}
-	
-	// 触发 eBPF 紧急自毁
+
 	if err := m.emergencyMgr.TriggerWipe(); err != nil {
 		return fmt.Errorf("触发 eBPF 自毁失败: %w", err)
 	}
-	
+
 	return nil
 }
 
-// wipeMemory 清空内存敏感数据
-func (m *HeartbeatMonitor) wipeMemory() error {
-	log.Println("[HeartbeatMonitor] 清空内存敏感数据")
-	
-	if m.ramShield == nil {
-		log.Println("[HeartbeatMonitor] ⚠️ RAM Shield 未初始化，跳过内存清空")
-		return nil
+// wipeMemory 清空内存敏感数据（备用路径，主路径由 BurnWiper.Burn() 执行）
+func (m *HeartbeatMonitor) wipeMemory() {
+	for _, s := range m.sensitives {
+		s.WipeSecrets()
 	}
-	
-	// 解锁所有锁定的内存
-	if err := m.ramShield.UnlockAll(); err != nil {
-		log.Printf("[HeartbeatMonitor] ⚠️ 解锁内存失败: %v", err)
+	if m.ramShield != nil {
+		m.ramShield.UnlockAll()
 	}
-	
-	// TODO: 清空具体的敏感数据结构
-	// 1. G-Tunnel 私钥
-	// 2. 用户会话数据
-	// 3. 配置缓存
-	
-	return nil
-}
-
-// cleanupFiles 清理临时文件
-func (m *HeartbeatMonitor) cleanupFiles() error {
-	log.Println("[HeartbeatMonitor] 清理临时文件")
-	
-	// TODO: 实现文件清理
-	// 删除:
-	// - /tmp/mirage-*
-	// - /var/log/mirage-*
-	// - 配置文件备份
-	
-	// 示例代码:
-	// os.RemoveAll("/tmp/mirage-gateway")
-	// os.RemoveAll("/var/log/mirage-gateway.log")
-	
-	return nil
+	runtime.GC()
 }
 
 // UpdateHeartbeat 手动更新心跳时间（用于测试）
 func (m *HeartbeatMonitor) UpdateHeartbeat() {
 	m.lastHeartbeat = time.Now()
-	log.Println("[HeartbeatMonitor] 手动更新心跳时间")
 }
 
 // GetTimeSinceLastHeartbeat 获取距离上次心跳的时间

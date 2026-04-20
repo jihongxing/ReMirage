@@ -21,7 +21,13 @@ BPF_OBJECTS := $(patsubst bpf/%.c,bpf/%.o,$(BPF_SOURCES))
 GO_BUILD_FLAGS := -ldflags="-s -w"
 BINARY := bin/mirage-gateway
 
-.PHONY: all clean bpf go install test
+# Garble 混淆编译（O9 反逆向工程）
+# 抹除所有 Type/Function Name/文件路径信息
+# 安装: go install mvdan.cc/garble@latest
+GARBLE := garble
+GARBLE_FLAGS := -literals -tiny -seed=random
+
+.PHONY: all clean bpf go go-obfuscated install test
 
 all: bpf go
 
@@ -42,6 +48,17 @@ go: bpf
 	@echo "编译 Go 控制面..."
 	mkdir -p bin
 	CGO_ENABLED=1 $(GO) build $(GO_BUILD_FLAGS) -o $(BINARY) ./cmd/gateway
+
+# 编译 Go 控制面（混淆版 - 生产部署用）
+# 使用 garble 抹除所有符号信息，防止逆向工程
+# 编译产物中不包含任何函数名、类型名、文件路径
+go-obfuscated: bpf
+	@echo "编译 Go 控制面（garble 混淆）..."
+	mkdir -p bin
+	CGO_ENABLED=1 $(GARBLE) $(GARBLE_FLAGS) build $(GO_BUILD_FLAGS) -o $(BINARY) ./cmd/gateway
+	@echo "✅ 混淆编译完成，验证符号信息已抹除:"
+	@strings $(BINARY) | grep -c "mirage-gateway" || echo "  ✅ 无 mirage-gateway 字符串残留"
+	@strings $(BINARY) | grep -c "github.com" || echo "  ✅ 无 github.com 路径残留"
 
 # 安装依赖
 install:

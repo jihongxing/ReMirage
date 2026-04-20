@@ -13,13 +13,13 @@ type ConfigMap struct {
 
 // ThreatEvent 对应 C 结构体 threat_event（严格对齐）
 type ThreatEvent struct {
-	Timestamp   uint64    // 纳秒时间戳
-	ThreatType  uint32    // 威胁类型
-	SourceIP    uint32    // 源 IP (网络字节序)
-	SourcePort  uint16    // 源端口
-	DestPort    uint16    // 目标端口
-	PacketCount uint32    // 数据包计数
-	Severity    uint32    // 严重程度 (0-10)
+	Timestamp   uint64 // 纳秒时间戳
+	ThreatType  uint32 // 威胁类型
+	SourceIP    uint32 // 源 IP (网络字节序)
+	SourcePort  uint16 // 源端口
+	DestPort    uint16 // 目标端口
+	PacketCount uint32 // 数据包计数
+	Severity    uint32 // 严重程度 (0-10)
 }
 
 // EventType 威胁事件类型（保持兼容）
@@ -50,12 +50,12 @@ type Statistics struct {
 
 // DefenseStrategy 防御策略
 type DefenseStrategy struct {
-	JitterMeanUs    uint32 // Jitter 平均值 (微秒)
-	JitterStddevUs  uint32 // Jitter 标准差 (微秒)
-	TemplateID      uint32 // 模板 ID
-	FiberJitterUs   uint32 // 光缆抖动 (微秒)
-	RouterDelayUs   uint32 // 路由器延迟 (微秒)
-	NoiseIntensity  uint32 // 噪声强度 (0-100)
+	JitterMeanUs   uint32 // Jitter 平均值 (微秒)
+	JitterStddevUs uint32 // Jitter 标准差 (微秒)
+	TemplateID     uint32 // 模板 ID
+	FiberJitterUs  uint32 // 光缆抖动 (微秒)
+	RouterDelayUs  uint32 // 路由器延迟 (微秒)
+	NoiseIntensity uint32 // 噪声强度 (0-100)
 }
 
 // JitterConfig Jitter-Lite 配置（对应 C 结构体）
@@ -77,4 +77,34 @@ type VPCConfig struct {
 // ThreatHandler 威胁处理器接口
 type ThreatHandler interface {
 	HandleThreat(*ThreatEvent)
+}
+
+// --- ICMP Tunnel 相关结构体（与 C 数据面 bpf/icmp_tunnel.c 严格字节对齐） ---
+
+// ICMPConfig ICMP Tunnel 配置（Go → C，通过 eBPF Map 下发）
+type ICMPConfig struct {
+	Enabled    uint32 // 是否启用
+	TargetIP   uint32 // 目标 IP（网络字节序）
+	GatewayIP  uint32 // 网关 IP（网络字节序）
+	Identifier uint16 // ICMP Identifier（会话标识）
+	Reserved   uint16 // 保留字段，对齐用
+}
+
+// ICMPTxEntry ICMP 发送队列条目（Go → C，通过 eBPF Queue Map）
+type ICMPTxEntry struct {
+	Seq      uint32     // 序列号
+	DataLen  uint16     // 数据长度
+	Reserved uint16     // 保留字段
+	Data     [1024]byte // 加密后的 Payload
+}
+
+// ICMPRxEvent ICMP 接收事件（C → Go，通过 Ring Buffer 上报）
+type ICMPRxEvent struct {
+	Timestamp  uint64     // 纳秒时间戳
+	SrcIP      uint32     // 源 IP（网络字节序）
+	Identifier uint16     // ICMP Identifier
+	Seq        uint16     // 序列号
+	DataLen    uint16     // 数据长度
+	Reserved   uint16     // 保留字段
+	Data       [1024]byte // 提取的 Payload
 }

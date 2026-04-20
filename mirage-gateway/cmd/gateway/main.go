@@ -21,6 +21,7 @@ import (
 	"mirage-gateway/pkg/cortex"
 	"mirage-gateway/pkg/ebpf"
 	"mirage-gateway/pkg/gswitch"
+	"mirage-gateway/pkg/nerve"
 	"mirage-gateway/pkg/phantom"
 	"mirage-gateway/pkg/security"
 	"mirage-gateway/pkg/strategy"
@@ -278,6 +279,7 @@ func main() {
 
 	// 13. gRPC 客户端（非关键，失败降级）
 	var grpcClient *api.GRPCClient
+	var sensoryUplink *nerve.SensoryUplink
 	clientTLS, _ := tlsMgr.GetClientTLSConfig()
 	grpcClient = api.NewGRPCClient(cfg.MCC.Endpoint, gatewayID, clientTLS)
 	go func() {
@@ -300,31 +302,32 @@ func main() {
 					MemoryUsageMb: int32(memStats.Alloc / 1024 / 1024),
 				}
 			})
-			grpcClient.StartTrafficReport(ctx, func() *proto.TrafficRequest {
-				return &proto.TrafficRequest{
-					GatewayId:     gatewayID,
-					Timestamp:     time.Now().Unix(),
-					PeriodSeconds: 60,
-				}
-			})
+			// 启动上行感知闭环（10s 流量上报 via gRPC）
+			sensoryUplink = nerve.NewSensoryUplink(grpcClient, loader, gatewayID)
+			sensoryUplink.Start(ctx)
 		}
 	}()
 
-	// 设置 gRPC 通知回调
+	// 设置 gRPC 通知回调（威胁上报）
 	responder.SetGRPCNotify(func(level threat.ThreatLevel) {
 		if grpcClient != nil && grpcClient.IsConnected() {
 			grpcClient.ReportThreat([]*proto.ThreatEvent{{
-				Timestamp: time.Now().Unix(),
-				Severity:  int32(level) * 2,
-				SourceIp:  "0.0.0.0",
+				Timestamp:  time.Now().Unix(),
+				ThreatType: proto.ThreatType_DPI_DETECTION,
+				Severity:   int32(level) * 2,
+				SourceIp:   "0.0.0.0",
 			}})
 		}
 	})
+
+	// 下行状态机映射器（幂等 Hash 校验）
+	motorDownlink := nerve.NewMotorDownlink(loader)
 
 	// 14. gRPC 服务端（非关键，失败降级）
 	var grpcServer *api.GRPCServer
 	serverTLS, _ := tlsMgr.GetServerTLSConfig()
 	handler := api.NewCommandHandler(loader, blacklist, gswitchMgr)
+	handler.SetMotorDownlink(&motorDownlinkAdapter{md: motorDownlink})
 	grpcServer = api.NewGRPCServer(50847, serverTLS, handler)
 	if err := grpcServer.Start(); err != nil {
 		log.Printf("⚠️ gRPC 服务端启动失败（降级运行）: %v", err)
@@ -337,9 +340,18 @@ func main() {
 	go startEnhancedHealthServer(*healthPort, startTime, loader, grpcClient, grpcServer, responder, blacklist)
 	log.Println("✅ 健康检查端点已启动")
 
-	// 16. 心跳超时看门狗
+	// 16. 心跳超时看门狗 + 焦土协议
+	scorchedEarth := nerve.NewScorchedEarth(loader, ebpf.NewEmergencyManager(loader))
+	// 注册 TLS 证书路径（自毁时 3 次覆写）
+	if cfg.MCC.TLS.CertFile != "" {
+		scorchedEarth.RegisterCertPaths(cfg.MCC.TLS.CertFile, cfg.MCC.TLS.KeyFile, cfg.MCC.TLS.CAFile)
+	}
+	// 注册临时配置
+	scorchedEarth.RegisterConfigPaths("/var/lib/mirage/gateway_id")
+
 	watchdogTimeout := 300 * time.Second
-	watchdog := security.NewWatchdog(watchdogTimeout, ramShield, ebpf.NewEmergencyManager(loader))
+	// Watchdog 使用 ScorchedEarth 作为 EmergencyWiper（完整焦土协议）
+	watchdog := security.NewWatchdog(watchdogTimeout, ramShield, scorchedEarth)
 	watchdog.Start()
 
 	if grpcClient != nil {
@@ -370,6 +382,9 @@ func main() {
 	graceful.RegisterModule(&shutdownAdapter{"TPROXY", func(ctx context.Context) error { tproxyBridge.Stop(); return nil }})
 	if grpcClient != nil {
 		graceful.RegisterModule(&shutdownAdapter{"gRPC-Client", func(ctx context.Context) error { grpcClient.Close(); return nil }})
+	}
+	if sensoryUplink != nil {
+		graceful.RegisterModule(&shutdownAdapter{"SensoryUplink", func(ctx context.Context) error { sensoryUplink.Stop(); return nil }})
 	}
 	if grpcServer != nil {
 		graceful.RegisterModule(&shutdownAdapter{"gRPC-Server", func(ctx context.Context) error { grpcServer.Stop(); return nil }})
@@ -423,7 +438,7 @@ func resolveGatewayID(cfg *GatewayConfig) string {
 	seed := ""
 	if ifaces, err := net.Interfaces(); err == nil {
 		for _, iface := range ifaces {
-			if iface.HardwareAddr != nil && len(iface.HardwareAddr) > 0 {
+			if len(iface.HardwareAddr) > 0 {
 				seed += iface.HardwareAddr.String()
 				break
 			}
@@ -472,11 +487,28 @@ func loadConfig(path string) *GatewayConfig {
 	return cfg
 }
 
+// motorDownlinkAdapter 适配 nerve.MotorDownlink → api.MotorDownlinkApplier
+type motorDownlinkAdapter struct {
+	md *nerve.MotorDownlink
+}
+
+func (a *motorDownlinkAdapter) ApplyDesiredState(cfg *api.DesiredStatePayload) (bool, error) {
+	return a.md.ApplyDesiredState(&nerve.DesiredStateConfig{
+		JitterMeanUs:   cfg.JitterMeanUs,
+		JitterStddevUs: cfg.JitterStddevUs,
+		NoiseIntensity: cfg.NoiseIntensity,
+		PaddingRate:    cfg.PaddingRate,
+		TemplateID:     cfg.TemplateID,
+		FiberJitterUs:  cfg.FiberJitterUs,
+		RouterDelayUs:  cfg.RouterDelayUs,
+	})
+}
+
 // startEnhancedHealthServer 启动增强健康检查
 func startEnhancedHealthServer(
 	port int,
 	startTime time.Time,
-	loader *ebpf.Loader,
+	_ *ebpf.Loader,
 	grpcClient *api.GRPCClient,
 	grpcServer *api.GRPCServer,
 	responder *threat.Responder,

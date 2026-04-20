@@ -18,6 +18,7 @@ const ThreatAnalysis = lazy(() => import('./pages/ThreatAnalysis'));
 const TacticalHUD = lazy(() => import('./pages/TacticalHUD'));
 const CommandCenter = lazy(() => import('./pages/CommandCenter'));
 const ForensicCenter = lazy(() => import('./pages/ForensicCenter'));
+const CellOrchestrator = lazy(() => import('./pages/CellOrchestrator'));
 
 // 懒加载用户页面
 const UserDashboard = lazy(() => import('./pages/UserDashboard'));
@@ -88,6 +89,7 @@ const MirageRouter = () => {
             <Route path="protocols" element={<ProtocolConfig />} />
             <Route path="threats" element={<ThreatAnalysis />} />
             <Route path="forensic" element={<ForensicCenter />} />
+            <Route path="cells" element={<CellOrchestrator />} />
           </Route>
           <Route path="*" element={<Navigate to="/terminal/command" replace />} />
         </Routes>

@@ -40,6 +40,41 @@ gtunnel:
   fec_ratio: 1.2              # FEC 冗余率
   reorder_buffer: 256         # 重组缓冲区大小
 
+  # Orchestrator 多路径自适应调度器
+  orchestrator:
+    probe_cycle: 30s            # 心跳探测周期
+    probe_cycle_level3: 15s     # Level 3 (ICMP/DNS) 时缩短探测周期
+    promote_threshold: 3        # 连续成功探测次数后升格
+    demote_loss_rate: 0.30      # 降格丢包率阈值
+    demote_rtt_multiple: 2.0    # 降格 RTT 倍数阈值
+    dual_send_duration: 100ms   # 双发选收窗口时长
+
+  # 各传输协议配置
+  transports:
+    quic:
+      enabled: true
+      addr: "gateway.example.com:443"
+      timeout: 3s
+    wss:
+      enabled: true
+      endpoint: "wss://gateway.example.com:443/api/v2/stream"
+      sni: "cdn.cloudflare.com"
+    webrtc:
+      enabled: true
+      ice_servers:
+        - "stun:stun.l.google.com:19302"
+      ordered: false
+    icmp:
+      enabled: false
+      target_ip: "198.51.100.1"
+      gateway_ip: "203.0.113.1"
+      identifier: 0x4D52
+    dns:
+      enabled: false
+      domain: "t.example.com"
+      resolver: "8.8.8.8:53"
+      query_type: "TXT"
+
 # B-DNA (指纹识别)
 bdna:
   enabled: true
@@ -84,11 +119,14 @@ security:
     timeout: 30s
 
 # M.C.C. 连接配置（mTLS）
+# 安全要求：证书/私钥必须存储在 tmpfs 中（/var/mirage/certs/）
+# SSD 磨损均衡机制导致普通文件系统的 3-pass 覆写无法保证物理擦除
+# docker-compose.tmpfs.yml 已将 /var/mirage 挂载为 tmpfs
 mcc:
   endpoint: ${MCC_ENDPOINT:mirage-os:50847}
   tls:
     enabled: ${MCC_TLS_ENABLED:true}     # 生产环境强制启用
-    cert_file: ${MCC_TLS_CERT:/etc/mirage/certs/gateway.crt}
-    key_file: ${MCC_TLS_KEY:/etc/mirage/certs/gateway.key}
-    ca_file: ${MCC_TLS_CA:/etc/mirage/certs/ca.crt}
+    cert_file: ${MCC_TLS_CERT:/var/mirage/certs/gateway.crt}
+    key_file: ${MCC_TLS_KEY:/var/mirage/certs/gateway.key}
+    ca_file: ${MCC_TLS_CA:/var/mirage/certs/ca.crt}
     server_name: mirage-os               # SNI 验证

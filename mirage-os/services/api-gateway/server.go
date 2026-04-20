@@ -8,9 +8,9 @@ import (
 	"log"
 	"time"
 
+	pb "mirage-os/api/proto"
 	"mirage-os/pkg/geo"
 	"mirage-os/pkg/models"
-	pb "mirage-os/api/proto"
 
 	"github.com/go-redis/redis/v8"
 	"gorm.io/gorm"
@@ -19,12 +19,12 @@ import (
 // Server gRPC 服务器
 type Server struct {
 	pb.UnimplementedGatewayServiceServer
-	DB                  *gorm.DB
-	RedisClient         *redis.Client // Redis 客户端（用于实时推送）
-	Locator             *geo.Locator  // GeoIP 定位器（全球视野坐标对齐）
-	BaseTrafficRate     float64       // 业务流量费率（$/GB）
-	DefenseTrafficRate  float64       // 防御流量费率（$/GB）
-	ThreatThreshold     int64         // 威胁阈值
+	DB                 *gorm.DB
+	RedisClient        *redis.Client // Redis 客户端（用于实时推送）
+	Locator            *geo.Locator  // GeoIP 定位器（全球视野坐标对齐）
+	BaseTrafficRate    float64       // 业务流量费率（$/GB）
+	DefenseTrafficRate float64       // 防御流量费率（$/GB）
+	ThreatThreshold    int64         // 威胁阈值
 
 	// 异步计费通道
 	billingChan chan *billingTask
@@ -43,13 +43,13 @@ type billingTask struct {
 // NewServer 创建服务器实例
 func NewServer(db *gorm.DB, rdb *redis.Client, locator *geo.Locator) *Server {
 	s := &Server{
-		DB:                  db,
-		RedisClient:         rdb,
-		Locator:             locator,
-		BaseTrafficRate:     0.10, // $0.10/GB
-		DefenseTrafficRate:  0.05, // $0.05/GB
-		ThreatThreshold:     100,  // 100 次命中触发全局封禁
-		billingChan:         make(chan *billingTask, 1000),
+		DB:                 db,
+		RedisClient:        rdb,
+		Locator:            locator,
+		BaseTrafficRate:    0.10, // $0.10/GB
+		DefenseTrafficRate: 0.05, // $0.05/GB
+		ThreatThreshold:    100,  // 100 次命中触发全局封禁
+		billingChan:        make(chan *billingTask, 1000),
 	}
 
 	// 启动异步计费处理器
@@ -156,6 +156,15 @@ func (s *Server) SyncHeartbeat(ctx context.Context, req *pb.HeartbeatRequest) (*
 		}, nil
 	}
 
+	// Redis 缓存在线状态（TTL 60s）
+	if s.RedisClient != nil {
+		s.RedisClient.Set(ctx, fmt.Sprintf("gateway:%s:status", req.GatewayId), "ONLINE", 60*time.Second)
+		// 缓存 Gateway 地址用于 Downlink 连接
+		if req.GatewayId != "" {
+			s.RedisClient.Set(ctx, fmt.Sprintf("gateway:%s:addr", req.GatewayId), req.GatewayId, 0)
+		}
+	}
+
 	// ============================================
 	// 2. 从 Redis 读取实时配额（避免数据库查询）
 	// ============================================
@@ -199,7 +208,46 @@ func (s *Server) SyncHeartbeat(ctx context.Context, req *pb.HeartbeatRequest) (*
 	}
 
 	// ============================================
-	// 4. 异步推送实时数据（不阻塞响应）
+	// 4. Desired State 对齐（幂等状态机）
+	// ============================================
+	if s.RedisClient != nil {
+		desiredStateKey := fmt.Sprintf("gateway:%s:desired_state", req.GatewayId)
+		stateHashKey := fmt.Sprintf("gateway:%s:state_hash", req.GatewayId)
+
+		// 读取 OS 侧期望状态的 Hash
+		desiredHash, _ := s.RedisClient.Get(ctx, stateHashKey).Result()
+
+		// 如果 Gateway 上报的 CurrentStateHash 与期望不一致，下发全量 Desired State
+		// Gateway 通过 HeartbeatRequest 的 version 字段携带 state hash（复用）
+		if desiredHash != "" && desiredHash != req.Version {
+			// 读取全量 Desired State
+			stateJSON, err := s.RedisClient.Get(ctx, desiredStateKey).Result()
+			if err == nil && stateJSON != "" {
+				var desiredState map[string]interface{}
+				if json.Unmarshal([]byte(stateJSON), &desiredState) == nil {
+					// 从 Desired State 中提取防御配置覆盖响应
+					if dl, ok := desiredState["defense_level"].(float64); ok {
+						resp.DefenseConfig = s.getDefenseConfig(uint32(dl))
+					}
+					log.Printf("🔄 [状态对齐] Gateway=%s, 下发全量 Desired State", req.GatewayId)
+				}
+			}
+		}
+
+		// 处理一次性事件队列（转生指令等）
+		eventsKey := fmt.Sprintf("mirage:downlink:events:%s", req.GatewayId)
+		for {
+			eventJSON, err := s.RedisClient.LPop(ctx, eventsKey).Result()
+			if err != nil {
+				break
+			}
+			// 通过 Redis Pub/Sub 推送给 Gateway 的 WebSocket 连接
+			s.RedisClient.Publish(ctx, fmt.Sprintf("mirage:gateway:%s:commands", req.GatewayId), eventJSON)
+		}
+	}
+
+	// ============================================
+	// 5. 异步推送实时数据（不阻塞响应）
 	// ============================================
 	go func() {
 		if s.Locator != nil && s.RedisClient != nil {
@@ -383,22 +431,29 @@ func (s *Server) ReportThreat(ctx context.Context, req *pb.ThreatReport) (*pb.Th
 	}
 
 	// ============================================
-	// 全局威胁决策
+	// 全局威胁决策（severity 分级映射）
 	// ============================================
 	if threat.HitCount >= s.ThreatThreshold {
-		// 触发全局封禁
 		resp.Action = pb.ThreatAction_ACTION_BLOCK_IP
+		resp.NewDefenseLevel = 5
 		resp.Message = fmt.Sprintf("IP %s 已触发全局封禁（命中 %d 次）", req.SourceIp, threat.HitCount)
 		log.Printf("🚫 [全局封禁] IP=%s, 命中次数=%d", req.SourceIp, threat.HitCount)
 	} else if req.Severity >= 8 {
-		// 高危威胁，提升防御等级
-		resp.Action = pb.ThreatAction_ACTION_INCREASE_DEFENSE
+		resp.Action = pb.ThreatAction_ACTION_EMERGENCY_SHUTDOWN
+		resp.NewDefenseLevel = 5
+		resp.Message = "检测到致命威胁，建议紧急关闭"
+	} else if req.Severity >= 6 {
+		resp.Action = pb.ThreatAction_ACTION_SWITCH_CELL
 		resp.NewDefenseLevel = 4
-		resp.Message = "检测到高危威胁，已提升防御等级"
-	} else if req.Severity >= 5 {
-		// 中危威胁，适度提升
-		resp.Action = pb.ThreatAction_ACTION_INCREASE_DEFENSE
+		resp.Message = "检测到高危威胁，建议切换蜂窝"
+	} else if req.Severity >= 4 {
+		resp.Action = pb.ThreatAction_ACTION_BLOCK_IP
 		resp.NewDefenseLevel = 3
+		resp.Message = "检测到中危威胁，封禁源 IP"
+	} else if req.Severity >= 2 {
+		resp.Action = pb.ThreatAction_ACTION_INCREASE_DEFENSE
+		resp.NewDefenseLevel = 2
+		resp.Message = "检测到低危威胁，提升防御等级"
 	}
 
 	// ============================================
