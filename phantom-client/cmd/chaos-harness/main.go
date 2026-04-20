@@ -137,6 +137,7 @@ func probeTCP(host string, port string, timeout time.Duration) bool {
 func connectLoop(ctx context.Context, primaryGW string, backupGWs []string) {
 	time.Sleep(3 * time.Second) // 等待 Gateway 启动
 
+	currentGW := primaryGW
 	failCount := 0
 
 	for {
@@ -146,47 +147,57 @@ func connectLoop(ctx context.Context, primaryGW string, backupGWs []string) {
 		default:
 		}
 
-		// 1. 尝试 UDP (QUIC) 到主 Gateway
-		if probeUDP(primaryGW, "443", 2*time.Second) {
-			state.Set(primaryGW, "quic", "connected", true)
+		// 探测当前 Gateway
+		if probeUDP(currentGW, "443", 2*time.Second) {
+			state.Set(currentGW, "quic", "connected", true)
 			failCount = 0
 			time.Sleep(2 * time.Second)
 			continue
 		}
 
-		// 2. UDP 失败，尝试 TCP (WSS 降级)
-		if probeTCP(primaryGW, "443", 2*time.Second) {
-			state.Set(primaryGW, "wss", "connected", true)
+		if probeTCP(currentGW, "443", 2*time.Second) {
+			state.Set(currentGW, "wss", "connected", true)
 			failCount = 0
 			time.Sleep(2 * time.Second)
 			continue
 		}
 
-		// 3. TCP:443 也失败，尝试 gRPC 端口
-		if probeTCP(primaryGW, "50847", 2*time.Second) {
-			state.Set(primaryGW, "tcp", "connected", true)
+		if probeTCP(currentGW, "50847", 2*time.Second) {
+			state.Set(currentGW, "tcp", "connected", true)
 			failCount = 0
 			time.Sleep(2 * time.Second)
 			continue
 		}
 
-		// 4. 主 Gateway 完全不可达，尝试备用 Gateway（信令共振模拟）
+		// 当前 Gateway 不可达
 		failCount++
+
 		if failCount >= 2 {
-			for _, bkGW := range backupGWs {
+			// 尝试备用 Gateway（信令共振）
+			switched := false
+			candidates := backupGWs
+			// 如果当前不是主 Gateway，也尝试回主 Gateway
+			if currentGW != primaryGW {
+				candidates = append([]string{primaryGW}, backupGWs...)
+			}
+			for _, bkGW := range candidates {
+				if bkGW == currentGW {
+					continue
+				}
 				if probeTCP(bkGW, "443", 2*time.Second) || probeTCP(bkGW, "50847", 2*time.Second) {
-					log.Printf("[chaos-harness] 信令共振：切换到备用 Gateway %s", bkGW)
+					log.Printf("[chaos-harness] 信令共振：切换到 Gateway %s", bkGW)
+					currentGW = bkGW
 					state.Set(bkGW, "quic", "connected", true)
 					failCount = 0
+					switched = true
 					break
 				}
 			}
-			// 所有 Gateway 都不可达
-			if failCount > 0 {
+			if !switched {
 				state.Set("", "dead", "dead", false)
 			}
 		} else {
-			state.Set(primaryGW, "dead", "dead", false)
+			state.Set(currentGW, "dead", "dead", false)
 		}
 
 		time.Sleep(2 * time.Second)
