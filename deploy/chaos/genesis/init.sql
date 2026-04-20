@@ -28,10 +28,15 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS gateways (
     id VARCHAR(64) PRIMARY KEY,
     cell_id UUID REFERENCES cells(id),
-    ip_addr INET,
+    ip_address INET,
     port INT DEFAULT 443,
     status VARCHAR(16) NOT NULL DEFAULT 'active',
     last_heartbeat TIMESTAMPTZ,
+    ebpf_loaded BOOLEAN NOT NULL DEFAULT false,
+    threat_level INT NOT NULL DEFAULT 0,
+    active_connections BIGINT NOT NULL DEFAULT 0,
+    memory_usage_mb INT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -71,7 +76,7 @@ INSERT INTO users (id, cell_id, is_active, remaining_quota)
 VALUES ('chaos-user-001', '00000000-0000-0000-0000-000000000001', true, 0)
 ON CONFLICT DO NOTHING;
 
-INSERT INTO gateways (id, cell_id, ip_addr, port, status)
+INSERT INTO gateways (id, cell_id, ip_address, port, status)
 VALUES
     ('gateway-alpha', '00000000-0000-0000-0000-000000000001', '10.99.0.20', 443, 'active'),
     ('gateway-bravo', '00000000-0000-0000-0000-000000000001', '10.99.0.30', 443, 'standby')

@@ -14,8 +14,7 @@ RUN touch cmd/phantom/wintun.dll
 RUN CGO_ENABLED=0 go build -o /phantom-client ./cmd/phantom
 
 # 构建测试 harness（暴露状态 API）
-RUN CGO_ENABLED=0 go build -o /chaos-harness ./cmd/chaos-harness 2>/dev/null; \
-    touch /chaos-harness
+RUN CGO_ENABLED=0 go build -o /chaos-harness ./cmd/chaos-harness
 
 FROM alpine:3.19
 
@@ -31,4 +30,4 @@ COPY --from=builder /chaos-harness /usr/local/bin/chaos-harness
 # TUN 设备需要
 RUN mkdir -p /dev/net && mknod /dev/net/tun c 10 200 2>/dev/null || true
 
-ENTRYPOINT ["phantom-client"]
+ENTRYPOINT ["chaos-harness"]
