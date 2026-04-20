@@ -9,7 +9,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	goredis "github.com/redis/go-redis/v9"
 
-	pb "mirage-os/gateway-bridge/proto"
+	pb "mirage-proto/gen"
 )
 
 // newTestRedis 创建 miniredis 实例和对应的 go-redis 客户端

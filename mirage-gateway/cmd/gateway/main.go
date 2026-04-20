@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"mirage-gateway/pkg/api"
-	"mirage-gateway/pkg/api/proto"
+	pb "mirage-proto/gen"
 	"mirage-gateway/pkg/cortex"
 	"mirage-gateway/pkg/ebpf"
 	"mirage-gateway/pkg/gswitch"
@@ -286,14 +286,14 @@ func main() {
 		if err := grpcClient.Connect(ctx); err != nil {
 			log.Printf("⚠️ gRPC 客户端连接失败（降级运行）: %v", err)
 		} else {
-			grpcClient.StartHeartbeat(ctx, func() *proto.HeartbeatRequest {
+			grpcClient.StartHeartbeat(ctx, func() *pb.HeartbeatRequest {
 				var memStats runtime.MemStats
 				runtime.ReadMemStats(&memStats)
-				st := proto.GatewayStatus_ONLINE
+				st := pb.GatewayStatus_ONLINE
 				if grpcClient.IsDegraded() {
-					st = proto.GatewayStatus_DEGRADED
+					st = pb.GatewayStatus_DEGRADED
 				}
-				return &proto.HeartbeatRequest{
+				return &pb.HeartbeatRequest{
 					GatewayId:     gatewayID,
 					Timestamp:     time.Now().Unix(),
 					Status:        st,
@@ -311,9 +311,9 @@ func main() {
 	// 设置 gRPC 通知回调（威胁上报）
 	responder.SetGRPCNotify(func(level threat.ThreatLevel) {
 		if grpcClient != nil && grpcClient.IsConnected() {
-			grpcClient.ReportThreat([]*proto.ThreatEvent{{
+			grpcClient.ReportThreat([]*pb.ThreatEvent{{
 				Timestamp:  time.Now().Unix(),
-				ThreatType: proto.ThreatType_DPI_DETECTION,
+				ThreatType: pb.ThreatType_DPI_DETECTION,
 				Severity:   int32(level) * 2,
 				SourceIp:   "0.0.0.0",
 			}})

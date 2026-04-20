@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	pb "mirage-os/gateway-bridge/proto"
+	pb "mirage-proto/gen"
 )
 
 // TestLifecycleRuling 生死裁决集成测试

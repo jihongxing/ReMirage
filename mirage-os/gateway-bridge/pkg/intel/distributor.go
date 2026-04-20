@@ -8,7 +8,7 @@ import (
 	"log"
 
 	"mirage-os/gateway-bridge/pkg/config"
-	pb "mirage-os/gateway-bridge/proto"
+	pb "mirage-proto/gen"
 
 	"github.com/redis/go-redis/v9"
 )

@@ -1,13 +1,13 @@
 module mirage-os/gateway-bridge
 
-go 1.23
+go 1.25.0
 
 require (
 	github.com/hashicorp/raft v1.7.1
 	github.com/hashicorp/raft-boltdb/v2 v2.3.0
 	github.com/lib/pq v1.10.9
 	github.com/redis/go-redis/v9 v9.7.0
-	golang.org/x/sys v0.28.0
+	golang.org/x/sys v0.40.0
 	google.golang.org/grpc v1.68.1
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
@@ -15,7 +15,6 @@ require (
 )
 
 require (
-	github.com/alicebob/miniredis/v2 v2.37.0 // indirect
 	github.com/armon/go-metrics v0.4.1 // indirect
 	github.com/boltdb/bolt v1.3.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -32,7 +31,14 @@ require (
 	github.com/stretchr/testify v1.9.0 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go.etcd.io/bbolt v1.3.5 // indirect
-	golang.org/x/net v0.32.0 // indirect
-	golang.org/x/text v0.21.0 // indirect
+	golang.org/x/net v0.48.0 // indirect
+	golang.org/x/text v0.32.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20241206012308-a4fef0638583 // indirect
 )
+
+require (
+	github.com/alicebob/miniredis/v2 v2.37.0
+	mirage-proto v0.0.0
+)
+
+replace mirage-proto => ../../mirage-proto

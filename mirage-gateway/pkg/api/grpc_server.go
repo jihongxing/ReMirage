@@ -4,9 +4,8 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
+	pb "mirage-proto/gen"
 	"net"
-
-	"mirage-gateway/pkg/api/proto"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -55,7 +54,7 @@ func (s *GRPCServer) Start() error {
 	opts = append(opts, grpc.ConnectionTimeout(5*1000*1000*1000)) // 5s
 
 	s.server = grpc.NewServer(opts...)
-	proto.RegisterGatewayDownlinkServer(s.server, s.handler)
+	pb.RegisterGatewayDownlinkServer(s.server, s.handler)
 
 	// 绑定地址：仅监听内网接口（不对公网暴露）
 	// 如果需要公网访问，应通过反向代理（Nginx/Caddy）前置

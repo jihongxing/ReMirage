@@ -19,7 +19,7 @@ import (
 	grpcserver "mirage-os/gateway-bridge/pkg/grpc"
 	"mirage-os/gateway-bridge/pkg/intel"
 	"mirage-os/gateway-bridge/pkg/quota"
-	pb "mirage-os/gateway-bridge/proto"
+	pb "mirage-proto/gen"
 )
 
 var (

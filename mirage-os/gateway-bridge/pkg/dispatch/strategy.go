@@ -6,7 +6,7 @@ import (
 	"log"
 	"sync"
 
-	pb "mirage-os/gateway-bridge/proto"
+	pb "mirage-proto/gen"
 
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"

@@ -18,7 +18,7 @@ import (
 	"mirage-os/gateway-bridge/pkg/dispatch"
 	"mirage-os/gateway-bridge/pkg/intel"
 	"mirage-os/gateway-bridge/pkg/quota"
-	pb "mirage-os/gateway-bridge/proto"
+	pb "mirage-proto/gen"
 )
 
 type Server struct {

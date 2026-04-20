@@ -15,7 +15,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	pb "mirage-os/gateway-bridge/proto"
+	pb "mirage-proto/gen"
 )
 
 // DesiredState Gateway 期望状态（幂等对齐模型）

@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"mirage-gateway/pkg/api"
-	"mirage-gateway/pkg/api/proto"
+	pb "mirage-proto/gen"
 	"mirage-gateway/pkg/ebpf"
 )
 
@@ -113,7 +113,7 @@ func (su *SensoryUplink) trafficReportLoop(ctx context.Context) {
 			if bizDelta == 0 && defDelta == 0 {
 				continue // 无新增流量，不发送空报文
 			}
-			su.grpcClient.ReportTrafficDirect(&proto.TrafficRequest{
+			su.grpcClient.ReportTrafficDirect(&pb.TrafficRequest{
 				GatewayId:     su.gatewayID,
 				Timestamp:     time.Now().Unix(),
 				BusinessBytes: bizDelta,
@@ -190,7 +190,7 @@ func (su *SensoryUplink) threatFlushLoop(ctx context.Context) {
 }
 
 // ReportThreat 上报威胁事件（经过聚合窗口限流，不会 DDoS OS）
-func (su *SensoryUplink) ReportThreat(threatType proto.ThreatType, sourceIP string, severity int32) {
+func (su *SensoryUplink) ReportThreat(threatType pb.ThreatType, sourceIP string, severity int32) {
 	su.threatLimiter.Ingest(threatType, sourceIP, severity)
 }
 
@@ -201,7 +201,7 @@ func (su *SensoryUplink) ReportThreat(threatType proto.ThreatType, sourceIP stri
 // threatKey 聚合键：源IP + 威胁类型
 type threatKey struct {
 	SourceIP   string
-	ThreatType proto.ThreatType
+	ThreatType pb.ThreatType
 }
 
 // threatBucket 聚合桶
@@ -228,7 +228,7 @@ func NewThreatAggregator(window time.Duration) *ThreatAggregator {
 }
 
 // Ingest 摄入一条威胁事件（聚合到桶中）
-func (ta *ThreatAggregator) Ingest(threatType proto.ThreatType, sourceIP string, severity int32) {
+func (ta *ThreatAggregator) Ingest(threatType pb.ThreatType, sourceIP string, severity int32) {
 	ta.mu.Lock()
 	defer ta.mu.Unlock()
 
@@ -252,7 +252,7 @@ func (ta *ThreatAggregator) Ingest(threatType proto.ThreatType, sourceIP string,
 }
 
 // Flush 刷出所有聚合桶，生成合并后的事件列表
-func (ta *ThreatAggregator) Flush() []*proto.ThreatEvent {
+func (ta *ThreatAggregator) Flush() []*pb.ThreatEvent {
 	ta.mu.Lock()
 	defer ta.mu.Unlock()
 
@@ -260,9 +260,9 @@ func (ta *ThreatAggregator) Flush() []*proto.ThreatEvent {
 		return nil
 	}
 
-	events := make([]*proto.ThreatEvent, 0, len(ta.buckets))
+	events := make([]*pb.ThreatEvent, 0, len(ta.buckets))
 	for key, bucket := range ta.buckets {
-		events = append(events, &proto.ThreatEvent{
+		events = append(events, &pb.ThreatEvent{
 			Timestamp:   bucket.LastSeen,
 			ThreatType:  key.ThreatType,
 			SourceIp:    key.SourceIP,

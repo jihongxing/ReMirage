@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	pb "mirage-os/gateway-bridge/proto"
+	pb "mirage-proto/gen"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

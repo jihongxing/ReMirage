@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	pb "mirage-os/gateway-bridge/proto"
+	pb "mirage-proto/gen"
 )
 
 // TestNodeSelfDestruct 节点自毁集成测试

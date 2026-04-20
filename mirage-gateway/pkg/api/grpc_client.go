@@ -5,11 +5,10 @@ import (
 	"context"
 	"crypto/tls"
 	"log"
+	pb "mirage-proto/gen"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"mirage-gateway/pkg/api/proto"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -19,13 +18,13 @@ import (
 // GRPCClient 上行 gRPC 客户端
 type GRPCClient struct {
 	conn              *grpc.ClientConn
-	uplinkClient      proto.GatewayUplinkClient
+	uplinkClient      pb.GatewayUplinkClient
 	gatewayID         string
 	tlsConfig         *tls.Config
 	endpoint          string
 	connected         atomic.Bool
 	degradedSince     time.Time
-	eventBuffer       []*proto.ThreatEvent
+	eventBuffer       []*pb.ThreatEvent
 	mu                sync.Mutex
 	maxBuffer         int
 	heartbeatCallback func() // 心跳成功回调（喂看门狗）
@@ -37,7 +36,7 @@ func NewGRPCClient(endpoint, gatewayID string, tlsConfig *tls.Config) *GRPCClien
 		endpoint:    endpoint,
 		gatewayID:   gatewayID,
 		tlsConfig:   tlsConfig,
-		eventBuffer: make([]*proto.ThreatEvent, 0, 1000),
+		eventBuffer: make([]*pb.ThreatEvent, 0, 1000),
 		maxBuffer:   1000,
 	}
 }
@@ -64,7 +63,7 @@ func (c *GRPCClient) Connect(ctx context.Context) error {
 		conn, err := grpc.NewClient(c.endpoint, opts...)
 		if err == nil {
 			c.conn = conn
-			c.uplinkClient = proto.NewGatewayUplinkClient(conn)
+			c.uplinkClient = pb.NewGatewayUplinkClient(conn)
 			c.connected.Store(true)
 			c.degradedSince = time.Time{}
 			log.Printf("[gRPC Client] 已连接到 %s", c.endpoint)
@@ -86,7 +85,7 @@ func (c *GRPCClient) Connect(ctx context.Context) error {
 }
 
 // StartHeartbeat 启动心跳循环（30 秒间隔）
-func (c *GRPCClient) StartHeartbeat(ctx context.Context, statusFn func() *proto.HeartbeatRequest) {
+func (c *GRPCClient) StartHeartbeat(ctx context.Context, statusFn func() *pb.HeartbeatRequest) {
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
@@ -122,7 +121,7 @@ func (c *GRPCClient) StartHeartbeat(ctx context.Context, statusFn func() *proto.
 }
 
 // StartTrafficReport 启动流量上报循环（60 秒间隔）
-func (c *GRPCClient) StartTrafficReport(ctx context.Context, trafficFn func() *proto.TrafficRequest) {
+func (c *GRPCClient) StartTrafficReport(ctx context.Context, trafficFn func() *pb.TrafficRequest) {
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
@@ -148,13 +147,13 @@ func (c *GRPCClient) StartTrafficReport(ctx context.Context, trafficFn func() *p
 }
 
 // ReportThreat 上报威胁事件（5 秒内发送）
-func (c *GRPCClient) ReportThreat(events []*proto.ThreatEvent) error {
+func (c *GRPCClient) ReportThreat(events []*pb.ThreatEvent) error {
 	if !c.connected.Load() {
 		c.bufferEvents(events)
 		return nil
 	}
 
-	req := &proto.ThreatRequest{
+	req := &pb.ThreatRequest{
 		GatewayId: c.gatewayID,
 		Events:    events,
 	}
@@ -171,7 +170,7 @@ func (c *GRPCClient) ReportThreat(events []*proto.ThreatEvent) error {
 }
 
 // bufferEvents 缓存事件（最多 1000 条）
-func (c *GRPCClient) bufferEvents(events []*proto.ThreatEvent) {
+func (c *GRPCClient) bufferEvents(events []*pb.ThreatEvent) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -217,7 +216,7 @@ func (c *GRPCClient) Close() error {
 }
 
 // ReportTrafficDirect 直接上报流量（由 SensoryUplink 调用）
-func (c *GRPCClient) ReportTrafficDirect(req *proto.TrafficRequest) {
+func (c *GRPCClient) ReportTrafficDirect(req *pb.TrafficRequest) {
 	if !c.connected.Load() {
 		return
 	}

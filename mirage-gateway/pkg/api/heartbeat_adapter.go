@@ -3,10 +3,9 @@ package api
 import (
 	"context"
 	"log"
+	pb "mirage-proto/gen"
 	"runtime"
 	"time"
-
-	"mirage-gateway/pkg/api/proto"
 )
 
 // HeartbeatAdapter 适配 GRPCClient 为 strategy.HeartbeatSender 接口
@@ -29,14 +28,14 @@ func (a *HeartbeatAdapter) StartHeartbeatLoop(ctx context.Context, onSuccess fun
 	a.client.SetHeartbeatCallback(onSuccess)
 
 	// 启动 GRPCClient 的心跳循环
-	a.client.StartHeartbeat(ctx, func() *proto.HeartbeatRequest {
+	a.client.StartHeartbeat(ctx, func() *pb.HeartbeatRequest {
 		var memStats runtime.MemStats
 		runtime.ReadMemStats(&memStats)
 
-		return &proto.HeartbeatRequest{
+		return &pb.HeartbeatRequest{
 			GatewayId:     a.gatewayID,
 			Timestamp:     time.Now().Unix(),
-			Status:        proto.GatewayStatus_ONLINE,
+			Status:        pb.GatewayStatus_ONLINE,
 			EbpfLoaded:    true,
 			ThreatLevel:   0,
 			MemoryUsageMb: int32(memStats.Alloc / 1024 / 1024),

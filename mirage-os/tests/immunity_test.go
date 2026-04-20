@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	pb "mirage-os/gateway-bridge/proto"
+	pb "mirage-proto/gen"
 )
 
 // TestGlobalImmunity 全局免疫集成测试
