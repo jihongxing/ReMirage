@@ -1,24 +1,17 @@
-FROM ubuntu:22.04
+FROM golang:1.24 AS gobuilder
 
-# 安装编译依赖
+# 安装 eBPF 编译依赖
 RUN apt update && apt install -y \
     clang \
     llvm \
     libbpf-dev \
     linux-headers-generic \
-    golang-1.21 \
     make \
-    git \
     && rm -rf /var/lib/apt/lists/*
 
-# 设置 Go 环境
-ENV PATH="/usr/lib/go-1.21/bin:${PATH}"
 ENV CGO_ENABLED=1
 
-# 工作目录
 WORKDIR /build
-
-# 复制源码
 COPY . .
 
 # 下载 Go 依赖
@@ -44,14 +37,9 @@ RUN apt update && apt install -y \
 
 WORKDIR /app
 
-# 复制编译产物
-COPY --from=0 /build/bin/mirage-gateway /app/
-COPY --from=0 /build/bpf/*.o /app/bpf/
-COPY --from=0 /build/configs/gateway.yaml /app/configs/
+COPY --from=gobuilder /build/bin/mirage-gateway /app/
+COPY --from=gobuilder /build/bpf/*.o /app/bpf/
+COPY --from=gobuilder /build/configs/gateway.yaml /app/configs/
 
-# 暴露端口（如需要）
-# EXPOSE 8080
-
-# 启动命令
 ENTRYPOINT ["/app/mirage-gateway"]
 CMD ["-iface", "eth0", "-defense", "20"]
