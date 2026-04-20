@@ -25,7 +25,10 @@ intel:
 
 raft:
   node_id: "os-1"
-  bind_addr: "0.0.0.0:7000"
+  bind_addr: "10.99.0.10:7001"
   data_dir: "/var/lib/mirage/raft"
   bootstrap: true
-  peers: []
+  peers:
+    - id: "os-1"
+      address: "10.99.0.10:7001"
+      voter: true

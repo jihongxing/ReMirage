@@ -8,7 +8,8 @@ RUN apk add --no-cache \
     docker-cli \
     iproute2 \
     bind-tools \
-    tcpdump
+    tcpdump \
+    grep
 
 WORKDIR /scripts
 COPY genesis-drill.sh /scripts/

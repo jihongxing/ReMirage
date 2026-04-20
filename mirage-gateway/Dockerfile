@@ -42,4 +42,4 @@ COPY --from=gobuilder /build/bpf/*.o /app/bpf/
 COPY --from=gobuilder /build/configs/gateway.yaml /app/configs/
 
 ENTRYPOINT ["/app/mirage-gateway"]
-CMD ["-iface", "eth0", "-defense", "20"]
+CMD ["-config", "configs/gateway.yaml"]

@@ -273,3 +273,54 @@
 - Mock 信令服务（Go）：模拟 DoH / GitHub Gist / Mastodon 三通道
 - PostgreSQL 初始化脚本：最小必要表结构 + 测试数据
 - Phantom Client 混沌测试 Dockerfile（含 iptables/tcpdump 工具链）
+
+---
+
+## [0.9.2] - 2026-04-20
+
+### E2E 测试环境部署记录
+
+#### 服务器环境
+- 服务器：腾讯云 VM-0-7-opencloudos（OpenCloudOS 9, kernel 6.6.x）
+- 路径：`/opt/ReMirage`
+- Go：1.25.5 linux/amd64
+- Docker：29.4.0, Docker Compose Plugin 5.1.3
+
+#### 部署修复记录
+- `mirage-os/gateway-bridge/Dockerfile`：Go 1.22 → 1.24（匹配 go.mod）
+- `mirage-gateway/Dockerfile`：重写为多阶段构建，`golang:1.25` 基础镜像 + eBPF 编译
+- `phantom-client/Dockerfile.chaos`：添加 `touch cmd/phantom/wintun.dll` 占位（Linux 构建满足 go:embed）
+- `phantom-client/Dockerfile.chaos`：COPY 指令不支持 shell 重定向，改用 `touch` 保证文件存在
+- `docker-compose.genesis.yml`：os-node build context 从 `../../mirage-os` 改为 `../../mirage-os/gateway-bridge`
+- `mirage-os/gateway-bridge/Dockerfile`：添加 `COPY --from=builder /app/configs ./configs`
+- 新增 `mirage-os/gateway-bridge/configs/mirage-os.yaml`：chaos 测试专用配置
+- Raft bind_addr：`0.0.0.0:7000` → `10.99.0.10:7001`（避免 REST 端口冲突 + 可广播地址）
+- Raft peers：添加自身节点（bootstrap 需要至少一个 voter）
+- `deploy/chaos/genesis/drill/Dockerfile.drill`：添加 GNU `grep`（BusyBox grep 不支持 `-P`）
+- `mirage-gateway/Dockerfile` CMD：`-iface eth0 -defense 20` → `-config configs/gateway.yaml`
+- `mirage-gateway/configs/gateway.yaml`：mcc.endpoint 指向 `10.99.0.10:50051`，TLS 禁用
+- `deploy/chaos/genesis/drill/genesis-drill.sh`：`chmod +x`（Windows git 丢失执行权限）
+
+#### E2E 测试结果（首次运行）
+- 通过：2/10
+  - ✅ OS gateway-bridge 健康检查
+  - ✅ 配额查询 API 正常返回
+- 失败：8/10（业务逻辑层缺失，非环境问题）
+  - ❌ Gateway 未注册到 OS（心跳 protobuf 序列化错误）
+  - ❌ XMR Webhook API 未实现
+  - ❌ Phantom Client 未启动（缺少测试模式入口）
+  - ❌ 计费 API 未实现
+  - ❌ 多路径降级（Phantom 未连接）
+  - ❌ 信令共振复活（resonance publish API 未实现）
+
+#### 基础设施层验证通过
+- Docker 容器全部正常启动（10 个容器）
+- OS 节点：PostgreSQL + Redis + Raft Leader 选举成功
+- Gateway A/B：18 阶段全量启动，eBPF 挂载成功，gRPC 连接 OS 成功
+- 网络拓扑：mirage-net (10.99.0.0/24) + infra-net (10.99.1.0/24) 隔离正确
+- Mock 信令服务（DoH/Gist/Mastodon）正常运行
+
+#### 待修复（下一步）
+- [ ] 补全 OS REST API（webhook/billing/resonance/gateway kill）
+- [ ] 修复 Gateway 心跳 protobuf 序列化问题
+- [ ] Phantom Client 添加 chaos 测试模式（无需 token 启动）
