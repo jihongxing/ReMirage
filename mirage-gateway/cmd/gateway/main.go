@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"mirage-gateway/pkg/api"
-	pb "mirage-proto/gen"
 	"mirage-gateway/pkg/cortex"
 	"mirage-gateway/pkg/ebpf"
 	"mirage-gateway/pkg/gswitch"
@@ -27,7 +26,9 @@ import (
 	"mirage-gateway/pkg/strategy"
 	"mirage-gateway/pkg/threat"
 	"mirage-gateway/pkg/tproxy"
+	pb "mirage-proto/gen"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.yaml.in/yaml/v2"
 )
 
@@ -49,6 +50,7 @@ type GatewayConfig struct {
 	} `yaml:"defense"`
 	MCC struct {
 		Endpoint string             `yaml:"endpoint"`
+		CellID   string             `yaml:"cell_id"`
 		TLS      security.TLSConfig `yaml:"tls"`
 	} `yaml:"mcc"`
 	Security SecurityConfig `yaml:"security"`
@@ -62,7 +64,8 @@ type GatewayConfig struct {
 
 // SecurityConfig 安全加固配置
 type SecurityConfig struct {
-	RAMShield struct {
+	CommandSecret string `yaml:"command_secret"`
+	RAMShield     struct {
 		Enabled           bool          `yaml:"enabled"`
 		DisableCoreDump   bool          `yaml:"disable_core_dump"`
 		CheckSwapInterval time.Duration `yaml:"check_swap_interval"`
@@ -99,6 +102,11 @@ func main() {
 	// 1. 加载配置
 	cfg := loadConfig(*configPath)
 
+	// 1.1 生产模式强制 mTLS 校验
+	if os.Getenv("MIRAGE_ENV") == "production" && !cfg.MCC.TLS.Enabled {
+		log.Fatalf("❌ 生产模式禁止禁用 mTLS，请配置 mcc.tls.enabled: true")
+	}
+
 	// 全局 context
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -106,6 +114,18 @@ func main() {
 	// 1.5 Gateway ID 动态化
 	gatewayID := resolveGatewayID(cfg)
 	log.Printf("🆔 Gateway ID: %s", gatewayID)
+
+	// 1.6 Prometheus 指标注册 + metrics HTTP server
+	threat.SetGatewayID(gatewayID)
+	threat.RegisterMetrics()
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.Handler())
+		log.Println("✅ Prometheus metrics: http://127.0.0.1:9090/metrics")
+		if err := http.ListenAndServe("127.0.0.1:9090", mux); err != nil {
+			log.Printf("⚠️ Metrics HTTP server 启动失败: %v", err)
+		}
+	}()
 
 	// 2. 安全加固初始化
 	ramShield := security.NewRAMShield()
@@ -193,11 +213,12 @@ func main() {
 	aggregator := threat.NewAggregator(10000)
 	aggregator.Start(ctx)
 
-	responder := threat.NewResponder(engine, loader)
-	responder.Start(ctx, aggregator.Subscribe())
-
 	blacklist := threat.NewBlacklistManager(loader, 65536)
 	blacklist.StartExpiry(ctx)
+
+	responder := threat.NewResponder(engine, loader, blacklist)
+	responder.Start(ctx, aggregator.Subscribe())
+
 	log.Println("✅ 威胁编排模块已启动")
 
 	// 7. 威胁监控器 + 事件源注册
@@ -277,15 +298,26 @@ func main() {
 		log.Println("✅ TPROXY 透明代理桥接器已启动")
 	}
 
-	// 13. gRPC 客户端（非关键，失败降级）
+	// 13. gRPC 客户端（mTLS 强制）
 	var grpcClient *api.GRPCClient
 	var sensoryUplink *nerve.SensoryUplink
 	clientTLS, _ := tlsMgr.GetClientTLSConfig()
+	if clientTLS == nil {
+		log.Fatalf("❌ gRPC Client TLS 配置为空，拒绝启动")
+	}
 	grpcClient = api.NewGRPCClient(cfg.MCC.Endpoint, gatewayID, clientTLS)
+	if certPin != nil {
+		grpcClient.SetCertPin(certPin)
+	}
 	go func() {
 		if err := grpcClient.Connect(ctx); err != nil {
 			log.Printf("⚠️ gRPC 客户端连接失败（降级运行）: %v", err)
 		} else {
+			// 注册 Gateway
+			if err := grpcClient.Register(ctx, gatewayID, cfg.MCC.CellID, "0.0.0.0:50847", "v1.0"); err != nil {
+				log.Printf("⚠️ Gateway 注册失败（降级运行）: %v", err)
+			}
+
 			grpcClient.StartHeartbeat(ctx, func() *pb.HeartbeatRequest {
 				var memStats runtime.MemStats
 				runtime.ReadMemStats(&memStats)
@@ -293,13 +325,36 @@ func main() {
 				if grpcClient.IsDegraded() {
 					st = pb.GatewayStatus_DEGRADED
 				}
+
+				// TODO: Proto 需要增加 blacklist_count 和 blacklist_updated_at 字段
+				// 当前通过 ActiveConnections 字段临时承载黑名单条目数（待 proto 更新后迁移）
+				blCount := int64(blacklist.Count())
+				blUpdatedAt := blacklist.LatestUpdateTimestamp()
+				_ = blUpdatedAt // 待 proto 扩展后使用
+
+				// 8.6: 获取当前安全状态用于心跳上报
+				// TODO: Proto 需要增加 security_state 字段到 HeartbeatRequest
+				// 当前通过 ThreatLevel 高位临时承载安全状态（待 proto 更新后迁移）
+				securityState := int32(0)
+				if fsm := responder.GetFSM(); fsm != nil {
+					securityState = int32(fsm.CurrentState())
+				}
+				_ = securityState // 待 proto 扩展后使用
+
 				return &pb.HeartbeatRequest{
-					GatewayId:     gatewayID,
-					Timestamp:     time.Now().Unix(),
-					Status:        st,
-					EbpfLoaded:    true,
-					ThreatLevel:   int32(responder.GetCurrentLevel()),
-					MemoryUsageMb: int32(memStats.Alloc / 1024 / 1024),
+					GatewayId:         gatewayID,
+					Timestamp:         time.Now().Unix(),
+					Status:            st,
+					EbpfLoaded:        true,
+					ThreatLevel:       int32(responder.GetCurrentLevel()),
+					MemoryUsageMb:     int32(memStats.Alloc / 1024 / 1024),
+					ActiveConnections: blCount, // 临时复用，待 proto 增加 blacklist_count 字段
+					// 拓扑语义字段
+					DownlinkAddr:   "0.0.0.0:50847",
+					CellId:         cfg.MCC.CellID,
+					ActiveSessions: 0,  // TODO: 从 session manager 获取实际值
+					StateHash:      "", // TODO: 从 MotorDownlink 获取当前 state hash
+					Version:        "v1.0",
 				}
 			})
 			// 启动上行感知闭环（10s 流量上报 via gRPC）
@@ -328,9 +383,17 @@ func main() {
 	serverTLS, _ := tlsMgr.GetServerTLSConfig()
 	handler := api.NewCommandHandler(loader, blacklist, gswitchMgr)
 	handler.SetMotorDownlink(&motorDownlinkAdapter{md: motorDownlink})
+
+	// 注入安全组件
+	if cfg.Security.CommandSecret != "" {
+		handler.SetAuth(api.NewCommandAuthenticator(cfg.Security.CommandSecret))
+	}
+	handler.SetAudit(api.NewCommandAuditor())
+	handler.SetRateLimiter(api.NewCommandRateLimiter())
+
 	grpcServer = api.NewGRPCServer(50847, serverTLS, handler)
 	if err := grpcServer.Start(); err != nil {
-		log.Printf("⚠️ gRPC 服务端启动失败（降级运行）: %v", err)
+		log.Fatalf("❌ gRPC 服务端启动失败: %v", err)
 	} else {
 		log.Println("✅ gRPC 服务端已启动")
 	}
@@ -393,9 +456,6 @@ func main() {
 	if antiDebug != nil {
 		graceful.RegisterModule(&shutdownAdapter{"AntiDebug", func(ctx context.Context) error { antiDebug.Stop(); return nil }})
 	}
-
-	// 忽略未使用变量
-	_ = certPin
 
 	// 18. 等待退出信号
 	sigCh := make(chan os.Signal, 1)

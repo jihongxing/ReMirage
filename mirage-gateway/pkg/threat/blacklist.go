@@ -19,15 +19,24 @@ type BlacklistManager struct {
 	loader     *ebpf.Loader
 	mu         sync.RWMutex
 	maxEntries int
+	degraded   bool // blacklist_lpm Map 不可用时为 true
 }
 
 // NewBlacklistManager 创建黑名单管理器
 func NewBlacklistManager(loader *ebpf.Loader, maxEntries int) *BlacklistManager {
-	return &BlacklistManager{
+	bm := &BlacklistManager{
 		entries:    make(map[string]*BlacklistEntry),
 		loader:     loader,
 		maxEntries: maxEntries,
 	}
+
+	// 启动校验：确认 blacklist_lpm Map 存在
+	if loader != nil && loader.GetMap("blacklist_lpm") == nil {
+		log.Printf("⚠️ blacklist_lpm Map 不存在，黑名单数据面降级")
+		bm.degraded = true
+	}
+
+	return bm
 }
 
 // Add 添加条目，1 秒内同步到 eBPF LPM Trie Map
@@ -57,8 +66,10 @@ func (bm *BlacklistManager) Add(cidr string, expireAt time.Time, source Blacklis
 		Source:   source,
 	}
 
-	// 同步到 eBPF
-	bm.syncToEBPF(cidr, true)
+	// 同步到 eBPF（失败记录但不阻断业务）
+	if err := bm.syncToEBPF(cidr, true); err != nil {
+		log.Printf("[Blacklist] syncToEBPF 失败（业务不阻断）: %v", err)
+	}
 
 	return nil
 }
@@ -73,7 +84,7 @@ func (bm *BlacklistManager) Remove(cidr string) error {
 	}
 
 	delete(bm.entries, cidr)
-	bm.syncToEBPF(cidr, false)
+	_ = bm.syncToEBPF(cidr, false)
 	return nil
 }
 
@@ -86,7 +97,9 @@ func (bm *BlacklistManager) MergeGlobal(entries []BlacklistEntry) error {
 		entry.Source = SourceGlobal
 		e := entry // copy
 		bm.entries[entry.CIDR] = &e
-		bm.syncToEBPF(entry.CIDR, true)
+		if err := bm.syncToEBPF(entry.CIDR, true); err != nil {
+			log.Printf("[Blacklist] MergeGlobal syncToEBPF 失败（业务不阻断）: %v", err)
+		}
 	}
 
 	// 容量淘汰
@@ -137,7 +150,7 @@ func (bm *BlacklistManager) cleanExpired() {
 	for cidr, entry := range bm.entries {
 		if !entry.ExpireAt.IsZero() && now.After(entry.ExpireAt) {
 			delete(bm.entries, cidr)
-			bm.syncToEBPF(cidr, false)
+			_ = bm.syncToEBPF(cidr, false)
 		}
 	}
 }
@@ -162,23 +175,23 @@ func (bm *BlacklistManager) evictOldest() {
 
 	victim := all[0].cidr
 	delete(bm.entries, victim)
-	bm.syncToEBPF(victim, false)
+	_ = bm.syncToEBPF(victim, false)
 }
 
 // syncToEBPF 同步到 eBPF LPM Trie Map
-func (bm *BlacklistManager) syncToEBPF(cidr string, add bool) {
+func (bm *BlacklistManager) syncToEBPF(cidr string, add bool) error {
 	if bm.loader == nil {
-		return
+		return nil
 	}
 
 	lpmMap := bm.loader.GetMap("blacklist_lpm")
 	if lpmMap == nil {
-		return
+		return fmt.Errorf("blacklist_lpm Map 不存在")
 	}
 
 	_, ipNet, err := net.ParseCIDR(cidr)
 	if err != nil {
-		return
+		return err
 	}
 
 	// LPM Trie key: prefixlen(4 bytes) + ip(4 bytes)
@@ -190,11 +203,86 @@ func (bm *BlacklistManager) syncToEBPF(cidr string, add bool) {
 	if add {
 		value := uint32(1)
 		if err := lpmMap.Put(key, &value); err != nil {
-			log.Printf("[Blacklist] eBPF LPM 写入失败: %v", err)
+			log.Printf("[Blacklist] ❌ eBPF LPM 写入失败: %s: %v", cidr, err)
+			return err
 		}
 	} else {
 		if err := lpmMap.Delete(key); err != nil {
 			// 删除失败不报错（可能已不存在）
 		}
 	}
+	return nil
+}
+
+// SyncStats 返回 Go 侧条目数与 eBPF 侧条目数，用于一致性校验
+func (bm *BlacklistManager) SyncStats() (goCount int, ebpfCount int) {
+	bm.mu.RLock()
+	goCount = len(bm.entries)
+	bm.mu.RUnlock()
+
+	if bm.loader == nil || bm.degraded {
+		return
+	}
+
+	lpmMap := bm.loader.GetMap("blacklist_lpm")
+	if lpmMap == nil {
+		return
+	}
+
+	// 遍历 eBPF Map 计数
+	var key, nextKey [8]byte
+	for {
+		if err := lpmMap.NextKey(key[:], nextKey[:]); err != nil {
+			break
+		}
+		ebpfCount++
+		key = nextKey
+	}
+	return
+}
+
+// CheckAndRecord 检查 IP 是否在黑名单中，命中时递增 Prometheus 指标
+func (bm *BlacklistManager) CheckAndRecord(ip string) bool {
+	cidr := ip + "/32"
+	bm.mu.RLock()
+	_, hit := bm.entries[cidr]
+	if !hit {
+		// 也检查更宽的 CIDR 匹配
+		for c := range bm.entries {
+			_, ipNet, err := net.ParseCIDR(c)
+			if err != nil {
+				continue
+			}
+			if ipNet.Contains(net.ParseIP(ip)) {
+				hit = true
+				break
+			}
+		}
+	}
+	bm.mu.RUnlock()
+
+	if hit {
+		// 9.4: 递增黑名单命中指标
+		BlacklistHitTotal.WithLabelValues(GetGatewayID()).Inc()
+	}
+	return hit
+}
+
+// LatestUpdateTimestamp 返回黑名单中最新条目的添加时间戳（Unix 秒）
+// TODO: 待 proto 增加 blacklist_updated_at 字段后，通过心跳上报此值
+func (bm *BlacklistManager) LatestUpdateTimestamp() int64 {
+	bm.mu.RLock()
+	defer bm.mu.RUnlock()
+
+	var latest time.Time
+	for _, entry := range bm.entries {
+		if entry.AddedAt.After(latest) {
+			latest = entry.AddedAt
+		}
+	}
+
+	if latest.IsZero() {
+		return 0
+	}
+	return latest.Unix()
 }

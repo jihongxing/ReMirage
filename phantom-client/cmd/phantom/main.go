@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	_ "embed"
+	encoding_base64 "encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -138,12 +139,16 @@ func main() {
 	go forwardTUNToTunnel(ctx, device, client, &txBytes, &wg)
 	go forwardTunnelToTUN(ctx, client, device, &rxBytes, &wg)
 
-	// 8. Gateway switch listener
-	client.OnGatewaySwitch(func(newIP string) {
-		if err := ks.UpdateGatewayRoute(newIP); err != nil {
-			fmt.Fprintf(os.Stderr, "WARNING: Route update failed: %v\n", err)
-		}
+	// 8. Transactional gateway switch callbacks
+	client.SetSwitchPreAdd(func(newIP string) error {
+		return ks.PreAddHostRoute(newIP)
+	})
+	client.SetSwitchCommit(func(oldIP, newIP string) {
+		_ = ks.CommitSwitch(oldIP, newIP)
 		printStatus("Gateway switched, route updated")
+	})
+	client.SetSwitchRollback(func(newIP string) {
+		_ = ks.RollbackPreAdd(newIP)
 	})
 
 	// 9. Status display + signal handling
@@ -228,20 +233,21 @@ func redeemFromURI(uri string) (tokenB64 string, decryptKey []byte, err error) {
 
 	// 解析返回的 JSON 配置
 	var config struct {
-		PrivateKey string `json:"private_key"`
-		PublicKey  string `json:"public_key"`
-		Endpoints  []struct {
+		Endpoints []struct {
 			Address  string `json:"address"`
 			Port     int    `json:"port"`
 			Protocol string `json:"protocol"`
 			Priority int    `json:"priority"`
 		} `json:"endpoints"`
-		SNI        string `json:"sni"`
-		CACert     string `json:"ca_cert"`
-		UID        string `json:"uid"`
-		CellID     string `json:"cell_id"`
-		QuotaBytes uint64 `json:"quota_bytes"`
-		ExpiresAt  string `json:"expires_at"`
+		PSK             string `json:"psk"` // base64
+		CertFingerprint string `json:"cert_fingerprint"`
+		UserID          string `json:"user_id"`
+		AuthKey         string `json:"auth_key"` // base64
+		ExpiresAt       string `json:"expires_at"`
+		SNI             string `json:"sni"`
+		CACert          string `json:"ca_cert"`
+		CellID          string `json:"cell_id"`
+		QuotaBytes      uint64 `json:"quota_bytes"`
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -251,6 +257,38 @@ func redeemFromURI(uri string) (tokenB64 string, decryptKey []byte, err error) {
 
 	if err := json.Unmarshal(body, &config); err != nil {
 		return "", nil, fmt.Errorf("parse config failed: %w", err)
+	}
+
+	// 校验必填字段
+	if config.UserID == "" {
+		return "", nil, fmt.Errorf("服务端响应缺少 user_id")
+	}
+	if config.PSK == "" {
+		return "", nil, fmt.Errorf("服务端响应缺少 psk")
+	}
+	if len(config.Endpoints) == 0 {
+		return "", nil, fmt.Errorf("服务端响应缺少 endpoints")
+	}
+
+	// 解码 PSK
+	pskBytes, err := encoding_base64.StdEncoding.DecodeString(config.PSK)
+	if err != nil {
+		return "", nil, fmt.Errorf("无效的 psk: %w", err)
+	}
+
+	// 解码 AuthKey
+	var authKeyBytes []byte
+	if config.AuthKey != "" {
+		authKeyBytes, err = encoding_base64.StdEncoding.DecodeString(config.AuthKey)
+		if err != nil {
+			return "", nil, fmt.Errorf("无效的 auth_key: %w", err)
+		}
+	}
+
+	// 使用服务端真实 ExpiresAt
+	expiresAt, err := time.Parse(time.RFC3339, config.ExpiresAt)
+	if err != nil {
+		return "", nil, fmt.Errorf("无效的 expires_at: %w", err)
 	}
 
 	// 将配置转换为 BootstrapConfig token
@@ -264,8 +302,12 @@ func redeemFromURI(uri string) (tokenB64 string, decryptKey []byte, err error) {
 	}
 
 	bootstrapConfig := &token.BootstrapConfig{
-		BootstrapPool: bootstrapPool,
-		ExpiresAt:     time.Now().Add(30 * 24 * time.Hour),
+		BootstrapPool:   bootstrapPool,
+		AuthKey:         authKeyBytes,
+		PreSharedKey:    pskBytes,
+		CertFingerprint: config.CertFingerprint,
+		UserID:          config.UserID,
+		ExpiresAt:       expiresAt,
 	}
 
 	// 生成临时加密密钥

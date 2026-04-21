@@ -5,6 +5,8 @@ import { GatewayStatus } from '@prisma/client';
 export interface GatewayQueryDto {
   cellId?: string;
   status?: GatewayStatus;
+  page?: number;
+  limit?: number;
 }
 
 @Injectable()
@@ -16,9 +18,14 @@ export class GatewaysService {
     if (query.cellId) where.cellId = query.cellId;
     if (query.status) where.status = query.status;
 
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+
     return this.prisma.gateway.findMany({
       where,
       include: { cell: true },
+      skip: (page - 1) * limit,
+      take: limit,
     });
   }
 

@@ -1,10 +1,11 @@
 # Mirage-OS Gateway Bridge 配置（混沌测试用）
 grpc:
   port: 50051
-  tls_enabled: false
+  tls_enabled: true
 
 rest:
-  addr: ":7000"
+  addr: "127.0.0.1:7000"
+  internal_secret: "${MIRAGE_INTERNAL_SECRET}"
 
 database:
   dsn: "postgres://mirage:chaos_test_pw@10.99.1.10:5432/mirage_os?sslmode=disable"

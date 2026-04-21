@@ -66,9 +66,10 @@ func (cp *CertPin) VerifyPin(cert *x509.Certificate) error {
 
 	hash := sha256.Sum256(cert.Raw)
 	if hash != cp.pinnedHash {
-		log.Printf("[CertPin] 🚨 证书指纹不匹配！预期: %s, 实际: %s",
-			hex.EncodeToString(cp.pinnedHash[:])[:16], hex.EncodeToString(hash[:])[:16])
-		return fmt.Errorf("证书指纹不匹配")
+		expected := hex.EncodeToString(cp.pinnedHash[:])[:16]
+		actual := hex.EncodeToString(hash[:])[:16]
+		log.Printf("[CertPin] 🚨 证书指纹不匹配！预期: %s, 实际: %s", expected, actual)
+		return fmt.Errorf("证书指纹不匹配: 预期=%s, 实际=%s", expected, actual)
 	}
 
 	return nil

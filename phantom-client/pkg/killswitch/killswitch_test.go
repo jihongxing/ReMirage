@@ -201,3 +201,111 @@ func TestUpdateWithoutActivate(t *testing.T) {
 		t.Fatal("update without activate should fail")
 	}
 }
+
+// 事务切换测试：PreAdd → Commit
+func TestTransactionalSwitch(t *testing.T) {
+	mock := newMockPlatform()
+	ks := NewKillSwitchWithPlatform("mirage0", mock)
+
+	if err := ks.Activate("10.0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// PreAdd new route
+	if err := ks.PreAddHostRoute("10.0.0.2"); err != nil {
+		t.Fatal(err)
+	}
+	if !mock.hasHostRoute("10.0.0.1") {
+		t.Fatal("old route should still exist after PreAdd")
+	}
+	if !mock.hasHostRoute("10.0.0.2") {
+		t.Fatal("new route should exist after PreAdd")
+	}
+
+	// Commit: delete old
+	if err := ks.CommitSwitch("10.0.0.1", "10.0.0.2"); err != nil {
+		t.Fatal(err)
+	}
+	if mock.hasHostRoute("10.0.0.1") {
+		t.Fatal("old route should be deleted after Commit")
+	}
+	if !mock.hasHostRoute("10.0.0.2") {
+		t.Fatal("new route should still exist after Commit")
+	}
+}
+
+// 事务回滚测试：PreAdd → Rollback
+func TestTransactionalRollback(t *testing.T) {
+	mock := newMockPlatform()
+	ks := NewKillSwitchWithPlatform("mirage0", mock)
+
+	if err := ks.Activate("10.0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// PreAdd new route
+	if err := ks.PreAddHostRoute("10.0.0.2"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Rollback: remove pre-added route
+	if err := ks.RollbackPreAdd("10.0.0.2"); err != nil {
+		t.Fatal(err)
+	}
+	if !mock.hasHostRoute("10.0.0.1") {
+		t.Fatal("old route should still exist after Rollback")
+	}
+	if mock.hasHostRoute("10.0.0.2") {
+		t.Fatal("pre-added route should be removed after Rollback")
+	}
+}
+
+// 未激活时 PreAdd 应失败
+func TestPreAddWithoutActivate(t *testing.T) {
+	mock := newMockPlatform()
+	ks := NewKillSwitchWithPlatform("mirage0", mock)
+
+	if err := ks.PreAddHostRoute("10.0.0.1"); err == nil {
+		t.Fatal("PreAdd without activate should fail")
+	}
+}
+
+// Property: 事务切换原子性 — 任意时刻至少有一条 /32 路由存在
+func TestProperty_TransactionalAtomicity(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		mock := newMockPlatform()
+		ks := NewKillSwitchWithPlatform("mirage0", mock)
+
+		initialIP := rapid.StringMatching(`\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}`).Draw(t, "initialIP")
+		if err := ks.Activate(initialIP); err != nil {
+			t.Fatal(err)
+		}
+
+		currentIP := initialIP
+		nSwitches := rapid.IntRange(1, 10).Draw(t, "nSwitches")
+		for i := 0; i < nSwitches; i++ {
+			newIP := rapid.StringMatching(`\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}`).Draw(t, fmt.Sprintf("newIP_%d", i))
+
+			// PreAdd: both routes exist
+			if err := ks.PreAddHostRoute(newIP); err != nil {
+				t.Fatal(err)
+			}
+			if !mock.hasHostRoute(currentIP) {
+				t.Fatalf("old route %s missing after PreAdd", currentIP)
+			}
+			if !mock.hasHostRoute(newIP) {
+				t.Fatalf("new route %s missing after PreAdd", newIP)
+			}
+
+			// Commit: only new route
+			if err := ks.CommitSwitch(currentIP, newIP); err != nil {
+				t.Fatal(err)
+			}
+			if !mock.hasHostRoute(newIP) {
+				t.Fatalf("new route %s missing after Commit", newIP)
+			}
+
+			currentIP = newIP
+		}
+	})
+}

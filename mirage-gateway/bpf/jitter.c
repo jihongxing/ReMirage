@@ -561,6 +561,22 @@ int vpc_ingress_detect(struct __sk_buff *skb) {
     void *data = (void *)(long)skb->data;
     void *data_end = (void *)(long)skb->data_end;
     
+    // 0. 黑名单 LPM 查询（最高优先级）
+    struct ethhdr *eth_bl = data;
+    if ((void *)(eth_bl + 1) <= data_end && eth_bl->h_proto == bpf_htons(ETH_P_IP)) {
+        struct iphdr *ip_bl = (void *)(eth_bl + 1);
+        if ((void *)(ip_bl + 1) <= data_end) {
+            struct lpm_key bl_key = {
+                .prefixlen = 32,
+                .addr = ip_bl->saddr,
+            };
+            __u32 *blocked = bpf_map_lookup_elem(&blacklist_lpm, &bl_key);
+            if (blocked) {
+                return TC_ACT_SHOT;
+            }
+        }
+    }
+    
     // 1. 解析以太网头
     struct ethhdr *eth = data;
     if ((void *)(eth + 1) > data_end)

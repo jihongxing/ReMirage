@@ -36,11 +36,27 @@ func (e *Enforcer) CalculateCost(businessBytes, defenseBytes uint64, multiplier 
 // Settle 结算流量（事务原子操作）
 // 优先使用 userID 精确扣费；userID 为空时 fallback 到 gateway→cell 关联
 func (e *Enforcer) Settle(gatewayID string, businessBytes, defenseBytes uint64, periodSeconds int32) (remainingQuota float64, err error) {
-	return e.SettleForUser(gatewayID, "", businessBytes, defenseBytes, periodSeconds)
+	return e.SettleForUser(gatewayID, "", businessBytes, defenseBytes, periodSeconds, "", 0)
 }
 
 // SettleForUser 按精确 user_id 结算流量
-func (e *Enforcer) SettleForUser(gatewayID, userID string, businessBytes, defenseBytes uint64, periodSeconds int32) (remainingQuota float64, err error) {
+func (e *Enforcer) SettleForUser(gatewayID, userID string, businessBytes, defenseBytes uint64, periodSeconds int32, sessionID ...interface{}) (remainingQuota float64, err error) {
+	// 解析可选参数 sessionID 和 sequenceNumber
+	var sessID string
+	var seqNum uint64
+	if len(sessionID) >= 1 {
+		if v, ok := sessionID[0].(string); ok {
+			sessID = v
+		}
+	}
+	if len(sessionID) >= 2 {
+		switch v := sessionID[1].(type) {
+		case uint64:
+			seqNum = v
+		case int:
+			seqNum = uint64(v)
+		}
+	}
 	if businessBytes == 0 && defenseBytes == 0 {
 		if userID != "" {
 			return e.GetRemainingQuotaByUser(userID)
@@ -106,11 +122,19 @@ func (e *Enforcer) SettleForUser(gatewayID, userID string, businessBytes, defens
 		return 0, fmt.Errorf("update quota: %w", err)
 	}
 
-	// 插入 billing_log
-	_, err = tx.Exec(`
-		INSERT INTO billing_logs (user_id, gateway_id, business_bytes, defense_bytes, business_cost, defense_cost, total_cost, period_seconds)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, userID, gatewayID, businessBytes, defenseBytes, businessCost, defenseCost, totalCost, periodSeconds)
+	// 插入 billing_log（携带 session_id 和 sequence_number）
+	if seqNum > 0 {
+		_, err = tx.Exec(`
+			INSERT INTO billing_logs (user_id, gateway_id, business_bytes, defense_bytes, business_cost, defense_cost, total_cost, period_seconds, session_id, sequence_number)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			ON CONFLICT (gateway_id, sequence_number) DO NOTHING
+		`, userID, gatewayID, businessBytes, defenseBytes, businessCost, defenseCost, totalCost, periodSeconds, nullIfEmpty(sessID), seqNum)
+	} else {
+		_, err = tx.Exec(`
+			INSERT INTO billing_logs (user_id, gateway_id, business_bytes, defense_bytes, business_cost, defense_cost, total_cost, period_seconds, session_id)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		`, userID, gatewayID, businessBytes, defenseBytes, businessCost, defenseCost, totalCost, periodSeconds, nullIfEmpty(sessID))
+	}
 	if err != nil {
 		return 0, fmt.Errorf("insert billing log: %w", err)
 	}
@@ -148,4 +172,12 @@ func (e *Enforcer) GetRemainingQuota(gatewayID string) (float64, error) {
 		return 0, fmt.Errorf("get remaining quota: %w", err)
 	}
 	return quota, nil
+}
+
+// nullIfEmpty returns nil for empty strings (maps to SQL NULL)
+func nullIfEmpty(s string) interface{} {
+	if s == "" {
+		return nil
+	}
+	return s
 }

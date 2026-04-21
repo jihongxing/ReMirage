@@ -245,6 +245,20 @@ struct {
     __type(value, __u32);       // 0=正常, 1=Ghost Mode
 } ghost_mode_map SEC(".maps");
 
+// 黑名单 LPM Trie Map（入口 IP 匹配）
+struct lpm_key {
+    __u32 prefixlen;
+    __u32 addr;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_LPM_TRIE);
+    __uint(max_entries, 65536);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __type(key, struct lpm_key);
+    __type(value, __u32);
+} blacklist_lpm SEC(".maps");
+
 // 威胁事件 Ring Buffer（C → Go）
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);

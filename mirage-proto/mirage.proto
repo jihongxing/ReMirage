@@ -7,6 +7,8 @@ service GatewayUplink {
     rpc SyncHeartbeat(HeartbeatRequest) returns (HeartbeatResponse);
     rpc ReportTraffic(TrafficRequest) returns (TrafficResponse);
     rpc ReportThreat(ThreatRequest) returns (ThreatResponse);
+    rpc ReportSessionEvent(SessionEventRequest) returns (SessionEventResponse);
+    rpc RegisterGateway(RegisterRequest) returns (RegisterResponse);
 }
 
 // ========== 下行服务（OS → Gateway）==========
@@ -39,6 +41,27 @@ enum BlacklistSourceType {
     BL_GLOBAL = 1;
 }
 
+// ========== 注册消息 ==========
+message RegisterRequest {
+    string gateway_id = 1;
+    string cell_id = 2;
+    string downlink_addr = 3;
+    string version = 4;
+    GatewayCapabilities capabilities = 5;
+}
+
+message GatewayCapabilities {
+    bool ebpf_supported = 1;
+    int32 max_connections = 2;
+    int32 max_sessions = 3;
+}
+
+message RegisterResponse {
+    bool success = 1;
+    string message = 2;
+    string assigned_cell_id = 3;
+}
+
 // ========== 上行消息 ==========
 message HeartbeatRequest {
     string gateway_id = 1;
@@ -48,12 +71,28 @@ message HeartbeatRequest {
     int32 threat_level = 5;
     int64 active_connections = 6;
     int32 memory_usage_mb = 7;
+    repeated UserQuotaSummary user_quotas = 8;
+    // 新增：拓扑语义
+    string downlink_addr = 9;
+    string cell_id = 10;
+    int32 active_sessions = 11;
+    string state_hash = 12;
+    string version = 13;
+}
+
+message UserQuotaSummary {
+    string user_id = 1;
+    uint64 remaining_bytes = 2;
+    int32 active_sessions = 3;
 }
 
 message HeartbeatResponse {
     bool ack = 1;
     int64 server_time = 2;
     double remaining_quota = 3;
+    // 新增：状态对齐
+    bool needs_full_sync = 4;
+    string desired_state_hash = 5;
 }
 
 message TrafficRequest {
@@ -62,6 +101,9 @@ message TrafficRequest {
     uint64 business_bytes = 3;
     uint64 defense_bytes = 4;
     int32 period_seconds = 5;
+    string user_id = 6;
+    string session_id = 7;
+    uint64 sequence_number = 8;
 }
 
 message TrafficResponse {
@@ -108,6 +150,7 @@ message StrategyPush {
 
 message QuotaPush {
     uint64 remaining_bytes = 1;
+    string user_id = 2;
 }
 
 message ReincarnationPush {
@@ -120,4 +163,24 @@ message ReincarnationPush {
 message PushResponse {
     bool success = 1;
     string message = 2;
+}
+
+// ========== 会话事件 ==========
+enum SessionEventType {
+    SESSION_CONNECTED = 0;
+    SESSION_DISCONNECTED = 1;
+    SESSION_MIGRATING = 2;
+}
+
+message SessionEventRequest {
+    string gateway_id = 1;
+    string session_id = 2;
+    string user_id = 3;
+    string client_id = 4;
+    SessionEventType event_type = 5;
+    int64 timestamp = 6;
+}
+
+message SessionEventResponse {
+    bool ack = 1;
 }

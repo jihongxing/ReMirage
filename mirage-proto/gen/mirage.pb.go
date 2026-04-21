@@ -178,6 +178,253 @@ func (BlacklistSourceType) EnumDescriptor() ([]byte, []int) {
 	return file_mirage_proto_rawDescGZIP(), []int{2}
 }
 
+// ========== 会话事件 ==========
+type SessionEventType int32
+
+const (
+	SessionEventType_SESSION_CONNECTED    SessionEventType = 0
+	SessionEventType_SESSION_DISCONNECTED SessionEventType = 1
+	SessionEventType_SESSION_MIGRATING    SessionEventType = 2
+)
+
+// Enum value maps for SessionEventType.
+var (
+	SessionEventType_name = map[int32]string{
+		0: "SESSION_CONNECTED",
+		1: "SESSION_DISCONNECTED",
+		2: "SESSION_MIGRATING",
+	}
+	SessionEventType_value = map[string]int32{
+		"SESSION_CONNECTED":    0,
+		"SESSION_DISCONNECTED": 1,
+		"SESSION_MIGRATING":    2,
+	}
+)
+
+func (x SessionEventType) Enum() *SessionEventType {
+	p := new(SessionEventType)
+	*p = x
+	return p
+}
+
+func (x SessionEventType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SessionEventType) Descriptor() protoreflect.EnumDescriptor {
+	return file_mirage_proto_enumTypes[3].Descriptor()
+}
+
+func (SessionEventType) Type() protoreflect.EnumType {
+	return &file_mirage_proto_enumTypes[3]
+}
+
+func (x SessionEventType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SessionEventType.Descriptor instead.
+func (SessionEventType) EnumDescriptor() ([]byte, []int) {
+	return file_mirage_proto_rawDescGZIP(), []int{3}
+}
+
+// ========== 注册消息 ==========
+type RegisterRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	GatewayId     string                 `protobuf:"bytes,1,opt,name=gateway_id,json=gatewayId,proto3" json:"gateway_id,omitempty"`
+	CellId        string                 `protobuf:"bytes,2,opt,name=cell_id,json=cellId,proto3" json:"cell_id,omitempty"`
+	DownlinkAddr  string                 `protobuf:"bytes,3,opt,name=downlink_addr,json=downlinkAddr,proto3" json:"downlink_addr,omitempty"`
+	Version       string                 `protobuf:"bytes,4,opt,name=version,proto3" json:"version,omitempty"`
+	Capabilities  *GatewayCapabilities   `protobuf:"bytes,5,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RegisterRequest) Reset() {
+	*x = RegisterRequest{}
+	mi := &file_mirage_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RegisterRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RegisterRequest) ProtoMessage() {}
+
+func (x *RegisterRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_mirage_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RegisterRequest.ProtoReflect.Descriptor instead.
+func (*RegisterRequest) Descriptor() ([]byte, []int) {
+	return file_mirage_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *RegisterRequest) GetGatewayId() string {
+	if x != nil {
+		return x.GatewayId
+	}
+	return ""
+}
+
+func (x *RegisterRequest) GetCellId() string {
+	if x != nil {
+		return x.CellId
+	}
+	return ""
+}
+
+func (x *RegisterRequest) GetDownlinkAddr() string {
+	if x != nil {
+		return x.DownlinkAddr
+	}
+	return ""
+}
+
+func (x *RegisterRequest) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *RegisterRequest) GetCapabilities() *GatewayCapabilities {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
+}
+
+type GatewayCapabilities struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	EbpfSupported  bool                   `protobuf:"varint,1,opt,name=ebpf_supported,json=ebpfSupported,proto3" json:"ebpf_supported,omitempty"`
+	MaxConnections int32                  `protobuf:"varint,2,opt,name=max_connections,json=maxConnections,proto3" json:"max_connections,omitempty"`
+	MaxSessions    int32                  `protobuf:"varint,3,opt,name=max_sessions,json=maxSessions,proto3" json:"max_sessions,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *GatewayCapabilities) Reset() {
+	*x = GatewayCapabilities{}
+	mi := &file_mirage_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GatewayCapabilities) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GatewayCapabilities) ProtoMessage() {}
+
+func (x *GatewayCapabilities) ProtoReflect() protoreflect.Message {
+	mi := &file_mirage_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GatewayCapabilities.ProtoReflect.Descriptor instead.
+func (*GatewayCapabilities) Descriptor() ([]byte, []int) {
+	return file_mirage_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *GatewayCapabilities) GetEbpfSupported() bool {
+	if x != nil {
+		return x.EbpfSupported
+	}
+	return false
+}
+
+func (x *GatewayCapabilities) GetMaxConnections() int32 {
+	if x != nil {
+		return x.MaxConnections
+	}
+	return 0
+}
+
+func (x *GatewayCapabilities) GetMaxSessions() int32 {
+	if x != nil {
+		return x.MaxSessions
+	}
+	return 0
+}
+
+type RegisterResponse struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Success        bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Message        string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	AssignedCellId string                 `protobuf:"bytes,3,opt,name=assigned_cell_id,json=assignedCellId,proto3" json:"assigned_cell_id,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *RegisterResponse) Reset() {
+	*x = RegisterResponse{}
+	mi := &file_mirage_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RegisterResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RegisterResponse) ProtoMessage() {}
+
+func (x *RegisterResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_mirage_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RegisterResponse.ProtoReflect.Descriptor instead.
+func (*RegisterResponse) Descriptor() ([]byte, []int) {
+	return file_mirage_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *RegisterResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *RegisterResponse) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *RegisterResponse) GetAssignedCellId() string {
+	if x != nil {
+		return x.AssignedCellId
+	}
+	return ""
+}
+
 // ========== 上行消息 ==========
 type HeartbeatRequest struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
@@ -188,13 +435,20 @@ type HeartbeatRequest struct {
 	ThreatLevel       int32                  `protobuf:"varint,5,opt,name=threat_level,json=threatLevel,proto3" json:"threat_level,omitempty"`
 	ActiveConnections int64                  `protobuf:"varint,6,opt,name=active_connections,json=activeConnections,proto3" json:"active_connections,omitempty"`
 	MemoryUsageMb     int32                  `protobuf:"varint,7,opt,name=memory_usage_mb,json=memoryUsageMb,proto3" json:"memory_usage_mb,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	UserQuotas        []*UserQuotaSummary    `protobuf:"bytes,8,rep,name=user_quotas,json=userQuotas,proto3" json:"user_quotas,omitempty"`
+	// 新增：拓扑语义
+	DownlinkAddr   string `protobuf:"bytes,9,opt,name=downlink_addr,json=downlinkAddr,proto3" json:"downlink_addr,omitempty"`
+	CellId         string `protobuf:"bytes,10,opt,name=cell_id,json=cellId,proto3" json:"cell_id,omitempty"`
+	ActiveSessions int32  `protobuf:"varint,11,opt,name=active_sessions,json=activeSessions,proto3" json:"active_sessions,omitempty"`
+	StateHash      string `protobuf:"bytes,12,opt,name=state_hash,json=stateHash,proto3" json:"state_hash,omitempty"`
+	Version        string `protobuf:"bytes,13,opt,name=version,proto3" json:"version,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *HeartbeatRequest) Reset() {
 	*x = HeartbeatRequest{}
-	mi := &file_mirage_proto_msgTypes[0]
+	mi := &file_mirage_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -206,7 +460,7 @@ func (x *HeartbeatRequest) String() string {
 func (*HeartbeatRequest) ProtoMessage() {}
 
 func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_mirage_proto_msgTypes[0]
+	mi := &file_mirage_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -219,7 +473,7 @@ func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatRequest.ProtoReflect.Descriptor instead.
 func (*HeartbeatRequest) Descriptor() ([]byte, []int) {
-	return file_mirage_proto_rawDescGZIP(), []int{0}
+	return file_mirage_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *HeartbeatRequest) GetGatewayId() string {
@@ -271,18 +525,123 @@ func (x *HeartbeatRequest) GetMemoryUsageMb() int32 {
 	return 0
 }
 
+func (x *HeartbeatRequest) GetUserQuotas() []*UserQuotaSummary {
+	if x != nil {
+		return x.UserQuotas
+	}
+	return nil
+}
+
+func (x *HeartbeatRequest) GetDownlinkAddr() string {
+	if x != nil {
+		return x.DownlinkAddr
+	}
+	return ""
+}
+
+func (x *HeartbeatRequest) GetCellId() string {
+	if x != nil {
+		return x.CellId
+	}
+	return ""
+}
+
+func (x *HeartbeatRequest) GetActiveSessions() int32 {
+	if x != nil {
+		return x.ActiveSessions
+	}
+	return 0
+}
+
+func (x *HeartbeatRequest) GetStateHash() string {
+	if x != nil {
+		return x.StateHash
+	}
+	return ""
+}
+
+func (x *HeartbeatRequest) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+type UserQuotaSummary struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	UserId         string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	RemainingBytes uint64                 `protobuf:"varint,2,opt,name=remaining_bytes,json=remainingBytes,proto3" json:"remaining_bytes,omitempty"`
+	ActiveSessions int32                  `protobuf:"varint,3,opt,name=active_sessions,json=activeSessions,proto3" json:"active_sessions,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *UserQuotaSummary) Reset() {
+	*x = UserQuotaSummary{}
+	mi := &file_mirage_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UserQuotaSummary) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UserQuotaSummary) ProtoMessage() {}
+
+func (x *UserQuotaSummary) ProtoReflect() protoreflect.Message {
+	mi := &file_mirage_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UserQuotaSummary.ProtoReflect.Descriptor instead.
+func (*UserQuotaSummary) Descriptor() ([]byte, []int) {
+	return file_mirage_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *UserQuotaSummary) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *UserQuotaSummary) GetRemainingBytes() uint64 {
+	if x != nil {
+		return x.RemainingBytes
+	}
+	return 0
+}
+
+func (x *UserQuotaSummary) GetActiveSessions() int32 {
+	if x != nil {
+		return x.ActiveSessions
+	}
+	return 0
+}
+
 type HeartbeatResponse struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	Ack            bool                   `protobuf:"varint,1,opt,name=ack,proto3" json:"ack,omitempty"`
 	ServerTime     int64                  `protobuf:"varint,2,opt,name=server_time,json=serverTime,proto3" json:"server_time,omitempty"`
 	RemainingQuota float64                `protobuf:"fixed64,3,opt,name=remaining_quota,json=remainingQuota,proto3" json:"remaining_quota,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// 新增：状态对齐
+	NeedsFullSync    bool   `protobuf:"varint,4,opt,name=needs_full_sync,json=needsFullSync,proto3" json:"needs_full_sync,omitempty"`
+	DesiredStateHash string `protobuf:"bytes,5,opt,name=desired_state_hash,json=desiredStateHash,proto3" json:"desired_state_hash,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *HeartbeatResponse) Reset() {
 	*x = HeartbeatResponse{}
-	mi := &file_mirage_proto_msgTypes[1]
+	mi := &file_mirage_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -294,7 +653,7 @@ func (x *HeartbeatResponse) String() string {
 func (*HeartbeatResponse) ProtoMessage() {}
 
 func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_mirage_proto_msgTypes[1]
+	mi := &file_mirage_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -307,7 +666,7 @@ func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatResponse.ProtoReflect.Descriptor instead.
 func (*HeartbeatResponse) Descriptor() ([]byte, []int) {
-	return file_mirage_proto_rawDescGZIP(), []int{1}
+	return file_mirage_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *HeartbeatResponse) GetAck() bool {
@@ -331,20 +690,37 @@ func (x *HeartbeatResponse) GetRemainingQuota() float64 {
 	return 0
 }
 
+func (x *HeartbeatResponse) GetNeedsFullSync() bool {
+	if x != nil {
+		return x.NeedsFullSync
+	}
+	return false
+}
+
+func (x *HeartbeatResponse) GetDesiredStateHash() string {
+	if x != nil {
+		return x.DesiredStateHash
+	}
+	return ""
+}
+
 type TrafficRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	GatewayId     string                 `protobuf:"bytes,1,opt,name=gateway_id,json=gatewayId,proto3" json:"gateway_id,omitempty"`
-	Timestamp     int64                  `protobuf:"varint,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
-	BusinessBytes uint64                 `protobuf:"varint,3,opt,name=business_bytes,json=businessBytes,proto3" json:"business_bytes,omitempty"`
-	DefenseBytes  uint64                 `protobuf:"varint,4,opt,name=defense_bytes,json=defenseBytes,proto3" json:"defense_bytes,omitempty"`
-	PeriodSeconds int32                  `protobuf:"varint,5,opt,name=period_seconds,json=periodSeconds,proto3" json:"period_seconds,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	GatewayId      string                 `protobuf:"bytes,1,opt,name=gateway_id,json=gatewayId,proto3" json:"gateway_id,omitempty"`
+	Timestamp      int64                  `protobuf:"varint,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	BusinessBytes  uint64                 `protobuf:"varint,3,opt,name=business_bytes,json=businessBytes,proto3" json:"business_bytes,omitempty"`
+	DefenseBytes   uint64                 `protobuf:"varint,4,opt,name=defense_bytes,json=defenseBytes,proto3" json:"defense_bytes,omitempty"`
+	PeriodSeconds  int32                  `protobuf:"varint,5,opt,name=period_seconds,json=periodSeconds,proto3" json:"period_seconds,omitempty"`
+	UserId         string                 `protobuf:"bytes,6,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	SessionId      string                 `protobuf:"bytes,7,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	SequenceNumber uint64                 `protobuf:"varint,8,opt,name=sequence_number,json=sequenceNumber,proto3" json:"sequence_number,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *TrafficRequest) Reset() {
 	*x = TrafficRequest{}
-	mi := &file_mirage_proto_msgTypes[2]
+	mi := &file_mirage_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -356,7 +732,7 @@ func (x *TrafficRequest) String() string {
 func (*TrafficRequest) ProtoMessage() {}
 
 func (x *TrafficRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_mirage_proto_msgTypes[2]
+	mi := &file_mirage_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -369,7 +745,7 @@ func (x *TrafficRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TrafficRequest.ProtoReflect.Descriptor instead.
 func (*TrafficRequest) Descriptor() ([]byte, []int) {
-	return file_mirage_proto_rawDescGZIP(), []int{2}
+	return file_mirage_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *TrafficRequest) GetGatewayId() string {
@@ -407,6 +783,27 @@ func (x *TrafficRequest) GetPeriodSeconds() int32 {
 	return 0
 }
 
+func (x *TrafficRequest) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *TrafficRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *TrafficRequest) GetSequenceNumber() uint64 {
+	if x != nil {
+		return x.SequenceNumber
+	}
+	return 0
+}
+
 type TrafficResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Ack           bool                   `protobuf:"varint,1,opt,name=ack,proto3" json:"ack,omitempty"`
@@ -416,7 +813,7 @@ type TrafficResponse struct {
 
 func (x *TrafficResponse) Reset() {
 	*x = TrafficResponse{}
-	mi := &file_mirage_proto_msgTypes[3]
+	mi := &file_mirage_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -428,7 +825,7 @@ func (x *TrafficResponse) String() string {
 func (*TrafficResponse) ProtoMessage() {}
 
 func (x *TrafficResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_mirage_proto_msgTypes[3]
+	mi := &file_mirage_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -441,7 +838,7 @@ func (x *TrafficResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TrafficResponse.ProtoReflect.Descriptor instead.
 func (*TrafficResponse) Descriptor() ([]byte, []int) {
-	return file_mirage_proto_rawDescGZIP(), []int{3}
+	return file_mirage_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *TrafficResponse) GetAck() bool {
@@ -465,7 +862,7 @@ type ThreatEvent struct {
 
 func (x *ThreatEvent) Reset() {
 	*x = ThreatEvent{}
-	mi := &file_mirage_proto_msgTypes[4]
+	mi := &file_mirage_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -477,7 +874,7 @@ func (x *ThreatEvent) String() string {
 func (*ThreatEvent) ProtoMessage() {}
 
 func (x *ThreatEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_mirage_proto_msgTypes[4]
+	mi := &file_mirage_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -490,7 +887,7 @@ func (x *ThreatEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ThreatEvent.ProtoReflect.Descriptor instead.
 func (*ThreatEvent) Descriptor() ([]byte, []int) {
-	return file_mirage_proto_rawDescGZIP(), []int{4}
+	return file_mirage_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ThreatEvent) GetTimestamp() int64 {
@@ -545,7 +942,7 @@ type ThreatRequest struct {
 
 func (x *ThreatRequest) Reset() {
 	*x = ThreatRequest{}
-	mi := &file_mirage_proto_msgTypes[5]
+	mi := &file_mirage_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -557,7 +954,7 @@ func (x *ThreatRequest) String() string {
 func (*ThreatRequest) ProtoMessage() {}
 
 func (x *ThreatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_mirage_proto_msgTypes[5]
+	mi := &file_mirage_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -570,7 +967,7 @@ func (x *ThreatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ThreatRequest.ProtoReflect.Descriptor instead.
 func (*ThreatRequest) Descriptor() ([]byte, []int) {
-	return file_mirage_proto_rawDescGZIP(), []int{5}
+	return file_mirage_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ThreatRequest) GetGatewayId() string {
@@ -596,7 +993,7 @@ type ThreatResponse struct {
 
 func (x *ThreatResponse) Reset() {
 	*x = ThreatResponse{}
-	mi := &file_mirage_proto_msgTypes[6]
+	mi := &file_mirage_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -608,7 +1005,7 @@ func (x *ThreatResponse) String() string {
 func (*ThreatResponse) ProtoMessage() {}
 
 func (x *ThreatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_mirage_proto_msgTypes[6]
+	mi := &file_mirage_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -621,7 +1018,7 @@ func (x *ThreatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ThreatResponse.ProtoReflect.Descriptor instead.
 func (*ThreatResponse) Descriptor() ([]byte, []int) {
-	return file_mirage_proto_rawDescGZIP(), []int{6}
+	return file_mirage_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ThreatResponse) GetAck() bool {
@@ -643,7 +1040,7 @@ type BlacklistEntryProto struct {
 
 func (x *BlacklistEntryProto) Reset() {
 	*x = BlacklistEntryProto{}
-	mi := &file_mirage_proto_msgTypes[7]
+	mi := &file_mirage_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -655,7 +1052,7 @@ func (x *BlacklistEntryProto) String() string {
 func (*BlacklistEntryProto) ProtoMessage() {}
 
 func (x *BlacklistEntryProto) ProtoReflect() protoreflect.Message {
-	mi := &file_mirage_proto_msgTypes[7]
+	mi := &file_mirage_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -668,7 +1065,7 @@ func (x *BlacklistEntryProto) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BlacklistEntryProto.ProtoReflect.Descriptor instead.
 func (*BlacklistEntryProto) Descriptor() ([]byte, []int) {
-	return file_mirage_proto_rawDescGZIP(), []int{7}
+	return file_mirage_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *BlacklistEntryProto) GetCidr() string {
@@ -701,7 +1098,7 @@ type BlacklistPush struct {
 
 func (x *BlacklistPush) Reset() {
 	*x = BlacklistPush{}
-	mi := &file_mirage_proto_msgTypes[8]
+	mi := &file_mirage_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -713,7 +1110,7 @@ func (x *BlacklistPush) String() string {
 func (*BlacklistPush) ProtoMessage() {}
 
 func (x *BlacklistPush) ProtoReflect() protoreflect.Message {
-	mi := &file_mirage_proto_msgTypes[8]
+	mi := &file_mirage_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -726,7 +1123,7 @@ func (x *BlacklistPush) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BlacklistPush.ProtoReflect.Descriptor instead.
 func (*BlacklistPush) Descriptor() ([]byte, []int) {
-	return file_mirage_proto_rawDescGZIP(), []int{8}
+	return file_mirage_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *BlacklistPush) GetEntries() []*BlacklistEntryProto {
@@ -750,7 +1147,7 @@ type StrategyPush struct {
 
 func (x *StrategyPush) Reset() {
 	*x = StrategyPush{}
-	mi := &file_mirage_proto_msgTypes[9]
+	mi := &file_mirage_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -762,7 +1159,7 @@ func (x *StrategyPush) String() string {
 func (*StrategyPush) ProtoMessage() {}
 
 func (x *StrategyPush) ProtoReflect() protoreflect.Message {
-	mi := &file_mirage_proto_msgTypes[9]
+	mi := &file_mirage_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -775,7 +1172,7 @@ func (x *StrategyPush) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StrategyPush.ProtoReflect.Descriptor instead.
 func (*StrategyPush) Descriptor() ([]byte, []int) {
-	return file_mirage_proto_rawDescGZIP(), []int{9}
+	return file_mirage_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *StrategyPush) GetDefenseLevel() int32 {
@@ -823,13 +1220,14 @@ func (x *StrategyPush) GetTemplateId() uint32 {
 type QuotaPush struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	RemainingBytes uint64                 `protobuf:"varint,1,opt,name=remaining_bytes,json=remainingBytes,proto3" json:"remaining_bytes,omitempty"`
+	UserId         string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
 
 func (x *QuotaPush) Reset() {
 	*x = QuotaPush{}
-	mi := &file_mirage_proto_msgTypes[10]
+	mi := &file_mirage_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -841,7 +1239,7 @@ func (x *QuotaPush) String() string {
 func (*QuotaPush) ProtoMessage() {}
 
 func (x *QuotaPush) ProtoReflect() protoreflect.Message {
-	mi := &file_mirage_proto_msgTypes[10]
+	mi := &file_mirage_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -854,7 +1252,7 @@ func (x *QuotaPush) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QuotaPush.ProtoReflect.Descriptor instead.
 func (*QuotaPush) Descriptor() ([]byte, []int) {
-	return file_mirage_proto_rawDescGZIP(), []int{10}
+	return file_mirage_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *QuotaPush) GetRemainingBytes() uint64 {
@@ -862,6 +1260,13 @@ func (x *QuotaPush) GetRemainingBytes() uint64 {
 		return x.RemainingBytes
 	}
 	return 0
+}
+
+func (x *QuotaPush) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
 }
 
 type ReincarnationPush struct {
@@ -876,7 +1281,7 @@ type ReincarnationPush struct {
 
 func (x *ReincarnationPush) Reset() {
 	*x = ReincarnationPush{}
-	mi := &file_mirage_proto_msgTypes[11]
+	mi := &file_mirage_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -888,7 +1293,7 @@ func (x *ReincarnationPush) String() string {
 func (*ReincarnationPush) ProtoMessage() {}
 
 func (x *ReincarnationPush) ProtoReflect() protoreflect.Message {
-	mi := &file_mirage_proto_msgTypes[11]
+	mi := &file_mirage_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -901,7 +1306,7 @@ func (x *ReincarnationPush) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReincarnationPush.ProtoReflect.Descriptor instead.
 func (*ReincarnationPush) Descriptor() ([]byte, []int) {
-	return file_mirage_proto_rawDescGZIP(), []int{11}
+	return file_mirage_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ReincarnationPush) GetNewDomain() string {
@@ -942,7 +1347,7 @@ type PushResponse struct {
 
 func (x *PushResponse) Reset() {
 	*x = PushResponse{}
-	mi := &file_mirage_proto_msgTypes[12]
+	mi := &file_mirage_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -954,7 +1359,7 @@ func (x *PushResponse) String() string {
 func (*PushResponse) ProtoMessage() {}
 
 func (x *PushResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_mirage_proto_msgTypes[12]
+	mi := &file_mirage_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -967,7 +1372,7 @@ func (x *PushResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PushResponse.ProtoReflect.Descriptor instead.
 func (*PushResponse) Descriptor() ([]byte, []int) {
-	return file_mirage_proto_rawDescGZIP(), []int{12}
+	return file_mirage_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *PushResponse) GetSuccess() bool {
@@ -984,11 +1389,154 @@ func (x *PushResponse) GetMessage() string {
 	return ""
 }
 
+type SessionEventRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	GatewayId     string                 `protobuf:"bytes,1,opt,name=gateway_id,json=gatewayId,proto3" json:"gateway_id,omitempty"`
+	SessionId     string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	UserId        string                 `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	ClientId      string                 `protobuf:"bytes,4,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	EventType     SessionEventType       `protobuf:"varint,5,opt,name=event_type,json=eventType,proto3,enum=mirage.SessionEventType" json:"event_type,omitempty"`
+	Timestamp     int64                  `protobuf:"varint,6,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SessionEventRequest) Reset() {
+	*x = SessionEventRequest{}
+	mi := &file_mirage_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionEventRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionEventRequest) ProtoMessage() {}
+
+func (x *SessionEventRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_mirage_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionEventRequest.ProtoReflect.Descriptor instead.
+func (*SessionEventRequest) Descriptor() ([]byte, []int) {
+	return file_mirage_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *SessionEventRequest) GetGatewayId() string {
+	if x != nil {
+		return x.GatewayId
+	}
+	return ""
+}
+
+func (x *SessionEventRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *SessionEventRequest) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *SessionEventRequest) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *SessionEventRequest) GetEventType() SessionEventType {
+	if x != nil {
+		return x.EventType
+	}
+	return SessionEventType_SESSION_CONNECTED
+}
+
+func (x *SessionEventRequest) GetTimestamp() int64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+type SessionEventResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ack           bool                   `protobuf:"varint,1,opt,name=ack,proto3" json:"ack,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SessionEventResponse) Reset() {
+	*x = SessionEventResponse{}
+	mi := &file_mirage_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionEventResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionEventResponse) ProtoMessage() {}
+
+func (x *SessionEventResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_mirage_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionEventResponse.ProtoReflect.Descriptor instead.
+func (*SessionEventResponse) Descriptor() ([]byte, []int) {
+	return file_mirage_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *SessionEventResponse) GetAck() bool {
+	if x != nil {
+		return x.Ack
+	}
+	return false
+}
+
 var File_mirage_proto protoreflect.FileDescriptor
 
 const file_mirage_proto_rawDesc = "" +
 	"\n" +
-	"\fmirage.proto\x12\x06mirage\"\x99\x02\n" +
+	"\fmirage.proto\x12\x06mirage\"\xc9\x01\n" +
+	"\x0fRegisterRequest\x12\x1d\n" +
+	"\n" +
+	"gateway_id\x18\x01 \x01(\tR\tgatewayId\x12\x17\n" +
+	"\acell_id\x18\x02 \x01(\tR\x06cellId\x12#\n" +
+	"\rdownlink_addr\x18\x03 \x01(\tR\fdownlinkAddr\x12\x18\n" +
+	"\aversion\x18\x04 \x01(\tR\aversion\x12?\n" +
+	"\fcapabilities\x18\x05 \x01(\v2\x1b.mirage.GatewayCapabilitiesR\fcapabilities\"\x88\x01\n" +
+	"\x13GatewayCapabilities\x12%\n" +
+	"\x0eebpf_supported\x18\x01 \x01(\bR\rebpfSupported\x12'\n" +
+	"\x0fmax_connections\x18\x02 \x01(\x05R\x0emaxConnections\x12!\n" +
+	"\fmax_sessions\x18\x03 \x01(\x05R\vmaxSessions\"p\n" +
+	"\x10RegisterResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\x12(\n" +
+	"\x10assigned_cell_id\x18\x03 \x01(\tR\x0eassignedCellId\"\xf4\x03\n" +
 	"\x10HeartbeatRequest\x12\x1d\n" +
 	"\n" +
 	"gateway_id\x18\x01 \x01(\tR\tgatewayId\x12\x1c\n" +
@@ -998,19 +1546,38 @@ const file_mirage_proto_rawDesc = "" +
 	"ebpfLoaded\x12!\n" +
 	"\fthreat_level\x18\x05 \x01(\x05R\vthreatLevel\x12-\n" +
 	"\x12active_connections\x18\x06 \x01(\x03R\x11activeConnections\x12&\n" +
-	"\x0fmemory_usage_mb\x18\a \x01(\x05R\rmemoryUsageMb\"o\n" +
+	"\x0fmemory_usage_mb\x18\a \x01(\x05R\rmemoryUsageMb\x129\n" +
+	"\vuser_quotas\x18\b \x03(\v2\x18.mirage.UserQuotaSummaryR\n" +
+	"userQuotas\x12#\n" +
+	"\rdownlink_addr\x18\t \x01(\tR\fdownlinkAddr\x12\x17\n" +
+	"\acell_id\x18\n" +
+	" \x01(\tR\x06cellId\x12'\n" +
+	"\x0factive_sessions\x18\v \x01(\x05R\x0eactiveSessions\x12\x1d\n" +
+	"\n" +
+	"state_hash\x18\f \x01(\tR\tstateHash\x12\x18\n" +
+	"\aversion\x18\r \x01(\tR\aversion\"}\n" +
+	"\x10UserQuotaSummary\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\x12'\n" +
+	"\x0fremaining_bytes\x18\x02 \x01(\x04R\x0eremainingBytes\x12'\n" +
+	"\x0factive_sessions\x18\x03 \x01(\x05R\x0eactiveSessions\"\xc5\x01\n" +
 	"\x11HeartbeatResponse\x12\x10\n" +
 	"\x03ack\x18\x01 \x01(\bR\x03ack\x12\x1f\n" +
 	"\vserver_time\x18\x02 \x01(\x03R\n" +
 	"serverTime\x12'\n" +
-	"\x0fremaining_quota\x18\x03 \x01(\x01R\x0eremainingQuota\"\xc0\x01\n" +
+	"\x0fremaining_quota\x18\x03 \x01(\x01R\x0eremainingQuota\x12&\n" +
+	"\x0fneeds_full_sync\x18\x04 \x01(\bR\rneedsFullSync\x12,\n" +
+	"\x12desired_state_hash\x18\x05 \x01(\tR\x10desiredStateHash\"\xa1\x02\n" +
 	"\x0eTrafficRequest\x12\x1d\n" +
 	"\n" +
 	"gateway_id\x18\x01 \x01(\tR\tgatewayId\x12\x1c\n" +
 	"\ttimestamp\x18\x02 \x01(\x03R\ttimestamp\x12%\n" +
 	"\x0ebusiness_bytes\x18\x03 \x01(\x04R\rbusinessBytes\x12#\n" +
 	"\rdefense_bytes\x18\x04 \x01(\x04R\fdefenseBytes\x12%\n" +
-	"\x0eperiod_seconds\x18\x05 \x01(\x05R\rperiodSeconds\"#\n" +
+	"\x0eperiod_seconds\x18\x05 \x01(\x05R\rperiodSeconds\x12\x17\n" +
+	"\auser_id\x18\x06 \x01(\tR\x06userId\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\a \x01(\tR\tsessionId\x12'\n" +
+	"\x0fsequence_number\x18\b \x01(\x04R\x0esequenceNumber\"#\n" +
 	"\x0fTrafficResponse\x12\x10\n" +
 	"\x03ack\x18\x01 \x01(\bR\x03ack\"\xdd\x01\n" +
 	"\vThreatEvent\x12\x1c\n" +
@@ -1041,9 +1608,10 @@ const file_mirage_proto_rawDesc = "" +
 	"\x0fnoise_intensity\x18\x04 \x01(\rR\x0enoiseIntensity\x12!\n" +
 	"\fpadding_rate\x18\x05 \x01(\rR\vpaddingRate\x12\x1f\n" +
 	"\vtemplate_id\x18\x06 \x01(\rR\n" +
-	"templateId\"4\n" +
+	"templateId\"M\n" +
 	"\tQuotaPush\x12'\n" +
-	"\x0fremaining_bytes\x18\x01 \x01(\x04R\x0eremainingBytes\"\x8c\x01\n" +
+	"\x0fremaining_bytes\x18\x01 \x01(\x04R\x0eremainingBytes\x12\x17\n" +
+	"\auser_id\x18\x02 \x01(\tR\x06userId\"\x8c\x01\n" +
 	"\x11ReincarnationPush\x12\x1d\n" +
 	"\n" +
 	"new_domain\x18\x01 \x01(\tR\tnewDomain\x12\x15\n" +
@@ -1052,7 +1620,19 @@ const file_mirage_proto_rawDesc = "" +
 	"\x10deadline_seconds\x18\x04 \x01(\x05R\x0fdeadlineSeconds\"B\n" +
 	"\fPushResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage*8\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xe0\x01\n" +
+	"\x13SessionEventRequest\x12\x1d\n" +
+	"\n" +
+	"gateway_id\x18\x01 \x01(\tR\tgatewayId\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12\x17\n" +
+	"\auser_id\x18\x03 \x01(\tR\x06userId\x12\x1b\n" +
+	"\tclient_id\x18\x04 \x01(\tR\bclientId\x127\n" +
+	"\n" +
+	"event_type\x18\x05 \x01(\x0e2\x18.mirage.SessionEventTypeR\teventType\x12\x1c\n" +
+	"\ttimestamp\x18\x06 \x01(\x03R\ttimestamp\"(\n" +
+	"\x14SessionEventResponse\x12\x10\n" +
+	"\x03ack\x18\x01 \x01(\bR\x03ack*8\n" +
 	"\rGatewayStatus\x12\n" +
 	"\n" +
 	"\x06ONLINE\x10\x00\x12\f\n" +
@@ -1069,11 +1649,17 @@ const file_mirage_proto_rawDesc = "" +
 	"\tSNI_PROBE\x10\x06*2\n" +
 	"\x13BlacklistSourceType\x12\f\n" +
 	"\bBL_LOCAL\x10\x00\x12\r\n" +
-	"\tBL_GLOBAL\x10\x012\xd6\x01\n" +
+	"\tBL_GLOBAL\x10\x01*Z\n" +
+	"\x10SessionEventType\x12\x15\n" +
+	"\x11SESSION_CONNECTED\x10\x00\x12\x18\n" +
+	"\x14SESSION_DISCONNECTED\x10\x01\x12\x15\n" +
+	"\x11SESSION_MIGRATING\x10\x022\xed\x02\n" +
 	"\rGatewayUplink\x12D\n" +
 	"\rSyncHeartbeat\x12\x18.mirage.HeartbeatRequest\x1a\x19.mirage.HeartbeatResponse\x12@\n" +
 	"\rReportTraffic\x12\x16.mirage.TrafficRequest\x1a\x17.mirage.TrafficResponse\x12=\n" +
-	"\fReportThreat\x12\x15.mirage.ThreatRequest\x1a\x16.mirage.ThreatResponse2\x87\x02\n" +
+	"\fReportThreat\x12\x15.mirage.ThreatRequest\x1a\x16.mirage.ThreatResponse\x12O\n" +
+	"\x12ReportSessionEvent\x12\x1b.mirage.SessionEventRequest\x1a\x1c.mirage.SessionEventResponse\x12D\n" +
+	"\x0fRegisterGateway\x12\x17.mirage.RegisterRequest\x1a\x18.mirage.RegisterResponse2\x87\x02\n" +
 	"\x0fGatewayDownlink\x12<\n" +
 	"\rPushBlacklist\x12\x15.mirage.BlacklistPush\x1a\x14.mirage.PushResponse\x12:\n" +
 	"\fPushStrategy\x12\x14.mirage.StrategyPush\x1a\x14.mirage.PushResponse\x124\n" +
@@ -1092,51 +1678,65 @@ func file_mirage_proto_rawDescGZIP() []byte {
 	return file_mirage_proto_rawDescData
 }
 
-var file_mirage_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_mirage_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_mirage_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_mirage_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_mirage_proto_goTypes = []any{
-	(GatewayStatus)(0),          // 0: mirage.GatewayStatus
-	(ThreatType)(0),             // 1: mirage.ThreatType
-	(BlacklistSourceType)(0),    // 2: mirage.BlacklistSourceType
-	(*HeartbeatRequest)(nil),    // 3: mirage.HeartbeatRequest
-	(*HeartbeatResponse)(nil),   // 4: mirage.HeartbeatResponse
-	(*TrafficRequest)(nil),      // 5: mirage.TrafficRequest
-	(*TrafficResponse)(nil),     // 6: mirage.TrafficResponse
-	(*ThreatEvent)(nil),         // 7: mirage.ThreatEvent
-	(*ThreatRequest)(nil),       // 8: mirage.ThreatRequest
-	(*ThreatResponse)(nil),      // 9: mirage.ThreatResponse
-	(*BlacklistEntryProto)(nil), // 10: mirage.BlacklistEntryProto
-	(*BlacklistPush)(nil),       // 11: mirage.BlacklistPush
-	(*StrategyPush)(nil),        // 12: mirage.StrategyPush
-	(*QuotaPush)(nil),           // 13: mirage.QuotaPush
-	(*ReincarnationPush)(nil),   // 14: mirage.ReincarnationPush
-	(*PushResponse)(nil),        // 15: mirage.PushResponse
+	(GatewayStatus)(0),           // 0: mirage.GatewayStatus
+	(ThreatType)(0),              // 1: mirage.ThreatType
+	(BlacklistSourceType)(0),     // 2: mirage.BlacklistSourceType
+	(SessionEventType)(0),        // 3: mirage.SessionEventType
+	(*RegisterRequest)(nil),      // 4: mirage.RegisterRequest
+	(*GatewayCapabilities)(nil),  // 5: mirage.GatewayCapabilities
+	(*RegisterResponse)(nil),     // 6: mirage.RegisterResponse
+	(*HeartbeatRequest)(nil),     // 7: mirage.HeartbeatRequest
+	(*UserQuotaSummary)(nil),     // 8: mirage.UserQuotaSummary
+	(*HeartbeatResponse)(nil),    // 9: mirage.HeartbeatResponse
+	(*TrafficRequest)(nil),       // 10: mirage.TrafficRequest
+	(*TrafficResponse)(nil),      // 11: mirage.TrafficResponse
+	(*ThreatEvent)(nil),          // 12: mirage.ThreatEvent
+	(*ThreatRequest)(nil),        // 13: mirage.ThreatRequest
+	(*ThreatResponse)(nil),       // 14: mirage.ThreatResponse
+	(*BlacklistEntryProto)(nil),  // 15: mirage.BlacklistEntryProto
+	(*BlacklistPush)(nil),        // 16: mirage.BlacklistPush
+	(*StrategyPush)(nil),         // 17: mirage.StrategyPush
+	(*QuotaPush)(nil),            // 18: mirage.QuotaPush
+	(*ReincarnationPush)(nil),    // 19: mirage.ReincarnationPush
+	(*PushResponse)(nil),         // 20: mirage.PushResponse
+	(*SessionEventRequest)(nil),  // 21: mirage.SessionEventRequest
+	(*SessionEventResponse)(nil), // 22: mirage.SessionEventResponse
 }
 var file_mirage_proto_depIdxs = []int32{
-	0,  // 0: mirage.HeartbeatRequest.status:type_name -> mirage.GatewayStatus
-	1,  // 1: mirage.ThreatEvent.threat_type:type_name -> mirage.ThreatType
-	7,  // 2: mirage.ThreatRequest.events:type_name -> mirage.ThreatEvent
-	2,  // 3: mirage.BlacklistEntryProto.source:type_name -> mirage.BlacklistSourceType
-	10, // 4: mirage.BlacklistPush.entries:type_name -> mirage.BlacklistEntryProto
-	3,  // 5: mirage.GatewayUplink.SyncHeartbeat:input_type -> mirage.HeartbeatRequest
-	5,  // 6: mirage.GatewayUplink.ReportTraffic:input_type -> mirage.TrafficRequest
-	8,  // 7: mirage.GatewayUplink.ReportThreat:input_type -> mirage.ThreatRequest
-	11, // 8: mirage.GatewayDownlink.PushBlacklist:input_type -> mirage.BlacklistPush
-	12, // 9: mirage.GatewayDownlink.PushStrategy:input_type -> mirage.StrategyPush
-	13, // 10: mirage.GatewayDownlink.PushQuota:input_type -> mirage.QuotaPush
-	14, // 11: mirage.GatewayDownlink.PushReincarnation:input_type -> mirage.ReincarnationPush
-	4,  // 12: mirage.GatewayUplink.SyncHeartbeat:output_type -> mirage.HeartbeatResponse
-	6,  // 13: mirage.GatewayUplink.ReportTraffic:output_type -> mirage.TrafficResponse
-	9,  // 14: mirage.GatewayUplink.ReportThreat:output_type -> mirage.ThreatResponse
-	15, // 15: mirage.GatewayDownlink.PushBlacklist:output_type -> mirage.PushResponse
-	15, // 16: mirage.GatewayDownlink.PushStrategy:output_type -> mirage.PushResponse
-	15, // 17: mirage.GatewayDownlink.PushQuota:output_type -> mirage.PushResponse
-	15, // 18: mirage.GatewayDownlink.PushReincarnation:output_type -> mirage.PushResponse
-	12, // [12:19] is the sub-list for method output_type
-	5,  // [5:12] is the sub-list for method input_type
-	5,  // [5:5] is the sub-list for extension type_name
-	5,  // [5:5] is the sub-list for extension extendee
-	0,  // [0:5] is the sub-list for field type_name
+	5,  // 0: mirage.RegisterRequest.capabilities:type_name -> mirage.GatewayCapabilities
+	0,  // 1: mirage.HeartbeatRequest.status:type_name -> mirage.GatewayStatus
+	8,  // 2: mirage.HeartbeatRequest.user_quotas:type_name -> mirage.UserQuotaSummary
+	1,  // 3: mirage.ThreatEvent.threat_type:type_name -> mirage.ThreatType
+	12, // 4: mirage.ThreatRequest.events:type_name -> mirage.ThreatEvent
+	2,  // 5: mirage.BlacklistEntryProto.source:type_name -> mirage.BlacklistSourceType
+	15, // 6: mirage.BlacklistPush.entries:type_name -> mirage.BlacklistEntryProto
+	3,  // 7: mirage.SessionEventRequest.event_type:type_name -> mirage.SessionEventType
+	7,  // 8: mirage.GatewayUplink.SyncHeartbeat:input_type -> mirage.HeartbeatRequest
+	10, // 9: mirage.GatewayUplink.ReportTraffic:input_type -> mirage.TrafficRequest
+	13, // 10: mirage.GatewayUplink.ReportThreat:input_type -> mirage.ThreatRequest
+	21, // 11: mirage.GatewayUplink.ReportSessionEvent:input_type -> mirage.SessionEventRequest
+	4,  // 12: mirage.GatewayUplink.RegisterGateway:input_type -> mirage.RegisterRequest
+	16, // 13: mirage.GatewayDownlink.PushBlacklist:input_type -> mirage.BlacklistPush
+	17, // 14: mirage.GatewayDownlink.PushStrategy:input_type -> mirage.StrategyPush
+	18, // 15: mirage.GatewayDownlink.PushQuota:input_type -> mirage.QuotaPush
+	19, // 16: mirage.GatewayDownlink.PushReincarnation:input_type -> mirage.ReincarnationPush
+	9,  // 17: mirage.GatewayUplink.SyncHeartbeat:output_type -> mirage.HeartbeatResponse
+	11, // 18: mirage.GatewayUplink.ReportTraffic:output_type -> mirage.TrafficResponse
+	14, // 19: mirage.GatewayUplink.ReportThreat:output_type -> mirage.ThreatResponse
+	22, // 20: mirage.GatewayUplink.ReportSessionEvent:output_type -> mirage.SessionEventResponse
+	6,  // 21: mirage.GatewayUplink.RegisterGateway:output_type -> mirage.RegisterResponse
+	20, // 22: mirage.GatewayDownlink.PushBlacklist:output_type -> mirage.PushResponse
+	20, // 23: mirage.GatewayDownlink.PushStrategy:output_type -> mirage.PushResponse
+	20, // 24: mirage.GatewayDownlink.PushQuota:output_type -> mirage.PushResponse
+	20, // 25: mirage.GatewayDownlink.PushReincarnation:output_type -> mirage.PushResponse
+	17, // [17:26] is the sub-list for method output_type
+	8,  // [8:17] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_mirage_proto_init() }
@@ -1149,8 +1749,8 @@ func file_mirage_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_mirage_proto_rawDesc), len(file_mirage_proto_rawDesc)),
-			NumEnums:      3,
-			NumMessages:   13,
+			NumEnums:      4,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

@@ -4,7 +4,10 @@ package api
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
+	"fmt"
 	"log"
+	"mirage-gateway/pkg/security"
 	pb "mirage-proto/gen"
 	"sync"
 	"sync/atomic"
@@ -12,7 +15,6 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // GRPCClient 上行 gRPC 客户端
@@ -28,6 +30,7 @@ type GRPCClient struct {
 	mu                sync.Mutex
 	maxBuffer         int
 	heartbeatCallback func() // 心跳成功回调（喂看门狗）
+	certPin           *security.CertPin
 }
 
 // NewGRPCClient 创建客户端
@@ -43,12 +46,32 @@ func NewGRPCClient(endpoint, gatewayID string, tlsConfig *tls.Config) *GRPCClien
 
 // Connect 建立连接（含指数退避重连）
 func (c *GRPCClient) Connect(ctx context.Context) error {
-	var opts []grpc.DialOption
-	if c.tlsConfig != nil {
-		opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(c.tlsConfig)))
-	} else {
-		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if c.tlsConfig == nil {
+		return fmt.Errorf("mTLS 未配置，拒绝建立不安全连接")
 	}
+
+	var opts []grpc.DialOption
+	// 注入证书钉扎校验
+	tlsCfg := c.tlsConfig
+	if c.certPin != nil {
+		tlsCfg = c.tlsConfig.Clone()
+		tlsCfg.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+			if len(rawCerts) == 0 {
+				return fmt.Errorf("no peer certificate")
+			}
+			cert, err := x509.ParseCertificate(rawCerts[0])
+			if err != nil {
+				return err
+			}
+			if !c.certPin.IsPinned() {
+				// TOFU: 首次连接自动钉扎
+				c.certPin.PinCertificate(cert)
+				return nil
+			}
+			return c.certPin.VerifyPin(cert)
+		}
+	}
+	opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 
 	backoff := time.Second
 	maxBackoff := 60 * time.Second
@@ -100,12 +123,17 @@ func (c *GRPCClient) StartHeartbeat(ctx context.Context, statusFn func() *pb.Hea
 				}
 				req := statusFn()
 				callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-				_, err := c.uplinkClient.SyncHeartbeat(callCtx, req)
+				resp, err := c.uplinkClient.SyncHeartbeat(callCtx, req)
 				cancel()
 				if err != nil {
 					log.Printf("[gRPC Client] 心跳发送失败: %v", err)
 					c.connected.Store(false)
 				} else {
+					// 检查是否需要全量同步
+					if resp.NeedsFullSync {
+						log.Printf("[gRPC Client] OS 要求全量状态同步 (desired_hash=%s)", resp.DesiredStateHash)
+						// TODO: 拉取全量 Desired State 并对齐（通过 MotorDownlink）
+					}
 					// 心跳成功，喂看门狗
 					c.mu.Lock()
 					cb := c.heartbeatCallback
@@ -232,4 +260,92 @@ func (c *GRPCClient) SetHeartbeatCallback(fn func()) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.heartbeatCallback = fn
+}
+
+// SetCertPin 设置证书钉扎管理器
+func (c *GRPCClient) SetCertPin(pin *security.CertPin) {
+	c.certPin = pin
+}
+
+// Register 向 OS 注册 Gateway
+func (c *GRPCClient) Register(ctx context.Context, gatewayID, cellID, downlinkAddr, version string) error {
+	if !c.connected.Load() {
+		return fmt.Errorf("gRPC 未连接")
+	}
+	callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	resp, err := c.uplinkClient.RegisterGateway(callCtx, &pb.RegisterRequest{
+		GatewayId:    gatewayID,
+		CellId:       cellID,
+		DownlinkAddr: downlinkAddr,
+		Version:      version,
+		Capabilities: &pb.GatewayCapabilities{
+			EbpfSupported:  true,
+			MaxConnections: 10000,
+			MaxSessions:    5000,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("register RPC failed: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("register rejected: %s", resp.Message)
+	}
+	log.Printf("[gRPC Client] Gateway 注册成功 (assigned_cell=%s)", resp.AssignedCellId)
+	return nil
+}
+
+// ReportSessionEvent 上报会话事件（连接/断开）
+func (c *GRPCClient) ReportSessionEvent(ctx context.Context, req *pb.SessionEventRequest) error {
+	if !c.connected.Load() {
+		return fmt.Errorf("gRPC 未连接")
+	}
+	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, err := c.uplinkClient.ReportSessionEvent(callCtx, req)
+	if err != nil {
+		log.Printf("[gRPC Client] 会话事件上报失败: %v", err)
+	}
+	return err
+}
+
+// StartTrafficReportByUser 启动按用户流量上报循环（60 秒间隔）
+func (c *GRPCClient) StartTrafficReportByUser(ctx context.Context, flushFn func() []*TrafficStats, seqFn func() uint64) {
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if !c.connected.Load() {
+					continue
+				}
+				stats := flushFn()
+				for _, s := range stats {
+					if s.BusinessBytes == 0 && s.DefenseBytes == 0 {
+						continue
+					}
+					req := &pb.TrafficRequest{
+						GatewayId:      c.gatewayID,
+						Timestamp:      time.Now().Unix(),
+						BusinessBytes:  s.BusinessBytes,
+						DefenseBytes:   s.DefenseBytes,
+						PeriodSeconds:  60,
+						UserId:         s.UserID,
+						SessionId:      s.SessionID,
+						SequenceNumber: seqFn(),
+					}
+					callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+					_, err := c.uplinkClient.ReportTraffic(callCtx, req)
+					cancel()
+					if err != nil {
+						log.Printf("[gRPC Client] 用户流量上报失败 (user=%s): %v", s.UserID, err)
+					}
+				}
+			}
+		}
+	}()
+	log.Println("[gRPC Client] 按用户流量上报循环已启动 (60s)")
 }

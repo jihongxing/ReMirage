@@ -34,13 +34,15 @@ export class CellsService {
     });
   }
 
-  async findAll() {
+  async findAll(page = 1, limit = 20) {
     const cells = await this.prisma.cell.findMany({
       include: {
         _count: {
           select: { users: true, gateways: true },
         },
       },
+      skip: (page - 1) * limit,
+      take: limit,
     });
     return cells.map((c) => ({
       ...c,

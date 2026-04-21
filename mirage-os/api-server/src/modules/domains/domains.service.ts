@@ -8,11 +8,12 @@ import { PrismaService } from '../../prisma/prisma.service';
 export class DomainsService {
   constructor(private prisma: PrismaService) {}
 
-  async findAll(status?: string) {
+  async findAll(status?: string, page = 1, limit = 20) {
     const where = status ? `WHERE status = '${status}'` : '';
+    const offset = (page - 1) * limit;
     try {
       const domains = await this.prisma.$queryRawUnsafe(
-        `SELECT * FROM domains ${where} ORDER BY created_at DESC`,
+        `SELECT * FROM domains ${where} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`,
       );
       return domains;
     } catch {

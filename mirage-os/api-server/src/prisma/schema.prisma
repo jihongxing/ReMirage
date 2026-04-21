@@ -26,26 +26,28 @@ enum DepositStatus {
 }
 
 model User {
-  id              String    @id @default(uuid())
-  username        String    @unique
-  passwordHash    String    @map("password_hash")
-  ed25519Pubkey   String?   @map("ed25519_pubkey")
-  totpSecret      String?   @map("totp_secret")
-  remainingQuota  Decimal   @default(0) @map("remaining_quota") @db.Decimal(20, 8)
-  totalDeposit    Decimal   @default(0) @map("total_deposit") @db.Decimal(20, 8)
-  totalConsumed   Decimal   @default(0) @map("total_consumed") @db.Decimal(20, 8)
-  cellId          String?   @map("cell_id")
-  cell            Cell?     @relation(fields: [cellId], references: [id])
-  inviteCodeUsed  String?   @map("invite_code_used")
-  isActive        Boolean   @default(true) @map("is_active")
-  createdAt       DateTime  @default(now()) @map("created_at")
-  updatedAt       DateTime  @updatedAt @map("updated_at")
+  id             String   @id @default(uuid())
+  username       String   @unique
+  passwordHash   String   @map("password_hash")
+  ed25519Pubkey  String?  @map("ed25519_pubkey")
+  totpSecret     String?  @map("totp_secret")
+  remainingQuota Decimal  @default(0) @map("remaining_quota") @db.Decimal(20, 8)
+  totalDeposit   Decimal  @default(0) @map("total_deposit") @db.Decimal(20, 8)
+  totalConsumed  Decimal  @default(0) @map("total_consumed") @db.Decimal(20, 8)
+  cellId         String?  @map("cell_id")
+  cell           Cell?    @relation(fields: [cellId], references: [id])
+  inviteCodeUsed String?  @map("invite_code_used")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
 
   billingLogs     BillingLog[]
   deposits        Deposit[]
   quotaPurchases  QuotaPurchase[]
-  createdInvites  InviteCode[]  @relation("CreatedBy")
-  usedInvite      InviteCode?   @relation("UsedBy")
+  createdInvites  InviteCode[]     @relation("CreatedBy")
+  usedInvite      InviteCode?      @relation("UsedBy")
+  gatewaySessions GatewaySession[]
+  clientSessions  ClientSession[]
 
   @@map("users")
 }
@@ -81,40 +83,85 @@ model Gateway {
   updatedAt         DateTime      @updatedAt @map("updated_at")
 
   billingLogs BillingLog[]
+  sessions    GatewaySession[]
 
   @@map("gateways")
 }
 
-model BillingLog {
-  id            String   @id @default(uuid())
-  userId        String   @map("user_id")
-  user          User     @relation(fields: [userId], references: [id])
-  gatewayId     String   @map("gateway_id")
-  gateway       Gateway  @relation(fields: [gatewayId], references: [id])
-  businessBytes BigInt   @map("business_bytes")
-  defenseBytes  BigInt   @map("defense_bytes")
-  businessCost  Decimal  @map("business_cost") @db.Decimal(20, 8)
-  defenseCost   Decimal  @map("defense_cost") @db.Decimal(20, 8)
-  totalCost     Decimal  @map("total_cost") @db.Decimal(20, 8)
-  periodSeconds Int      @map("period_seconds")
-  createdAt     DateTime @default(now()) @map("created_at")
+model GatewaySession {
+  id             String    @id @default(uuid())
+  sessionId      String    @unique @map("session_id")
+  gatewayId      String    @map("gateway_id")
+  gateway        Gateway   @relation(fields: [gatewayId], references: [id])
+  userId         String    @map("user_id")
+  user           User      @relation(fields: [userId], references: [id])
+  clientId       String?   @map("client_id")
+  status         String    @default("active")
+  connectedAt    DateTime  @default(now()) @map("connected_at")
+  disconnectedAt DateTime? @map("disconnected_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
 
+  @@index([gatewayId, status])
+  @@index([userId, status])
+  @@index([clientId])
+  @@map("gateway_sessions")
+}
+
+model ClientSession {
+  id               String   @id @default(uuid())
+  sessionId        String   @unique @map("session_id")
+  clientId         String   @map("client_id")
+  userId           String   @map("user_id")
+  user             User     @relation(fields: [userId], references: [id])
+  currentGatewayId String?  @map("current_gateway_id")
+  status           String   @default("active")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@index([clientId])
+  @@index([userId, status])
+  @@index([currentGatewayId])
+  @@map("client_sessions")
+}
+
+model BillingLog {
+  id             String   @id @default(uuid())
+  userId         String   @map("user_id")
+  user           User     @relation(fields: [userId], references: [id])
+  gatewayId      String   @map("gateway_id")
+  gateway        Gateway  @relation(fields: [gatewayId], references: [id])
+  businessBytes  BigInt   @map("business_bytes")
+  defenseBytes   BigInt   @map("defense_bytes")
+  businessCost   Decimal  @map("business_cost") @db.Decimal(20, 8)
+  defenseCost    Decimal  @map("defense_cost") @db.Decimal(20, 8)
+  totalCost      Decimal  @map("total_cost") @db.Decimal(20, 8)
+  periodSeconds  Int      @map("period_seconds")
+  sessionId      String?  @map("session_id")
+  sequenceNumber BigInt?  @map("sequence_number")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@unique([gatewayId, sequenceNumber])
   @@map("billing_logs")
 }
 
 model ThreatIntel {
-  id                String   @id @default(uuid())
-  sourceIp          String   @map("source_ip")
-  sourcePort        Int?     @map("source_port")
-  threatType        String   @map("threat_type")
-  severity          Int      @default(0)
-  hitCount          Int      @default(1) @map("hit_count")
-  isBanned          Boolean  @default(false) @map("is_banned")
-  firstSeen         DateTime @default(now()) @map("first_seen")
-  lastSeen          DateTime @default(now()) @map("last_seen")
-  reportedByGateway String?  @map("reported_by_gateway")
+  id                String    @id @default(uuid())
+  sourceIp          String    @map("source_ip")
+  sourcePort        Int?      @map("source_port")
+  threatType        String    @map("threat_type")
+  severity          Int       @default(0)
+  hitCount          Int       @default(1) @map("hit_count")
+  isBanned          Boolean   @default(false) @map("is_banned")
+  firstSeen         DateTime  @default(now()) @map("first_seen")
+  lastSeen          DateTime  @default(now()) @map("last_seen")
+  reportedByGateway String?   @map("reported_by_gateway")
+  ttlSeconds        Int       @default(3600) @map("ttl_seconds")
+  expiresAt         DateTime? @map("expires_at")
+  source            String    @default("auto") // manual / auto / gateway_report
 
   @@unique([sourceIp, threatType])
+  @@index([expiresAt])
   @@map("threat_intel")
 }
 
@@ -160,4 +207,21 @@ model InviteCode {
   usedAt    DateTime? @map("used_at")
 
   @@map("invite_codes")
+}
+
+model AuditLog {
+  id             String   @id @default(uuid())
+  operatorId     String   @map("operator_id")
+  operatorRole   String   @map("operator_role")
+  sourceIp       String   @map("source_ip")
+  targetResource String   @map("target_resource")
+  actionType     String   @map("action_type")
+  actionParams   Json?    @map("action_params")
+  result         String // success / failure / denied
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([operatorId])
+  @@index([actionType])
+  @@map("audit_logs")
 }

@@ -148,6 +148,34 @@ func (ks *KillSwitch) Deactivate() error {
 	return nil
 }
 
+// PreAddHostRoute adds a /32 host route for the new gateway without removing the old one.
+// Used as step 1 of transactional gateway switch.
+func (ks *KillSwitch) PreAddHostRoute(newGatewayIP string) error {
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
+	if !ks.activated {
+		return fmt.Errorf("kill switch not activated")
+	}
+	return ks.platform.AddHostRoute(newGatewayIP, ks.originalGW, ks.originalIface)
+}
+
+// CommitSwitch deletes the old gateway route and updates internal state.
+// Used as step 3 of transactional gateway switch.
+func (ks *KillSwitch) CommitSwitch(oldGatewayIP, newGatewayIP string) error {
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
+	_ = ks.platform.DeleteHostRoute(oldGatewayIP)
+	ks.gatewayIP = newGatewayIP
+	return nil
+}
+
+// RollbackPreAdd removes a pre-added route on transaction failure.
+func (ks *KillSwitch) RollbackPreAdd(newGatewayIP string) error {
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
+	return ks.platform.DeleteHostRoute(newGatewayIP)
+}
+
 // IsActivated returns whether the kill switch is active.
 func (ks *KillSwitch) IsActivated() bool {
 	ks.mu.Lock()

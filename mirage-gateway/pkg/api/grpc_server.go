@@ -33,6 +33,10 @@ func NewGRPCServer(port int, tlsConfig *tls.Config, handler *CommandHandler) *GR
 // 安全设计：mTLS 握手失败时不返回 TLS Alert（静默关闭连接）
 // 防止主动探测者通过 TLS 错误响应识别服务类型
 func (s *GRPCServer) Start() error {
+	if s.tlsConfig == nil {
+		return fmt.Errorf("gRPC Server 拒绝启动：mTLS 未配置")
+	}
+
 	var opts []grpc.ServerOption
 	if s.tlsConfig != nil {
 		// 克隆 TLS 配置，添加主动探测抗性

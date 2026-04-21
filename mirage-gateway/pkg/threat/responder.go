@@ -40,17 +40,22 @@ type Responder struct {
 	currentLevel  ThreatLevel
 	engine        *strategy.StrategyEngine
 	loader        *ebpf.Loader
+	blacklist     *BlacklistManager
+	policy        *IngressPolicy
+	ingressLogger *IngressLogger
 	grpcNotify    func(level ThreatLevel)
 	cooldownUntil time.Time
+	fsm           *SecurityFSM
 	mu            sync.Mutex
 }
 
 // NewResponder 创建响应器
-func NewResponder(engine *strategy.StrategyEngine, loader *ebpf.Loader) *Responder {
+func NewResponder(engine *strategy.StrategyEngine, loader *ebpf.Loader, blacklist *BlacklistManager) *Responder {
 	return &Responder{
 		currentLevel: LevelLow,
 		engine:       engine,
 		loader:       loader,
+		blacklist:    blacklist,
 	}
 }
 
@@ -65,6 +70,57 @@ func (r *Responder) SetGRPCNotify(fn func(level ThreatLevel)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.grpcNotify = fn
+}
+
+// SetPolicy 设置入口处置策略
+func (r *Responder) SetPolicy(policy *IngressPolicy) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.policy = policy
+}
+
+// SetIngressLogger 设置入口日志记录器
+func (r *Responder) SetIngressLogger(logger *IngressLogger) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ingressLogger = logger
+}
+
+// SetFSM 设置安全状态机
+func (r *Responder) SetFSM(fsm *SecurityFSM) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.fsm = fsm
+}
+
+// GetFSM 获取安全状态机
+func (r *Responder) GetFSM() *SecurityFSM {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.fsm
+}
+
+// EvaluateIngress 使用策略引擎评估入口流量并记录日志
+func (r *Responder) EvaluateIngress(ctx *IngressContext) IngressAction {
+	r.mu.Lock()
+	policy := r.policy
+	logger := r.ingressLogger
+	r.mu.Unlock()
+
+	if policy == nil {
+		return ActionPass
+	}
+
+	action, condition := policy.EvaluateWithRule(ctx)
+
+	// 6.5: 为每次处置动作记录结构化安全日志
+	if action != ActionPass {
+		LogPolicyAction(logger, ctx, action, condition)
+		// 9.3: 递增入口拒绝指标
+		IngressRejectTotal.WithLabelValues(GetGatewayID(), action.String()).Inc()
+	}
+
+	return action
 }
 
 // GetCurrentLevel 获取当前威胁等级
@@ -95,6 +151,46 @@ func (r *Responder) handleEvent(event *UnifiedThreatEvent) {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	// 使用策略引擎评估处置动作
+	if r.policy != nil {
+		ctx := &IngressContext{
+			SourceIP:    event.SourceIP,
+			ThreatLevel: newLevel,
+		}
+		action, condition := r.policy.EvaluateWithRule(ctx)
+		if action != ActionPass {
+			LogPolicyAction(r.ingressLogger, ctx, action, condition)
+			// 9.3: 递增入口拒绝指标
+			IngressRejectTotal.WithLabelValues(GetGatewayID(), action.String()).Inc()
+		}
+
+		// 策略驱动的自动封禁：Drop 动作触发黑名单添加
+		if action == ActionDrop && r.blacklist != nil && event.SourceIP != "" && event.SourceIP != "0.0.0.0" {
+			ttl := time.Hour
+			if newLevel >= LevelCritical {
+				ttl = 24 * time.Hour
+			}
+			if err := r.blacklist.Add(event.SourceIP+"/32", time.Now().Add(ttl), SourceLocal); err != nil {
+				log.Printf("[Responder] 自动封禁失败: %s: %v", event.SourceIP, err)
+			} else {
+				log.Printf("[Responder] 策略封禁: %s (action=%s, condition=%s)", event.SourceIP, action, condition)
+			}
+		}
+	} else {
+		// 回退：无策略时使用原有硬编码逻辑
+		if newLevel >= LevelHigh && r.blacklist != nil && event.SourceIP != "" && event.SourceIP != "0.0.0.0" {
+			ttl := time.Hour
+			if newLevel >= LevelCritical {
+				ttl = 24 * time.Hour
+			}
+			if err := r.blacklist.Add(event.SourceIP+"/32", time.Now().Add(ttl), SourceLocal); err != nil {
+				log.Printf("[Responder] 自动封禁失败: %s: %v", event.SourceIP, err)
+			} else {
+				log.Printf("[Responder] 自动封禁: %s (TTL=%v, level=%d)", event.SourceIP, ttl, newLevel)
+			}
+		}
+	}
 
 	// 升级：立即执行
 	if newLevel > r.currentLevel {
@@ -138,6 +234,13 @@ func (r *Responder) applyLevel(level ThreatLevel) {
 	}
 
 	log.Printf("[Responder] 威胁等级变化: %d → %d", old, level)
+
+	// 8.4: 威胁等级变化后驱动安全状态机迁移
+	if r.fsm != nil {
+		r.fsm.Evaluate(&SecurityMetrics{
+			ThreatLevel: level,
+		})
+	}
 
 	// 严重/极限等级通知 gRPC
 	if level >= LevelCritical && r.grpcNotify != nil {

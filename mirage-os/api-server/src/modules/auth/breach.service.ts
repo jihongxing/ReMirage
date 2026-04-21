@@ -134,17 +134,18 @@ export class BreachService {
         return { success: false };
       }
 
-      // 续签 token
+      // 续签 token — 保持原 role，不升级
+      const originalRole = payload.role || 'user';
       const expiresAt = Date.now() + 86400_000;
       const newToken = this.jwtService.sign(
-        { sub: user.id, cell_id: user.cellId, role: 'admin' },
+        { sub: user.id, cell_id: user.cellId, role: originalRole },
         { expiresIn: '24h' },
       );
 
       return {
         success: true,
         token: newToken,
-        role: 'admin',
+        role: originalRole,
         userId: user.id,
         expiresAt,
       };

@@ -1,7 +1,7 @@
 # Mirage-OS Makefile
 # 控制中心编译配置
 
-.PHONY: all proto clean test docker
+.PHONY: all proto clean test docker test-security
 
 # 变量定义
 PROTO_DIR := api/proto
@@ -82,6 +82,17 @@ run-billing:
 run-cell:
 	@echo "启动 Cell Manager..."
 	./bin/cell-manager
+
+# 安全回归测试
+test-security:
+	@echo "运行安全回归测试..."
+	@echo "=== OS 侧安全回归测试 ==="
+	cd api-server && npx jest --testPathPattern=security-regression --no-cache
+	@echo "=== Gateway 侧安全回归测试 ==="
+	cd ../mirage-gateway && go test ./pkg/threat/ -run SecurityRegression -v
+	cd ../mirage-gateway && go test ./pkg/api/ -run SecurityRegression -v
+	cd ../mirage-gateway && go test ./pkg/cortex/ -run SecurityRegression -v
+	@echo "✅ 安全回归测试完成"
 
 # 开发模式（热重载）
 dev:

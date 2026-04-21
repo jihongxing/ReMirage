@@ -92,7 +92,7 @@ export class AuthService {
       }
     }
 
-    const payload = { sub: user.id, cell_id: user.cellId };
+    const payload = { sub: user.id, cell_id: user.cellId, role: 'user' };
     return {
       accessToken: this.jwtService.sign(payload, { expiresIn: '24h' }),
     };

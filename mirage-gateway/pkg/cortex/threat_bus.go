@@ -9,6 +9,13 @@ import (
 	"sync"
 )
 
+// 事件类型常量
+const (
+	EventThreat      = "threat"
+	EventHoneypot    = "honeypot"
+	EventFingerprint = "fingerprint"
+)
+
 // ThreatBus 威胁情报总线
 type ThreatBus struct {
 	mu          sync.RWMutex
@@ -19,22 +26,22 @@ type ThreatBus struct {
 
 // HighSeverityEvent 高危事件（带地理坐标）
 type HighSeverityEvent struct {
-	ID          string  `json:"id"`
-	Timestamp   int64   `json:"timestamp"`
-	ThreatType  string  `json:"threatType"`
-	Severity    int     `json:"severity"`
-	SourceIP    string  `json:"srcIp"`
-	SourcePort  uint16  `json:"srcPort"`
-	DestPort    uint16  `json:"destPort"`
-	Fingerprint string  `json:"fingerprint,omitempty"`
-	Blocked     bool    `json:"blocked"`
-	
+	ID          string `json:"id"`
+	Timestamp   int64  `json:"timestamp"`
+	ThreatType  string `json:"threatType"`
+	Severity    int    `json:"severity"`
+	SourceIP    string `json:"srcIp"`
+	SourcePort  uint16 `json:"srcPort"`
+	DestPort    uint16 `json:"destPort"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	Blocked     bool   `json:"blocked"`
+
 	// 地理坐标（用于地图联动）
-	Pulse     bool    `json:"pulse"`     // 是否触发脉冲
+	Pulse     bool      `json:"pulse"`     // 是否触发脉冲
 	GeoCoords []float64 `json:"geoCoords"` // [lat, lng]
-	Country   string  `json:"country"`
-	City      string  `json:"city"`
-	ASN       string  `json:"asn"`
+	Country   string    `json:"country"`
+	City      string    `json:"city"`
+	ASN       string    `json:"asn"`
 }
 
 // GeoIPResolver GeoIP 解析接口
@@ -72,7 +79,7 @@ func (tb *ThreatBus) SetMinSeverity(level int) {
 func (tb *ThreatBus) Subscribe() <-chan *HighSeverityEvent {
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
-	
+
 	ch := make(chan *HighSeverityEvent, 100)
 	tb.subscribers = append(tb.subscribers, ch)
 	return ch
@@ -82,7 +89,7 @@ func (tb *ThreatBus) Subscribe() <-chan *HighSeverityEvent {
 func (tb *ThreatBus) Unsubscribe(ch <-chan *HighSeverityEvent) {
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
-	
+
 	for i, sub := range tb.subscribers {
 		if sub == ch {
 			close(sub)
@@ -97,12 +104,12 @@ func (tb *ThreatBus) EmitHighSeverityEvent(event *HighSeverityEvent) {
 	tb.mu.RLock()
 	minSev := tb.minSeverity
 	tb.mu.RUnlock()
-	
+
 	// 检查是否达到推送阈值
 	if event.Severity < minSev {
 		return
 	}
-	
+
 	// 解析地理坐标
 	if tb.geoIP != nil && event.SourceIP != "" {
 		if geo, err := tb.geoIP.Lookup(event.SourceIP); err == nil {
@@ -112,22 +119,30 @@ func (tb *ThreatBus) EmitHighSeverityEvent(event *HighSeverityEvent) {
 			event.ASN = geo.ASN
 		}
 	}
-	
+
 	// 高危事件触发脉冲
 	event.Pulse = event.Severity >= 7
-	
-	// 广播给所有订阅者
+
+	// 广播给所有订阅者（含断路器保护）
 	tb.mu.RLock()
 	defer tb.mu.RUnlock()
-	
+
 	for _, sub := range tb.subscribers {
+		// 断路器：队列利用率 > 80% 时丢弃低优先级事件（severity < 5）
+		queueCap := cap(sub)
+		queueLen := len(sub)
+		if queueCap > 0 && float64(queueLen)/float64(queueCap) > 0.8 && event.Severity < 5 {
+			log.Printf("[ThreatBus] 断路器触发: 丢弃低优先级事件 (severity=%d, queue=%d/%d)",
+				event.Severity, queueLen, queueCap)
+			continue
+		}
 		select {
 		case sub <- event:
 		default:
 			// 通道满，跳过
 		}
 	}
-	
+
 	log.Printf("[ThreatBus] 高危事件: %s (Severity=%d, IP=%s, Coords=%v)",
 		event.ThreatType, event.Severity, event.SourceIP, event.GeoCoords)
 }
@@ -154,45 +169,45 @@ func (r *DefaultGeoIPResolver) Lookup(ipStr string) (*GeoLocation, error) {
 	if ip == nil {
 		return nil, nil
 	}
-	
+
 	// 简化实现：基于 IP 段估算
 	// 生产环境应使用 MaxMind GeoIP2
 	ipv4 := ip.To4()
 	if ipv4 == nil {
 		return &GeoLocation{Lat: 0, Lng: 0, Country: "Unknown"}, nil
 	}
-	
+
 	firstOctet := int(ipv4[0])
 	secondOctet := int(ipv4[1])
-	
+
 	// 基于 IP 段的粗略地理估算
 	switch {
 	case firstOctet >= 1 && firstOctet <= 126:
 		// A 类地址 - 北美
 		return &GeoLocation{
-			Lat: 37.0 + float64(secondOctet%30),
-			Lng: -122.0 + float64(secondOctet%60),
+			Lat:     37.0 + float64(secondOctet%30),
+			Lng:     -122.0 + float64(secondOctet%60),
 			Country: "US",
-			City: "San Francisco",
-			ASN: "AS15169",
+			City:    "San Francisco",
+			ASN:     "AS15169",
 		}, nil
 	case firstOctet >= 128 && firstOctet <= 191:
 		// B 类地址 - 欧洲
 		return &GeoLocation{
-			Lat: 48.0 + float64(secondOctet%20),
-			Lng: 2.0 + float64(secondOctet%30),
+			Lat:     48.0 + float64(secondOctet%20),
+			Lng:     2.0 + float64(secondOctet%30),
 			Country: "EU",
-			City: "Paris",
-			ASN: "AS3215",
+			City:    "Paris",
+			ASN:     "AS3215",
 		}, nil
 	case firstOctet >= 192 && firstOctet <= 223:
 		// C 类地址 - 亚太
 		return &GeoLocation{
-			Lat: 22.0 + float64(secondOctet%30),
-			Lng: 114.0 + float64(secondOctet%40),
+			Lat:     22.0 + float64(secondOctet%30),
+			Lng:     114.0 + float64(secondOctet%40),
 			Country: "APAC",
-			City: "Hong Kong",
-			ASN: "AS4134",
+			City:    "Hong Kong",
+			ASN:     "AS4134",
 		}, nil
 	default:
 		return &GeoLocation{Lat: 0, Lng: 0, Country: "Unknown"}, nil

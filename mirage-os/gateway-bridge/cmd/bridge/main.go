@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	goredis "github.com/redis/go-redis/v9"
 
@@ -20,6 +21,7 @@ import (
 	raftpkg "mirage-os/gateway-bridge/pkg/raft"
 	"mirage-os/gateway-bridge/pkg/rest"
 	"mirage-os/gateway-bridge/pkg/store"
+	"mirage-os/gateway-bridge/pkg/topology"
 )
 
 func main() {
@@ -31,6 +33,13 @@ func main() {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		log.Fatalf("[FATAL] load config: %v", err)
+	}
+
+	// 生产模式校验
+	if os.Getenv("MIRAGE_ENV") == "production" {
+		if cfg.REST == nil || cfg.REST.InternalSecret == "" {
+			log.Fatalf("[FATAL] 生产模式必须设置 rest.internal_secret")
+		}
 	}
 
 	// 连接 PostgreSQL
@@ -60,6 +69,18 @@ func main() {
 	distributor := intel.NewDistributor(db, rdb, cfg.Intel)
 	dispatcher := dispatch.NewStrategyDispatcher(rdb)
 
+	// 初始化拓扑索引管理器
+	registry := topology.NewRegistry(db, rdb)
+	registry.StartTimeoutChecker(ctx, 300*time.Second)
+
+	// 注入拓扑索引到 StrategyDispatcher（改造 PushStrategyToCell / PushBlacklistToAll）
+	dispatcher.SetRegistry(&registryAdapter{registry: registry})
+
+	// 初始化下推状态记录器 + Fan-out 引擎
+	pushLog := dispatch.NewPushLog(db, 10000)
+	fanout := dispatch.NewFanoutEngine(registry, dispatcher, pushLog)
+	_ = fanout // 供后续 API / gRPC handler 使用
+
 	// 加载已封禁 IP
 	if err := distributor.LoadBannedIPs(); err != nil {
 		log.Printf("[WARN] load banned IPs: %v", err)
@@ -71,7 +92,15 @@ func main() {
 	distributor.StartSubscriber(subCtx)
 
 	// 启动 gRPC 服务
-	srv := grpcserver.NewServer(cfg.GRPC, enforcer, distributor, dispatcher, db, rdb)
+	if os.Getenv("MIRAGE_ENV") == "production" && !cfg.GRPC.TLSEnabled {
+		log.Fatalf("[FATAL] 生产模式禁止禁用 gRPC TLS")
+	}
+	srv := grpcserver.NewServer(cfg.GRPC, enforcer, distributor, dispatcher, db, rdb, registry)
+	// gRPC reflection 在生产模式下禁用（当前未注册 reflection，默认已禁用）
+	// 如需开发调试，可在非生产模式下启用：
+	// if os.Getenv("MIRAGE_ENV") != "production" {
+	//     reflection.Register(srv.GRPCServer())
+	// }
 	if err := srv.Start(); err != nil {
 		log.Fatalf("[FATAL] start grpc: %v", err)
 	}
@@ -80,11 +109,17 @@ func main() {
 	restHandler := rest.NewHandler(enforcer, dispatcher, db, rdb)
 	mux := http.NewServeMux()
 	restHandler.RegisterRoutes(mux)
-	restAddr := ":7000"
+	restAddr := "127.0.0.1:7000"
 	if cfg.REST != nil && cfg.REST.Addr != "" {
 		restAddr = cfg.REST.Addr
 	}
-	restServer := &http.Server{Addr: restAddr, Handler: mux}
+	var restRootHandler http.Handler = mux
+	if cfg.REST != nil && cfg.REST.InternalSecret != "" {
+		restRootHandler = rest.InternalAuthMiddleware(cfg.REST.InternalSecret)(mux)
+	}
+	// 访问日志中间件（包裹在最外层，记录所有请求）
+	restRootHandler = rest.AccessLogMiddleware(restRootHandler)
+	restServer := &http.Server{Addr: restAddr, Handler: restRootHandler}
 	go func() {
 		log.Printf("[INFO] REST API listening on %s", restAddr)
 		if err := restServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {

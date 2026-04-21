@@ -210,7 +210,7 @@ func TestProperty_GlobalBlacklistPriority(t *testing.T) {
 
 // 单元测试: 冷却期
 func TestResponder_CooldownPeriod(t *testing.T) {
-	r := NewResponder(nil, nil)
+	r := NewResponder(nil, nil, nil)
 
 	// 模拟升级到 Critical
 	r.mu.Lock()

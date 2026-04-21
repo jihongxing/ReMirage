@@ -42,10 +42,19 @@ func main() {
 		AllowCredentials: true,
 	}).Handler(mux)
 
-	// 5. 启动服务器
+	// 5. JWT 校验中间件（JWT_SECRET 非空时启用）
+	var finalHandler http.Handler = handler
+	if jwtSecret := getEnv("JWT_SECRET", ""); jwtSecret != "" {
+		finalHandler = wsgateway.JWTAuthMiddleware(jwtSecret)(handler)
+		log.Println("🔒 JWT 校验中间件已启用")
+	} else {
+		log.Println("⚠️  JWT_SECRET 未设置，WebSocket 连接无鉴权保护")
+	}
+
+	// 6. 启动服务器
 	port := getEnv("WS_PORT", "8080")
 	log.Printf("✅ WebSocket 服务器已启动，监听端口: %s", port)
-	log.Fatal(http.ListenAndServe(":"+port, handler))
+	log.Fatal(http.ListenAndServe(":"+port, finalHandler))
 }
 
 func getEnv(key, defaultValue string) string {

@@ -19,9 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	GatewayUplink_SyncHeartbeat_FullMethodName = "/mirage.GatewayUplink/SyncHeartbeat"
-	GatewayUplink_ReportTraffic_FullMethodName = "/mirage.GatewayUplink/ReportTraffic"
-	GatewayUplink_ReportThreat_FullMethodName  = "/mirage.GatewayUplink/ReportThreat"
+	GatewayUplink_SyncHeartbeat_FullMethodName      = "/mirage.GatewayUplink/SyncHeartbeat"
+	GatewayUplink_ReportTraffic_FullMethodName      = "/mirage.GatewayUplink/ReportTraffic"
+	GatewayUplink_ReportThreat_FullMethodName       = "/mirage.GatewayUplink/ReportThreat"
+	GatewayUplink_ReportSessionEvent_FullMethodName = "/mirage.GatewayUplink/ReportSessionEvent"
+	GatewayUplink_RegisterGateway_FullMethodName    = "/mirage.GatewayUplink/RegisterGateway"
 )
 
 // GatewayUplinkClient is the client API for GatewayUplink service.
@@ -33,6 +35,8 @@ type GatewayUplinkClient interface {
 	SyncHeartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
 	ReportTraffic(ctx context.Context, in *TrafficRequest, opts ...grpc.CallOption) (*TrafficResponse, error)
 	ReportThreat(ctx context.Context, in *ThreatRequest, opts ...grpc.CallOption) (*ThreatResponse, error)
+	ReportSessionEvent(ctx context.Context, in *SessionEventRequest, opts ...grpc.CallOption) (*SessionEventResponse, error)
+	RegisterGateway(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error)
 }
 
 type gatewayUplinkClient struct {
@@ -73,6 +77,26 @@ func (c *gatewayUplinkClient) ReportThreat(ctx context.Context, in *ThreatReques
 	return out, nil
 }
 
+func (c *gatewayUplinkClient) ReportSessionEvent(ctx context.Context, in *SessionEventRequest, opts ...grpc.CallOption) (*SessionEventResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SessionEventResponse)
+	err := c.cc.Invoke(ctx, GatewayUplink_ReportSessionEvent_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayUplinkClient) RegisterGateway(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RegisterResponse)
+	err := c.cc.Invoke(ctx, GatewayUplink_RegisterGateway_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GatewayUplinkServer is the server API for GatewayUplink service.
 // All implementations must embed UnimplementedGatewayUplinkServer
 // for forward compatibility.
@@ -82,6 +106,8 @@ type GatewayUplinkServer interface {
 	SyncHeartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
 	ReportTraffic(context.Context, *TrafficRequest) (*TrafficResponse, error)
 	ReportThreat(context.Context, *ThreatRequest) (*ThreatResponse, error)
+	ReportSessionEvent(context.Context, *SessionEventRequest) (*SessionEventResponse, error)
+	RegisterGateway(context.Context, *RegisterRequest) (*RegisterResponse, error)
 	mustEmbedUnimplementedGatewayUplinkServer()
 }
 
@@ -100,6 +126,12 @@ func (UnimplementedGatewayUplinkServer) ReportTraffic(context.Context, *TrafficR
 }
 func (UnimplementedGatewayUplinkServer) ReportThreat(context.Context, *ThreatRequest) (*ThreatResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportThreat not implemented")
+}
+func (UnimplementedGatewayUplinkServer) ReportSessionEvent(context.Context, *SessionEventRequest) (*SessionEventResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportSessionEvent not implemented")
+}
+func (UnimplementedGatewayUplinkServer) RegisterGateway(context.Context, *RegisterRequest) (*RegisterResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RegisterGateway not implemented")
 }
 func (UnimplementedGatewayUplinkServer) mustEmbedUnimplementedGatewayUplinkServer() {}
 func (UnimplementedGatewayUplinkServer) testEmbeddedByValue()                       {}
@@ -176,6 +208,42 @@ func _GatewayUplink_ReportThreat_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayUplink_ReportSessionEvent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SessionEventRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayUplinkServer).ReportSessionEvent(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayUplink_ReportSessionEvent_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayUplinkServer).ReportSessionEvent(ctx, req.(*SessionEventRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayUplink_RegisterGateway_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegisterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayUplinkServer).RegisterGateway(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayUplink_RegisterGateway_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayUplinkServer).RegisterGateway(ctx, req.(*RegisterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // GatewayUplink_ServiceDesc is the grpc.ServiceDesc for GatewayUplink service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -194,6 +262,14 @@ var GatewayUplink_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportThreat",
 			Handler:    _GatewayUplink_ReportThreat_Handler,
+		},
+		{
+			MethodName: "ReportSessionEvent",
+			Handler:    _GatewayUplink_ReportSessionEvent_Handler,
+		},
+		{
+			MethodName: "RegisterGateway",
+			Handler:    _GatewayUplink_RegisterGateway_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

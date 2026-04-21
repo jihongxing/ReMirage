@@ -102,8 +102,33 @@ logging:
   memory_only: true           # 仅内存日志
   max_entries: 10000          # 最大日志条数
 
+# 入口处置策略
+ingress_policy:
+  rules:
+    - condition: blacklist_hit
+      action: drop
+      priority: 100
+    - condition: threat_level_critical
+      action: drop
+      priority: 90
+    - condition: threat_level_high
+      action: throttle
+      params: { pps: 10 }
+      priority: 80
+    - condition: honeypot_hit
+      action: trap
+      priority: 70
+    - condition: suspicious_fingerprint
+      action: observe
+      priority: 60
+    - condition: rate_exceeded
+      action: throttle
+      params: { pps: 50 }
+      priority: 50
+
 # 安全
 security:
+  command_secret: "${MIRAGE_COMMAND_SECRET}"  # HMAC 签名密钥（高危命令校验）
   self_destruct: true         # 启用自毁机制
   heartbeat_timeout: 300s     # 心跳超时
   max_idle_days: 30           # 最大空闲天数
@@ -128,7 +153,7 @@ security:
 mcc:
   endpoint: "10.99.0.10:50051"
   tls:
-    enabled: false
+    enabled: true              # 生产模式下必须为 true，否则 Gateway 拒绝启动
     cert_file: ""
     key_file: ""
     ca_file: ""

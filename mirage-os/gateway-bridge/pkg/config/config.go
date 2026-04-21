@@ -18,7 +18,8 @@ type Config struct {
 }
 
 type RESTConfig struct {
-	Addr string `yaml:"addr"`
+	Addr           string `yaml:"addr"`
+	InternalSecret string `yaml:"internal_secret"`
 }
 
 type RaftConfig struct {
@@ -36,11 +37,12 @@ type PeerConfig struct {
 }
 
 type GRPCConfig struct {
-	Port       int    `yaml:"port"`
-	TLSEnabled bool   `yaml:"tls_enabled"`
-	CertFile   string `yaml:"cert_file"`
-	KeyFile    string `yaml:"key_file"`
-	CAFile     string `yaml:"ca_file"`
+	Port       int      `yaml:"port"`
+	TLSEnabled bool     `yaml:"tls_enabled"`
+	CertFile   string   `yaml:"cert_file"`
+	KeyFile    string   `yaml:"key_file"`
+	CAFile     string   `yaml:"ca_file"`
+	AllowedCNs []string `yaml:"allowed_cns"`
 }
 
 type DatabaseConfig struct {

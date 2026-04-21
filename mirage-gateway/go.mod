@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/cilium/ebpf v0.12.3
 	github.com/fsnotify/fsnotify v1.7.0
+	github.com/prometheus/client_golang v1.19.0
 
 	// netlink + netns: TC clsact qdisc 创建 & BPF filter 挂载（loader.go）
 	// Linux 专用，Windows/macOS 上 IDE 会报红但不影响交叉编译
@@ -33,6 +34,8 @@ require (
 
 require (
 	github.com/andybalholm/brotli v1.0.6 // indirect
+	github.com/beorn7/perks v1.0.1 // indirect
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudflare/circl v1.3.7 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/klauspost/compress v1.17.4 // indirect
@@ -51,6 +54,9 @@ require (
 	github.com/pion/stun/v3 v3.0.0 // indirect
 	github.com/pion/transport/v3 v3.0.7 // indirect
 	github.com/pion/turn/v4 v4.0.0 // indirect
+	github.com/prometheus/client_model v0.5.0 // indirect
+	github.com/prometheus/common v0.48.0 // indirect
+	github.com/prometheus/procfs v0.12.0 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	golang.org/x/exp v0.0.0-20230224173230-c95f2b4c22f2 // indirect
 	golang.org/x/mod v0.31.0 // indirect

@@ -1,6 +1,7 @@
 import { Controller, Get, Post, Body, Query, Req, UseGuards } from '@nestjs/common';
 import { BillingService, RechargeDto } from './billing.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { PaginationDto } from '../../common/pagination.dto';
 
 @Controller('billing')
 @UseGuards(JwtAuthGuard)
@@ -10,14 +11,13 @@ export class BillingController {
   @Get('logs')
   async getLogs(
     @Req() req: any,
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
+    @Query() pagination: PaginationDto,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
   ) {
     const result = await this.billingService.getLogs(req.user.userId, {
-      page: page ? parseInt(page) : 1,
-      limit: limit ? parseInt(limit) : 100,
+      page: pagination.page,
+      limit: pagination.limit,
       startDate: startDate ? new Date(startDate) : undefined,
       endDate: endDate ? new Date(endDate) : undefined,
     });
