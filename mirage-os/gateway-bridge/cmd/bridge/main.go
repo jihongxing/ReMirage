@@ -183,3 +183,26 @@ func main() {
 	subCancel()
 	log.Println("[INFO] gateway-bridge stopped")
 }
+
+// registryAdapter 将 topology.Registry 适配为 dispatch.Registry 接口
+type registryAdapter struct {
+	registry *topology.Registry
+}
+
+func (a *registryAdapter) GetGatewaysByCell(cellID string) []*dispatch.GatewayInfoRef {
+	gws := a.registry.GetGatewaysByCell(cellID)
+	refs := make([]*dispatch.GatewayInfoRef, len(gws))
+	for i, gw := range gws {
+		refs[i] = &dispatch.GatewayInfoRef{GatewayID: gw.GatewayID}
+	}
+	return refs
+}
+
+func (a *registryAdapter) GetAllOnline() []*dispatch.GatewayInfoRef {
+	gws := a.registry.GetAllOnline()
+	refs := make([]*dispatch.GatewayInfoRef, len(gws))
+	for i, gw := range gws {
+		refs[i] = &dispatch.GatewayInfoRef{GatewayID: gw.GatewayID}
+	}
+	return refs
+}

@@ -225,3 +225,16 @@ model AuditLog {
   @@index([actionType])
   @@map("audit_logs")
 }
+
+model PushLog {
+  id          String   @id @default(uuid())
+  gatewayId   String   @map("gateway_id")
+  commandType String   @map("command_type")
+  result      String
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("push_logs")
+  @@index([gatewayId])
+  @@index([createdAt])
+  @@index([commandType])
+}
