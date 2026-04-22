@@ -1,20 +1,39 @@
 #!/bin/bash
-# 生成 package-lock.json（部署前必须执行）
-# 确保 Ansible 部署链路中 npm ci 可用
+# generate-lockfiles.sh - 生成发布 manifest
+# 记录源码提交 hash、lockfile hash、产物 hash
+set -euo pipefail
 
-set -e
+OUTPUT="${1:-release-manifest.json}"
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+GIT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+GIT_SHORT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
-echo "[INFO] Generating package-lock.json for api-server..."
-cd "$PROJECT_ROOT/mirage-os/api-server"
-npm install --package-lock-only
-echo "[OK] api-server/package-lock.json generated"
+# Lockfile hashes
+LOCKFILE_HASH="none"
+if [ -f "mirage-os/api-server/package-lock.json" ]; then
+    LOCKFILE_HASH=$(sha256sum mirage-os/api-server/package-lock.json | cut -d' ' -f1)
+fi
 
-echo "[INFO] Generating package-lock.json for web..."
-cd "$PROJECT_ROOT/mirage-os/web"
-npm install --package-lock-only
-echo "[OK] web/package-lock.json generated"
+GO_SUM_HASH="none"
+if [ -f "mirage-gateway/go.sum" ]; then
+    GO_SUM_HASH=$(sha256sum mirage-gateway/go.sum | cut -d' ' -f1)
+fi
 
-echo "[DONE] All lockfiles generated. Commit them to the repo."
+cat > "$OUTPUT" <<EOF
+{
+  "version": "v2.0.0-${GIT_SHORT}",
+  "build_time": "${BUILD_TIME}",
+  "git_commit": "${GIT_COMMIT}",
+  "lockfile_hashes": {
+    "api_server_package_lock": "${LOCKFILE_HASH}",
+    "gateway_go_sum": "${GO_SUM_HASH}"
+  },
+  "binary_sha256": "",
+  "signature": ""
+}
+EOF
+
+echo "[INFO] Release manifest generated: $OUTPUT"
+echo "  Git commit: $GIT_COMMIT"
+echo "  Build time: $BUILD_TIME"

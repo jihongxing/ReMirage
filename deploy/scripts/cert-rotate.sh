@@ -3,13 +3,26 @@
 # 用途：检查 Gateway/OS 证书有效期，到期前自动轮换
 # 用法：sudo bash cert-rotate.sh [--check-only] [--days-before 30] [--cert-dir /var/mirage/certs]
 # 建议 cron: 0 3 * * * /opt/mirage/scripts/cert-rotate.sh >> /var/log/mirage-cert-rotate.log 2>&1
+#
+# 签发路径说明：
+#   生产环境：设置 OS_CERT_API 指向 OS 证书签发端点（POST /internal/cert/sign）
+#   开发环境：设置 CERT_MODE=local 使用本地 CA key 签发
+#   默认行为：CERT_MODE=api，必须配置 OS_CERT_API
+#
+# 证书目录约定：
+#   /var/mirage/certs/ca.crt      - CA 证书
+#   /var/mirage/certs/ca.key      - CA 私钥（仅开发环境本地签发时需要）
+#   /var/mirage/certs/gateway.crt - Gateway 叶子证书
+#   /var/mirage/certs/gateway.key - Gateway 私钥
+#   /var/mirage/certs/os.crt      - OS 节点证书
+#   /var/mirage/certs/os.key      - OS 节点私钥
 
 set -e
 
 CHECK_ONLY=0
 DAYS_BEFORE=30
 CERT_DIR="/var/mirage/certs"
-CA_DIR="/etc/mirage/ca"
+CA_DIR="/var/mirage/certs"
 OPENSSL_CNF="/etc/mirage/openssl.cnf"
 GATEWAY_ID=""
 RESTART_GATEWAY=1
@@ -79,7 +92,6 @@ NEED_ROTATE=0
 echo "--- 证书有效期检查 ---"
 check_cert_expiry "$CERT_DIR/gateway.crt" "Gateway 证书" || NEED_ROTATE=1
 check_cert_expiry "$CERT_DIR/ca.crt" "CA 证书" || true  # CA 过期需要手动处理
-check_cert_expiry "$CA_DIR/root-ca.crt" "Root CA" || true
 
 echo ""
 
@@ -101,10 +113,25 @@ fi
 # ─── 执行证书轮换 ───
 echo "--- 开始证书轮换 ---"
 
-# 确认 CA 密钥可用
-if [ ! -f "$CA_DIR/root-ca.key" ]; then
-    echo "❌ CA 私钥不存在 ($CA_DIR/root-ca.key)，无法自动轮换"
-    echo "   请手动执行证书签发"
+# 签发路径选择（唯一路径，不允许口径并存）
+# 生产环境：必须使用 OS 证书签发 API（POST /internal/cert/sign）
+# 开发环境：可使用本地 CA key（需显式设置 CERT_MODE=local）
+OS_CERT_API="${OS_CERT_API:-}"
+CERT_MODE="${CERT_MODE:-api}"
+HMAC_SECRET="${HMAC_SECRET:-}"
+
+if [ "$CERT_MODE" = "local" ]; then
+    if [ ! -f "$CA_DIR/ca.key" ]; then
+        echo "❌ CERT_MODE=local 但 CA 私钥不存在: $CA_DIR/ca.key"
+        exit 2
+    fi
+    echo "  ⚠️  使用本地 CA 签发（仅限开发环境）"
+elif [ -n "$OS_CERT_API" ]; then
+    echo "  使用 OS 证书签发 API: $OS_CERT_API"
+else
+    echo "❌ 未配置签发路径"
+    echo "   生产环境: 设置 OS_CERT_API=https://mirage-os:3000/internal/cert/sign"
+    echo "   开发环境: 设置 CERT_MODE=local"
     exit 2
 fi
 
@@ -136,21 +163,68 @@ openssl req -new \
     -subj "/CN=mirage-gateway-${GATEWAY_ID}/O=Mirage Project" \
     2>/dev/null
 
-# 签发证书（365 天）
-SERIAL=$(date +%s%N | sha256sum | head -c 16)
-openssl x509 -req \
-    -in "$CERT_DIR/gateway.csr" \
-    -CA "$CA_DIR/root-ca.crt" \
-    -CAkey "$CA_DIR/root-ca.key" \
-    -set_serial "0x${SERIAL}" \
-    -days 365 \
-    -sha256 \
-    -extfile <(printf "subjectAltName=DNS:mirage-gateway,DNS:localhost,IP:127.0.0.1\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=clientAuth,serverAuth") \
-    -out "$CERT_DIR/gateway.crt.new" \
-    2>/dev/null
+if [ "$CERT_MODE" = "local" ]; then
+    # ─── 本地 CA 签发（仅开发环境） ───
+    SERIAL=$(date +%s%N | sha256sum | head -c 16)
+    openssl x509 -req \
+        -in "$CERT_DIR/gateway.csr" \
+        -CA "$CA_DIR/ca.crt" \
+        -CAkey "$CA_DIR/ca.key" \
+        -set_serial "0x${SERIAL}" \
+        -days 3 \
+        -sha256 \
+        -extfile <(printf "subjectAltName=DNS:mirage-gateway,DNS:localhost,IP:127.0.0.1\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=clientAuth,serverAuth") \
+        -out "$CERT_DIR/gateway.crt.new" \
+        2>/dev/null
+else
+    # ─── OS API 签发（生产路径） ───
+    CSR_PEM=$(cat "$CERT_DIR/gateway.csr")
+    PAYLOAD=$(printf '{"csr":"%s","gatewayId":"%s"}' "$(echo "$CSR_PEM" | sed ':a;N;$!ba;s/\n/\\n/g')" "$GATEWAY_ID")
+
+    HMAC_HEADERS=""
+    if [ -n "$HMAC_SECRET" ]; then
+        TIMESTAMP=$(date +%s)
+        HMAC_SIG=$(printf '%s' "${TIMESTAMP}:${PAYLOAD}" | openssl dgst -sha256 -hmac "$HMAC_SECRET" -binary | xxd -p -c 256)
+        HMAC_HEADERS="-H \"X-HMAC-Timestamp: ${TIMESTAMP}\" -H \"X-HMAC-Signature: ${HMAC_SIG}\""
+    fi
+
+    HTTP_RESPONSE=$(eval curl -s -w "\n%{http_code}" \
+        --cacert "$CERT_DIR/ca.crt" \
+        --cert "$CERT_DIR/gateway.crt" \
+        --key "$CERT_DIR/gateway.key" \
+        -X POST "$OS_CERT_API" \
+        -H "Content-Type: application/json" \
+        $HMAC_HEADERS \
+        -d "'$PAYLOAD'" \
+        2>/dev/null)
+
+    HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -1)
+    HTTP_BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+
+    if [ "$HTTP_CODE" != "201" ] && [ "$HTTP_CODE" != "200" ]; then
+        echo "  ❌ OS API 签发失败 (HTTP $HTTP_CODE): $HTTP_BODY"
+        rm -f "$CERT_DIR/gateway.key.new" "$CERT_DIR/gateway.csr"
+        exit 2
+    fi
+
+    # 提取证书 PEM
+    echo "$HTTP_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['certificate'])" \
+        > "$CERT_DIR/gateway.crt.new" 2>/dev/null \
+        || echo "$HTTP_BODY" | jq -r '.certificate' > "$CERT_DIR/gateway.crt.new" 2>/dev/null
+
+    if [ ! -s "$CERT_DIR/gateway.crt.new" ]; then
+        echo "  ❌ 无法从 API 响应中提取证书"
+        rm -f "$CERT_DIR/gateway.key.new" "$CERT_DIR/gateway.csr"
+        exit 2
+    fi
+fi
 
 # 验证新证书
-if openssl verify -CAfile "$CA_DIR/root-ca.crt" "$CERT_DIR/gateway.crt.new" >/dev/null 2>&1; then
+CA_VERIFY_FILE="$CA_DIR/ca.crt"
+if [ ! -f "$CA_VERIFY_FILE" ] && [ -f "$CERT_DIR/ca.crt" ]; then
+    CA_VERIFY_FILE="$CERT_DIR/ca.crt"
+fi
+if openssl verify -CAfile "$CA_VERIFY_FILE" "$CERT_DIR/gateway.crt.new" >/dev/null 2>&1; then
     echo "  ✅ 新证书验证通过"
 else
     echo "  ❌ 新证书验证失败，回滚"

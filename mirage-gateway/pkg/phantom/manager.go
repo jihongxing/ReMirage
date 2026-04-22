@@ -4,8 +4,10 @@ package phantom
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"net"
 	"sync"
 	"time"
@@ -23,6 +25,16 @@ type PhantomEvent struct {
 	DstPort    uint16
 	HoneypotIP uint32
 	EventType  uint8 // 0=redirect, 1=trap_hit
+}
+
+// PhantomEntry 名单条目（与 C 侧 struct phantom_entry 内存布局一致）
+type PhantomEntry struct {
+	FirstSeen  uint64
+	LastSeen   uint64
+	HitCount   uint32
+	RiskLevel  uint8
+	Pad        [3]uint8
+	TTLSeconds uint32
 }
 
 // TrapRecord 陷阱记录
@@ -117,8 +129,8 @@ func (m *Manager) SetHoneypotIP(ip string) error {
 	return nil
 }
 
-// AddToPhishingList 添加 IP 到钓鱼名单
-func (m *Manager) AddToPhishingList(ip string) error {
+// AddToPhantom 添加 IP 到 Phantom 名单（带风险等级和 TTL）
+func (m *Manager) AddToPhantom(ip string, riskLevel uint8, ttlSeconds uint32) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -133,11 +145,18 @@ func (m *Manager) AddToPhishingList(ip string) error {
 	}
 
 	key := binary.BigEndian.Uint32(ipv4)
-	value := uint64(time.Now().UnixNano())
+	now := uint64(time.Now().UnixNano())
+	entry := PhantomEntry{
+		FirstSeen:  now,
+		LastSeen:   now,
+		HitCount:   0,
+		RiskLevel:  riskLevel,
+		TTLSeconds: ttlSeconds,
+	}
 
 	if m.phishingListMap != nil {
-		if err := m.phishingListMap.Put(key, value); err != nil {
-			return fmt.Errorf("failed to add to phishing list: %w", err)
+		if err := m.phishingListMap.Put(key, &entry); err != nil {
+			return fmt.Errorf("failed to add to phantom list: %w", err)
 		}
 	}
 
@@ -152,8 +171,13 @@ func (m *Manager) AddToPhishingList(ip string) error {
 	return nil
 }
 
-// RemoveFromPhishingList 从钓鱼名单移除
-func (m *Manager) RemoveFromPhishingList(ip string) error {
+// AddToPhishingList 添加 IP 到钓鱼名单（兼容旧接口，默认 risk_level=0, TTL=3600s）
+func (m *Manager) AddToPhishingList(ip string) error {
+	return m.AddToPhantom(ip, 0, 3600)
+}
+
+// RemoveFromPhantom 从 Phantom 名单移除
+func (m *Manager) RemoveFromPhantom(ip string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -171,12 +195,17 @@ func (m *Manager) RemoveFromPhishingList(ip string) error {
 
 	if m.phishingListMap != nil {
 		if err := m.phishingListMap.Delete(key); err != nil {
-			return fmt.Errorf("failed to remove from phishing list: %w", err)
+			return fmt.Errorf("failed to remove from phantom list: %w", err)
 		}
 	}
 
 	delete(m.trapRecords, ip)
 	return nil
+}
+
+// RemoveFromPhishingList 从钓鱼名单移除（兼容旧接口）
+func (m *Manager) RemoveFromPhishingList(ip string) error {
+	return m.RemoveFromPhantom(ip)
 }
 
 // StartEventMonitor 启动事件监控
@@ -253,22 +282,37 @@ func (m *Manager) GetTrapRecords() []*TrapRecord {
 	return records
 }
 
-// GetStats 获取统计信息
-func (m *Manager) GetStats() (redirected, passed, trapped, errors uint64) {
+// PhantomStats 数据面统计
+type PhantomStats struct {
+	Redirected uint64
+	Passed     uint64
+	Trapped    uint64
+	Errors     uint64
+}
+
+// GetPhantomStats 读取 phantom_stats Map 返回四项计数
+func (m *Manager) GetPhantomStats() PhantomStats {
+	var stats PhantomStats
 	if m.phantomStats == nil {
-		return
+		return stats
 	}
 
 	var val uint64
 	keys := []uint32{0, 1, 2, 3}
-	vals := []*uint64{&redirected, &passed, &trapped, &errors}
+	vals := []*uint64{&stats.Redirected, &stats.Passed, &stats.Trapped, &stats.Errors}
 
 	for i, key := range keys {
 		if err := m.phantomStats.Lookup(key, &val); err == nil {
 			*vals[i] = val
 		}
 	}
-	return
+	return stats
+}
+
+// GetStats 获取统计信息（兼容旧接口）
+func (m *Manager) GetStats() (redirected, passed, trapped, errors uint64) {
+	s := m.GetPhantomStats()
+	return s.Redirected, s.Passed, s.Trapped, s.Errors
 }
 
 // OnRedirect 设置重定向回调
@@ -286,6 +330,83 @@ func (m *Manager) EventChan() <-chan *PhantomEvent {
 // Stop 停止管理器
 func (m *Manager) Stop() {
 	close(m.stopChan)
+}
+
+// StartTTLCleaner 启动 TTL 清理循环，每 30 秒遍历 Map 清理过期条目
+func (m *Manager) StartTTLCleaner(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-m.stopChan:
+				return
+			case <-ticker.C:
+				m.cleanExpired()
+			}
+		}
+	}()
+}
+
+// cleanExpired 清理过期的名单条目
+func (m *Manager) cleanExpired() {
+	if m.phishingListMap == nil {
+		return
+	}
+
+	now := uint64(time.Now().UnixNano())
+	var key uint32
+	var entry PhantomEntry
+	var toDelete []uint32
+
+	iter := m.phishingListMap.Iterate()
+	for iter.Next(&key, &entry) {
+		if entry.TTLSeconds == 0 {
+			continue // TTL=0 表示永不过期
+		}
+		expireAt := entry.LastSeen + uint64(entry.TTLSeconds)*1e9
+		if now > expireAt {
+			toDelete = append(toDelete, key)
+		}
+	}
+
+	for _, k := range toDelete {
+		if err := m.phishingListMap.Delete(k); err != nil {
+			log.Printf("[PhantomManager] TTL 清理失败: key=%d err=%v", k, err)
+		}
+	}
+
+	if len(toDelete) > 0 {
+		log.Printf("[PhantomManager] TTL 清理完成: 移除 %d 条过期条目", len(toDelete))
+	}
+}
+
+// SetHoneypotPool 配置分层蜜罐目标池
+func (m *Manager) SetHoneypotPool(level int, ip string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return fmt.Errorf("invalid IP: %s", ip)
+	}
+
+	ipv4 := parsed.To4()
+	if ipv4 == nil {
+		return fmt.Errorf("IPv6 not supported")
+	}
+
+	if m.honeypotConfig != nil {
+		key := uint32(level)
+		value := binary.BigEndian.Uint32(ipv4)
+		if err := m.honeypotConfig.Put(key, value); err != nil {
+			return fmt.Errorf("failed to set honeypot pool level %d: %w", level, err)
+		}
+	}
+
+	return nil
 }
 
 func uint32ToIP(n uint32) string {

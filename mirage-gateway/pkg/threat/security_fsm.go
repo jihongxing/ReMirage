@@ -12,6 +12,10 @@ type SecurityMetrics struct {
 	RejectRate       float64 // 最近 1 分钟入口拒绝率
 	BlacklistHitRate float64
 	ControlPlaneDown bool
+	CPUUsage         float64 // CPU 使用率（%）
+	MemoryUsageMB    int32   // 内存使用量
+	ActiveConns      int32   // 活跃连接数
+	MaxConns         int32   // 最大连接数
 }
 
 // SecurityFSM Gateway 本地安全状态机
@@ -101,6 +105,14 @@ func (fsm *SecurityFSM) CurrentState() SecurityState {
 	fsm.mu.Lock()
 	defer fsm.mu.Unlock()
 	return fsm.current
+}
+
+// IsUnderAttack 判断是否处于受攻击状态（HighPressure 及以上）
+// 用于心跳上报，让 OS 侧知道该节点正在受压
+func (fsm *SecurityFSM) IsUnderAttack() bool {
+	fsm.mu.Lock()
+	defer fsm.mu.Unlock()
+	return fsm.current >= StateHighPressure
 }
 
 // now 返回当前时间（支持测试注入）

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -33,13 +34,15 @@ func NewCommandAuditor() *CommandAuditor {
 	}
 }
 
-// Log 记录审计日志
+// Log 记录审计日志（仅记录摘要，不记录原始参数全文）
 func (a *CommandAuditor) Log(commandType, sourceAddr, params string, success bool, message string) {
+	// 摘要化：只保留 type 和 level，不记录原始参数
+	summary := fmt.Sprintf("type=%s", commandType)
 	entry := CommandAuditEntry{
 		Timestamp:   time.Now(),
 		CommandType: commandType,
 		SourceAddr:  sourceAddr,
-		Params:      params,
+		Params:      summary,
 		Success:     success,
 		Message:     message,
 	}

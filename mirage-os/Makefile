@@ -1,7 +1,7 @@
 # Mirage-OS Makefile
 # 控制中心编译配置
 
-.PHONY: all proto clean test docker test-security
+.PHONY: all proto clean test docker test-security test-control-plane
 
 # 变量定义
 PROTO_DIR := api/proto
@@ -93,6 +93,13 @@ test-security:
 	cd ../mirage-gateway && go test ./pkg/api/ -run SecurityRegression -v
 	cd ../mirage-gateway && go test ./pkg/cortex/ -run SecurityRegression -v
 	@echo "✅ 安全回归测试完成"
+
+# 控制面一致性测试
+test-control-plane:
+	@echo "运行控制面一致性测试..."
+	cd gateway-bridge && go test -v ./pkg/topology/ -run "TestGateway|TestCell|TestPush|TestState" -count=1
+	cd gateway-bridge && go test -v ./pkg/dispatch/ -run "TestFanout|TestPushLog" -count=1
+	@echo "✅ 控制面一致性测试完成"
 
 # 开发模式（热重载）
 dev:

@@ -1,0 +1,53 @@
+# 开发环境专用 Docker Compose 配置
+# 保留开发便利配置，生产环境请使用 docker-compose.os.yml
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: mirage
+      POSTGRES_USER: mirage
+      POSTGRES_PASSWORD: dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data_dev:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data_dev:/data
+
+  gateway-bridge:
+    build: ./gateway-bridge
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      DATABASE_URL: postgres://mirage:dev_password@postgres:5432/mirage
+      REDIS_URL: redis://redis:6379
+      MIRAGE_ENV: development
+    ports:
+      - "50847:50847"
+
+  api-server:
+    build: ./api-server
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      DATABASE_URL: postgres://mirage:dev_password@postgres:5432/mirage
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: dev_jwt_secret_change_in_production
+      BRIDGE_INTERNAL_SECRET: dev_bridge_secret
+      INTERNAL_HMAC_SECRET: dev_hmac_secret
+      NODE_ENV: development
+    ports:
+      - "3000:3000"
+
+volumes:
+  pg_data_dev:
+  redis_data_dev:

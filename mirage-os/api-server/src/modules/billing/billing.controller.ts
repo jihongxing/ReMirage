@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Query, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Query, Req, UseGuards, ForbiddenException } from '@nestjs/common';
 import { BillingService, RechargeDto } from './billing.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PaginationDto } from '../../common/pagination.dto';
@@ -21,7 +21,6 @@ export class BillingController {
       startDate: startDate ? new Date(startDate) : undefined,
       endDate: endDate ? new Date(endDate) : undefined,
     });
-    // 前端按数组消费，字段名转 snake_case
     return result.data.map((log: any) => ({
       created_at: log.createdAt,
       user_id: log.userId,
@@ -36,7 +35,6 @@ export class BillingController {
   @Get('quota')
   async getQuota(@Req() req: any) {
     const user = await this.billingService.getQuota(req.user.userId);
-    // 统一前端契约字段名
     return {
       remaining_quota: user?.remainingQuota ?? 0,
       total_recharged: user?.totalDeposit ?? 0,
@@ -46,7 +44,10 @@ export class BillingController {
 
   @Post('recharge')
   recharge(@Req() req: any, @Body() body: { amount: number }) {
-    // 前端发 { amount }，转换为后端 RechargeDto
+    // 仅 admin 角色可调用
+    if (req.user?.role !== 'admin') {
+      throw new ForbiddenException('仅 admin 角色可调用 recharge 端点');
+    }
     const dto: RechargeDto = {
       quotaGb: body.amount,
       price: body.amount,

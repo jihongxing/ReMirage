@@ -27,6 +27,10 @@ dist/
 .next/
 *.tsbuildinfo
 
+# Explicitly exclude api-server build artifacts
+mirage-os/api-server/dist/
+mirage-os/api-server/node_modules/
+
 # IDE
 .idea/
 *.swp

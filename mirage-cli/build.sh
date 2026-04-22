@@ -1,7 +1,7 @@
 #!/bin/bash
 # Mirage CLI 编译脚本
 
-VERSION="0.9.1"
+VERSION="2.0.0"
 BUILD_TIME=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
 GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 

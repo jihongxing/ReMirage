@@ -125,6 +125,40 @@ func SelectBestCell(cells []CellWithLoad, preferredLevel pb.CellLevel, preferred
 	return &filtered[0], nil
 }
 
+// getTierLoadThresholdLocal 获取等级负载阈值（本地版本，避免跨包依赖）
+func getTierLoadThresholdLocal(level int) float32 {
+	switch level {
+	case 3:
+		return 40
+	case 2:
+		return 60
+	default:
+		return 80
+	}
+}
+
+// SelectBestCellForTier 按等级选择最优蜂窝（纯函数，用于属性测试）
+// 支持降级分配：如果目标等级无可用蜂窝，降级到低一级
+// 返回选中的蜂窝和实际分配的等级
+func SelectBestCellForTier(cells []CellWithLoad, userLevel int) (*CellWithLoad, int, error) {
+	for level := userLevel; level >= 1; level-- {
+		threshold := getTierLoadThresholdLocal(level)
+		var candidates []CellWithLoad
+		for _, c := range cells {
+			if c.Cell.CellLevel == level && c.Cell.Status == "active" && c.LoadPercent < threshold {
+				candidates = append(candidates, c)
+			}
+		}
+		if len(candidates) > 0 {
+			sort.Slice(candidates, func(i, j int) bool {
+				return candidates[i].LoadPercent < candidates[j].LoadPercent
+			})
+			return &candidates[0], level, nil
+		}
+	}
+	return nil, 0, fmt.Errorf("no available cells for user level %d", userLevel)
+}
+
 // SelectSwitchTarget 选择切换目标蜂窝（纯函数，用于属性测试）
 func SelectSwitchTarget(cells []CellWithLoad, currentCellID string, currentLevel int, currentJurisdiction string) (*CellWithLoad, error) {
 	var candidates []CellWithLoad

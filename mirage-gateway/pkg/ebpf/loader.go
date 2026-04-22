@@ -37,6 +37,15 @@ var sharedMapNames = []string{
 	"ghost_mode_map",
 	"threat_events",
 	"perf_stats_events",
+	"asn_blocklist_lpm",
+	"rate_limit_map",
+	"rate_config_map",
+	"silent_config_map",
+	"l1_defense_events",
+	"l1_stats_map",
+	"ingress_profile_map",
+	"syn_validation_map",
+	"syn_config_map",
 }
 
 // bpfProgram 描述一个待加载的 BPF 程序
@@ -134,6 +143,12 @@ func (l *Loader) LoadAndAttach() error {
 			path:     "bpf/icmp_tunnel.o",
 			critical: false, // 非 critical，加载失败时 ICMP 传输标记不可用
 			attachFn: l.attachICMPTunnel,
+		},
+		{
+			name:     "L1 静默响应 (TC egress)",
+			path:     "bpf/l1_silent.o",
+			critical: false,
+			attachFn: l.attachL1Silent,
 		},
 	}
 
@@ -331,6 +346,11 @@ func (l *Loader) attachICMPTunnel(loader *Loader, objs *ebpf.Collection) error {
 		}
 	}
 	return nil
+}
+
+// attachL1Silent 挂载 L1 静默响应 (TC egress)
+func (l *Loader) attachL1Silent(loader *Loader, objs *ebpf.Collection) error {
+	return l.attachTCFilter(objs, "l1_silent_egress", netlink.HANDLE_MIN_EGRESS)
 }
 
 // GetMap 获取指定名称的 Map（供外部模块使用）
@@ -599,8 +619,17 @@ func (l *Loader) UpdateStrategy(strategy *DefenseStrategy) error {
 		}
 	}
 
-	log.Printf("✅ 防御策略已更新: Jitter=%dus±%dus, Noise=%d%%",
-		strategy.JitterMeanUs, strategy.JitterStddevUs, strategy.NoiseIntensity)
+	// 写入 NPM 配置
+	if npmMap := l.maps["npm_config_map"]; npmMap != nil {
+		npmCfg := NewDefaultNPMConfig(strategy.PaddingRate)
+		if err := writeWithSnapshot(npmMap, &key, &npmCfg, 24); err != nil {
+			rollback()
+			return fmt.Errorf("更新 NPM 配置失败: %w", err)
+		}
+	}
+
+	log.Printf("✅ 防御策略已更新: Jitter=%dus±%dus, Noise=%d%%, Padding=%d%%",
+		strategy.JitterMeanUs, strategy.JitterStddevUs, strategy.NoiseIntensity, strategy.PaddingRate)
 	return nil
 }
 

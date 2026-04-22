@@ -182,9 +182,10 @@ func (BlacklistSourceType) EnumDescriptor() ([]byte, []int) {
 type SessionEventType int32
 
 const (
-	SessionEventType_SESSION_CONNECTED    SessionEventType = 0
-	SessionEventType_SESSION_DISCONNECTED SessionEventType = 1
-	SessionEventType_SESSION_MIGRATING    SessionEventType = 2
+	SessionEventType_SESSION_CONNECTED      SessionEventType = 0
+	SessionEventType_SESSION_DISCONNECTED   SessionEventType = 1
+	SessionEventType_SESSION_MIGRATING      SessionEventType = 2
+	SessionEventType_SESSION_FUSE_TRIGGERED SessionEventType = 3 // 配额熔断：用户配额耗尽
 )
 
 // Enum value maps for SessionEventType.
@@ -193,11 +194,13 @@ var (
 		0: "SESSION_CONNECTED",
 		1: "SESSION_DISCONNECTED",
 		2: "SESSION_MIGRATING",
+		3: "SESSION_FUSE_TRIGGERED",
 	}
 	SessionEventType_value = map[string]int32{
-		"SESSION_CONNECTED":    0,
-		"SESSION_DISCONNECTED": 1,
-		"SESSION_MIGRATING":    2,
+		"SESSION_CONNECTED":      0,
+		"SESSION_DISCONNECTED":   1,
+		"SESSION_MIGRATING":      2,
+		"SESSION_FUSE_TRIGGERED": 3,
 	}
 )
 
@@ -1649,11 +1652,12 @@ const file_mirage_proto_rawDesc = "" +
 	"\tSNI_PROBE\x10\x06*2\n" +
 	"\x13BlacklistSourceType\x12\f\n" +
 	"\bBL_LOCAL\x10\x00\x12\r\n" +
-	"\tBL_GLOBAL\x10\x01*Z\n" +
+	"\tBL_GLOBAL\x10\x01*v\n" +
 	"\x10SessionEventType\x12\x15\n" +
 	"\x11SESSION_CONNECTED\x10\x00\x12\x18\n" +
 	"\x14SESSION_DISCONNECTED\x10\x01\x12\x15\n" +
-	"\x11SESSION_MIGRATING\x10\x022\xed\x02\n" +
+	"\x11SESSION_MIGRATING\x10\x02\x12\x1a\n" +
+	"\x16SESSION_FUSE_TRIGGERED\x10\x032\xed\x02\n" +
 	"\rGatewayUplink\x12D\n" +
 	"\rSyncHeartbeat\x12\x18.mirage.HeartbeatRequest\x1a\x19.mirage.HeartbeatResponse\x12@\n" +
 	"\rReportTraffic\x12\x16.mirage.TrafficRequest\x1a\x17.mirage.TrafficResponse\x12=\n" +

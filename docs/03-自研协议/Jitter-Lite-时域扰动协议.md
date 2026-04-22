@@ -1,3 +1,9 @@
+---
+Status: derived
+Target Truth: docs/protocols/jitter-lite.md
+Migration: 当前有效协议语义已迁移到 docs/protocols/jitter-lite.md，本文降级为解释性输入材料
+---
+
 # Jitter-Lite 时域扰动协议
 
 ## 一、协议定位

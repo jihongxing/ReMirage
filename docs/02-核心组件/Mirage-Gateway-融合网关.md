@@ -1,3 +1,9 @@
+---
+Status: input
+Target Truth: docs/governance/boundaries/component-responsibilities.md
+Migration: Gateway 职责定义已迁移到 component-responsibilities.md，本文保留为组件输入材料
+---
+
 # Mirage-Gateway 融合网关设计
 
 ## 项目定位

@@ -39,6 +39,11 @@ type TransportConn interface {
 }
 
 // TransportManager 传输管理器 — 管理主通道与降级通道的切换
+//
+// Deprecated: TransportManager 已被 Orchestrator 替代为唯一编排主链。
+// 新代码不应使用 TransportManager，应使用 Orchestrator。
+// 保留此类型仅为向后兼容，后续版本将移除。
+// 参见 docs/外部零特征消除审计与整改清单.md S-01。
 type TransportManager struct {
 	mu sync.RWMutex
 

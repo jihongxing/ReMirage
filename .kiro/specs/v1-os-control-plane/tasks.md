@@ -30,34 +30,34 @@
   - [x] 4.4 在 Gateway 侧处理心跳响应：收到 `needs_full_sync=true` 时拉取全量 Desired State 并对齐
   - [x] 4.5 在心跳超时处理中调用 SessionService.onGatewayTimeout 批量标记会话断开（复用 Spec 2-2）
 
-- [-] 5. 统一 Fan-out 引擎
-  - [~] 5.1 新建 `gateway-bridge/pkg/dispatch/fanout.go`，实现 FanoutEngine（支持 Single/Cell/Global 三种 scope）
-  - [~] 5.2 实现 `resolveTargets`：从 Registry 查询目标 Gateway 列表
-  - [~] 5.3 实现下推重试逻辑：最多 3 次指数退避重试，失败后记录告警
-  - [~] 5.4 改造现有 `PushStrategyToCell`：从 Redis SCAN 改为通过 Registry.GetGatewaysByCell 查询
-  - [~] 5.5 改造现有 `PushBlacklistToAll`：从遍历 connections map 改为通过 Registry.GetAllOnline 查询
+- [x] 5. 统一 Fan-out 引擎
+  - [x] 5.1 新建 `gateway-bridge/pkg/dispatch/fanout.go`，实现 FanoutEngine（支持 Single/Cell/Global 三种 scope）
+  - [x] 5.2 实现 `resolveTargets`：从 Registry 查询目标 Gateway 列表
+  - [x] 5.3 实现下推重试逻辑：最多 3 次指数退避重试，失败后记录告警
+  - [x] 5.4 改造现有 `PushStrategyToCell`：从 Redis SCAN 改为通过 Registry.GetGatewaysByCell 查询
+  - [x] 5.5 改造现有 `PushBlacklistToAll`：从遍历 connections map 改为通过 Registry.GetAllOnline 查询
 
-- [-] 6. 下推状态记录
-  - [~] 6.1 新建 `gateway-bridge/pkg/dispatch/push_log.go`，实现 PushLog（内存环形缓冲 + 异步 DB 持久化）
-  - [~] 6.2 在 Prisma schema 中新增 `push_logs` 表并运行迁移
-  - [~] 6.3 在 FanoutEngine 每次下推后调用 PushLog.Record 记录结果
-  - [~] 6.4 实现 `GetRecent` 方法供查询 API 使用
+- [x] 6. 下推状态记录
+  - [x] 6.1 新建 `gateway-bridge/pkg/dispatch/push_log.go`，实现 PushLog（内存环形缓冲 + 异步 DB 持久化）
+  - [x] 6.2 在 Prisma schema 中新增 `push_logs` 表并运行迁移
+  - [x] 6.3 在 FanoutEngine 每次下推后调用 PushLog.Record 记录结果
+  - [x] 6.4 实现 `GetRecent` 方法供查询 API 使用
 
-- [ ] 7. DB Schema 扩展
-  - [~] 7.1 在 `Gateway` 模型中增加 `downlink_addr`、`version`、`max_sessions`、`active_sessions` 字段
-  - [~] 7.2 运行 Prisma migrate 生成数据库迁移
+- [x] 7. DB Schema 扩展
+  - [x] 7.1 在 `Gateway` 模型中增加 `downlink_addr`、`version`、`max_sessions`、`active_sessions` 字段
+  - [x] 7.2 运行 Prisma migrate 生成数据库迁移
 
-- [ ] 8. NestJS 查询 API
-  - [~] 8.1 在 GatewaysController 中增加 `GET /gateways/topology/by-cell/:cellId` 接口（按 Cell 查在线 Gateway）
-  - [~] 8.2 在 GatewaysController 中增加 `GET /gateways/topology/online` 接口（查所有在线 Gateway）
-  - [~] 8.3 在 GatewaysController 中增加 `GET /gateways/push-logs` 接口（查最近下推记录）
-  - [~] 8.4 为以上接口增加 RBAC 权限校验（仅 admin/operator 可访问）
+- [x] 8. NestJS 查询 API
+  - [x] 8.1 在 GatewaysController 中增加 `GET /gateways/topology/by-cell/:cellId` 接口（按 Cell 查在线 Gateway）
+  - [x] 8.2 在 GatewaysController 中增加 `GET /gateways/topology/online` 接口（查所有在线 Gateway）
+  - [x] 8.3 在 GatewaysController 中增加 `GET /gateways/push-logs` 接口（查最近下推记录）
+  - [x] 8.4 为以上接口增加 RBAC 权限校验（仅 admin/operator 可访问）
 
-- [ ] 9. 控制面一致性测试
-  - [~] 9.1 编写 Gateway 注册测试：注册后 Registry 可查到，拓扑 API 返回正确
-  - [~] 9.2 编写按 Cell 下推测试：Cell 内 Gateway 收到策略，Cell 外不受影响
-  - [~] 9.3 编写 Gateway 下线测试：心跳超时后 MarkOffline + 会话标记断开
-  - [~] 9.4 编写 Gateway 重注册测试：downlink_addr 变更后拓扑索引更新
-  - [~] 9.5 编写下推失败重试测试：目标不可达时重试 3 次后记录告警
-  - [~] 9.6 编写状态对齐测试：state_hash 不一致时触发全量同步
-  - [~] 9.7 在 Makefile 增加 `test-control-plane` target
+- [x] 9. 控制面一致性测试
+  - [x] 9.1 编写 Gateway 注册测试：注册后 Registry 可查到，拓扑 API 返回正确
+  - [x] 9.2 编写按 Cell 下推测试：Cell 内 Gateway 收到策略，Cell 外不受影响
+  - [x] 9.3 编写 Gateway 下线测试：心跳超时后 MarkOffline + 会话标记断开
+  - [x] 9.4 编写 Gateway 重注册测试：downlink_addr 变更后拓扑索引更新
+  - [x] 9.5 编写下推失败重试测试：目标不可达时重试 3 次后记录告警
+  - [x] 9.6 编写状态对齐测试：state_hash 不一致时触发全量同步
+  - [x] 9.7 在 Makefile 增加 `test-control-plane` target

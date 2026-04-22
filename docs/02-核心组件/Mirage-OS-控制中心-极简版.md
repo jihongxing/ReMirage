@@ -1,3 +1,9 @@
+---
+Status: derived
+Target Truth: docs/governance/boundaries/component-responsibilities.md
+Migration: 极简版为 OS 说明的摘要派生
+---
+
 # Mirage-OS 控制中心（极简版）
 
 ## 项目定位

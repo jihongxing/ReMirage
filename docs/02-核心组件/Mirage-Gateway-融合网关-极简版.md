@@ -1,3 +1,9 @@
+---
+Status: derived
+Target Truth: docs/governance/boundaries/component-responsibilities.md
+Migration: 极简版为 Gateway 说明的摘要派生
+---
+
 # Mirage-Gateway 融合网关（极简版）
 
 ## 项目定位

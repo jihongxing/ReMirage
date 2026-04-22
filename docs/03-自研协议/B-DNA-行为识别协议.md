@@ -1,3 +1,9 @@
+---
+Status: derived
+Target Truth: docs/protocols/bdna.md
+Migration: 当前有效协议语义已迁移到 docs/protocols/bdna.md，本文降级为解释性输入材料
+---
+
 # B-DNA 行为识别协议
 
 ## 一、协议定位

@@ -1,3 +1,9 @@
+---
+Status: input
+Target Truth: mirage-gateway/pkg/phantom/ (运行时实现)
+Migration: Phantom 策略审计，结论应回写到 Phantom 实现
+---
+
 # Phantom / 蜜罐策略审计与收敛建议
 
 ## 一、文档目标

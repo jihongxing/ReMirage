@@ -1,0 +1,26 @@
+syntax = "proto3";
+package mirage;
+option go_package = "mirage-proto/gen";
+
+enum ControlCommandType {
+    CONTROL_COMMAND_UNKNOWN = 0;
+    PERSONA_FLIP = 1;
+    BUDGET_SYNC = 2;
+    SURVIVAL_MODE_CHANGE = 3;
+    ROLLBACK = 4;
+    SESSION_MIGRATE = 5;
+}
+
+message ControlCommand {
+    string command_id = 1;
+    ControlCommandType command_type = 2;
+    uint64 epoch = 3;
+    int64 timestamp = 4;
+    bytes payload = 5;
+}
+
+message ControlCommandAck {
+    string command_id = 1;
+    bool success = 2;
+    string error_message = 3;
+}

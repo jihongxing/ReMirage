@@ -1,3 +1,9 @@
+---
+Status: input
+Target Truth: docs/governance/boundaries/component-responsibilities.md (编排职责) + mirage-gateway/pkg/gtunnel/orchestrator.go (运行时)
+Migration: V2 编排设计草案，结论中的状态模型/Persona/Commit Engine 待落地到代码，本文保留为设计输入材料
+---
+
 # Mirage V2 编排内核设计草案
 
 ## 一、文档目标

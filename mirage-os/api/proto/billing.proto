@@ -20,6 +20,9 @@ service BillingService {
   
   // 查询计费流水
   rpc GetBillingLogs(BillingLogsRequest) returns (BillingLogsResponse);
+  
+  // 购买等级订阅
+  rpc PurchaseTierSubscription(TierSubscriptionRequest) returns (TierSubscriptionResponse);
 }
 
 // ============================================
@@ -153,4 +156,25 @@ enum LogType {
   LOG_DEPOSIT = 2;                    // 充值
   LOG_PURCHASE = 3;                   // 购买流量包
   LOG_REFUND = 4;                     // 退款
+  LOG_SUBSCRIPTION = 5;               // 等级订阅
+  LOG_FUSE = 6;                       // 配额熔断
+  LOG_DOWNGRADE = 7;                  // 等级降级
+}
+
+// ============================================
+// 等级订阅
+// ============================================
+
+message TierSubscriptionRequest {
+  string account_id = 1;              // 账户 ID
+  string plan_type = 2;               // 月费产品类型: plan_standard_monthly / plan_platinum_monthly / plan_diamond_monthly
+}
+
+message TierSubscriptionResponse {
+  bool success = 1;
+  string message = 2;
+  uint64 cost_usd = 3;                // 费用（美分）
+  uint64 remaining_balance = 4;       // 剩余余额（美分）
+  int32 new_cell_level = 5;           // 新等级
+  int64 expires_at = 6;               // 订阅到期时间
 }

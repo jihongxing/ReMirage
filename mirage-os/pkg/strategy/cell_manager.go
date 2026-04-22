@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"time"
 
@@ -257,6 +258,16 @@ func (s *CellScheduler) checkScaleOut() {
 		log.Printf("[CellScheduler] 查询活跃节点失败: %v", err)
 		return
 	}
+
+	// 收集所有活跃 Cell，确保温备池充足
+	cellsSeen := make(map[string]bool)
+	for _, gw := range activeGateways {
+		if !cellsSeen[gw.CellID] {
+			cellsSeen[gw.CellID] = true
+			go s.EnsureStandbyPool(s.ctx, gw.CellID)
+		}
+	}
+
 	for _, gw := range activeGateways {
 		if gw.CurrentThreatLevel >= ThreatLevelCritical {
 			log.Printf("[CellScheduler] 检测到高威胁节点 %s (等级: %d)，触发扩容",
@@ -343,4 +354,219 @@ func (s *CellScheduler) GetShadowPoolStatus() map[string]any {
 		"incubation":  incubationCount,
 		"calibration": calibrationCount,
 	}
+}
+
+// ============================================
+// 恢复优先级差异（Task 6）
+// ============================================
+
+// GatewaySessionWithLevel 带用户等级的会话信息
+type GatewaySessionWithLevel struct {
+	SessionID string
+	UserID    string
+	GatewayID string
+	CellLevel int
+}
+
+// SortSessionsByPriority 按等级优先级排序（纯函数，用于属性测试）
+// Diamond(3) 优先 → Platinum(2) → Standard(1)
+func SortSessionsByPriority(sessions []GatewaySessionWithLevel) {
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].CellLevel > sessions[j].CellLevel
+	})
+}
+
+// getTierConnectionRatioLocal 本地等级连接上限比例（避免循环导入 provisioning 包）
+func getTierConnectionRatioLocal(level int) float32 {
+	switch level {
+	case 3:
+		return 0.4
+	case 2:
+		return 0.7
+	default:
+		return 1.0
+	}
+}
+
+// RecoverUsers 故障恢复时按等级优先级排序迁移
+func (s *CellScheduler) RecoverUsers(failedGatewayID string) error {
+	// 查询该 Gateway 上所有活跃用户及其等级
+	var sessions []GatewaySessionWithLevel
+	s.db.Raw(`
+		SELECT g.gateway_id, g.user_id, u.cell_level
+		FROM gateways g
+		JOIN users u ON g.user_id = u.user_id
+		WHERE g.gateway_id = ? AND g.is_online = true AND g.user_id != ''
+	`, failedGatewayID).Scan(&sessions)
+
+	if len(sessions) == 0 {
+		return nil
+	}
+
+	// 按等级降序排序：Diamond(3) > Platinum(2) > Standard(1)
+	SortSessionsByPriority(sessions)
+
+	for _, session := range sessions {
+		target := s.selectRecoveryTarget(session.CellLevel)
+		if target != nil {
+			s.migrateSession(session.UserID, session.GatewayID, target.GatewayID)
+		} else {
+			log.Printf("[CellScheduler] 无法为用户 %s (等级 %d) 找到恢复目标", session.UserID, session.CellLevel)
+		}
+	}
+	return nil
+}
+
+// selectRecoveryTarget 选择恢复目标 Gateway
+// Diamond 用户优先选择网络质量最高的备选 Gateway
+func (s *CellScheduler) selectRecoveryTarget(userLevel int) *models.Gateway {
+	var candidates []models.Gateway
+
+	// 查询同等级或更低等级的可用 Gateway
+	for level := userLevel; level >= 1; level-- {
+		s.db.Where(`
+			is_online = true AND phase = 2 AND active_connections <
+			(SELECT max_gateways FROM cells WHERE cells.cell_id = gateways.cell_id) * ? AND
+			cell_id IN (SELECT cell_id FROM cells WHERE cell_level = ? AND status = 'active')
+		`, getTierConnectionRatioLocal(level), level).
+			Find(&candidates)
+		if len(candidates) > 0 {
+			break
+		}
+	}
+
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	// Diamond 用户优先选择网络质量最高的备选 Gateway
+	if userLevel == 3 {
+		sort.Slice(candidates, func(i, j int) bool {
+			return candidates[i].NetworkQuality > candidates[j].NetworkQuality
+		})
+	} else {
+		// 其他等级按连接数最少排序
+		sort.Slice(candidates, func(i, j int) bool {
+			return candidates[i].ActiveConnections < candidates[j].ActiveConnections
+		})
+	}
+
+	return &candidates[0]
+}
+
+// migrateSession 迁移用户会话
+func (s *CellScheduler) migrateSession(userID, fromGatewayID, toGatewayID string) {
+	// 释放旧 Gateway
+	s.db.Model(&models.Gateway{}).Where("gateway_id = ?", fromGatewayID).
+		Updates(map[string]any{
+			"user_id":            "",
+			"active_connections": gorm.Expr("GREATEST(active_connections - 1, 0)"),
+		})
+
+	// 绑定新 Gateway
+	s.db.Model(&models.Gateway{}).Where("gateway_id = ?", toGatewayID).
+		Updates(map[string]any{
+			"user_id":            userID,
+			"active_connections": gorm.Expr("active_connections + 1"),
+		})
+
+	log.Printf("[CellScheduler] 迁移用户 %s: %s → %s", userID, fromGatewayID, toGatewayID)
+}
+
+// ActivateStandby 从温备池激活替补节点
+// 优先 Phase=1（温备），其次 Phase=0（冷备），激活后 Phase 更新为 2
+func (s *CellScheduler) ActivateStandby(ctx context.Context, cellID string) (*models.Gateway, error) {
+	// 优先从 Phase=1（温备/校准期）中选择
+	var standby models.Gateway
+	err := s.db.Where("cell_id = ? AND phase = 1 AND is_online = true", cellID).
+		Order("baseline_rtt ASC").First(&standby).Error
+	if err != nil {
+		// 温备池耗尽，从 Phase=0（冷备/潜伏期）中选择
+		err = s.db.Where("cell_id = ? AND phase = 0 AND is_online = true", cellID).
+			Order("baseline_rtt ASC").First(&standby).Error
+		if err != nil {
+			return nil, fmt.Errorf("no standby available in cell %s", cellID)
+		}
+	}
+
+	// 激活：Phase → 2（服役期）
+	if err := s.db.Model(&standby).Update("phase", int(PhaseActive)).Error; err != nil {
+		return nil, fmt.Errorf("activate standby %s: %w", standby.GatewayID, err)
+	}
+
+	log.Printf("[CellScheduler] ✅ 替补节点已激活: %s (cell=%s, phase→2)", standby.GatewayID, cellID)
+
+	// 补充温备池
+	go s.EnsureStandbyPool(ctx, cellID)
+
+	return &standby, nil
+}
+
+// EnsureStandbyPool 确保温备池节点数不低于阈值（默认 2）
+func (s *CellScheduler) EnsureStandbyPool(ctx context.Context, cellID string) {
+	const minWarmStandby = 2
+
+	var warmCount int64
+	s.db.Model(&models.Gateway{}).
+		Where("cell_id = ? AND phase = 1 AND is_online = true", cellID).
+		Count(&warmCount)
+
+	if warmCount >= int64(minWarmStandby) {
+		return
+	}
+
+	needed := int64(minWarmStandby) - warmCount
+
+	// 从冷备池（Phase=0）补充到温备池（Phase=1）
+	var coldGateways []models.Gateway
+	s.db.Where("cell_id = ? AND phase = 0 AND is_online = true", cellID).
+		Order("baseline_rtt ASC").
+		Limit(int(needed)).
+		Find(&coldGateways)
+
+	for _, gw := range coldGateways {
+		if err := s.db.Model(&gw).Update("phase", int(PhaseCalibration)).Error; err != nil {
+			log.Printf("[CellScheduler] ⚠️ 补充温备池失败: %s: %v", gw.GatewayID, err)
+			continue
+		}
+		log.Printf("[CellScheduler] 温备池补充: %s (cell=%s, phase 0→1)", gw.GatewayID, cellID)
+	}
+}
+
+// PoolStats 各级池的节点统计
+type PoolStats struct {
+	Active int64 `json:"active"` // Phase=2
+	Warm   int64 `json:"warm"`   // Phase=1
+	Cold   int64 `json:"cold"`   // Phase=0
+}
+
+// GetPoolStats 返回指定 Cell 各级池的节点数
+func (s *CellScheduler) GetPoolStats(cellID string) PoolStats {
+	var stats PoolStats
+	s.db.Model(&models.Gateway{}).
+		Where("cell_id = ? AND phase = 2 AND is_online = true", cellID).
+		Count(&stats.Active)
+	s.db.Model(&models.Gateway{}).
+		Where("cell_id = ? AND phase = 1 AND is_online = true", cellID).
+		Count(&stats.Warm)
+	s.db.Model(&models.Gateway{}).
+		Where("cell_id = ? AND phase = 0 AND is_online = true", cellID).
+		Count(&stats.Cold)
+	return stats
+}
+
+// GetAllPoolStats 返回所有 Cell 的池统计（用于 Prometheus metrics 暴露）
+func (s *CellScheduler) GetAllPoolStats() map[string]PoolStats {
+	s.mu.RLock()
+	cellIDs := make([]string, 0, len(s.activeCells))
+	for id := range s.activeCells {
+		cellIDs = append(cellIDs, id)
+	}
+	s.mu.RUnlock()
+
+	result := make(map[string]PoolStats, len(cellIDs))
+	for _, cellID := range cellIDs {
+		result[cellID] = s.GetPoolStats(cellID)
+	}
+	return result
 }

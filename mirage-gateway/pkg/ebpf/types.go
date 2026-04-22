@@ -53,6 +53,7 @@ type DefenseStrategy struct {
 	JitterMeanUs   uint32 // Jitter 平均值 (微秒)
 	JitterStddevUs uint32 // Jitter 标准差 (微秒)
 	TemplateID     uint32 // 模板 ID
+	PaddingRate    uint32 // NPM 填充率 (0-100)
 	FiberJitterUs  uint32 // 光缆抖动 (微秒)
 	RouterDelayUs  uint32 // 路由器延迟 (微秒)
 	NoiseIntensity uint32 // 噪声强度 (0-100)
@@ -72,6 +73,43 @@ type VPCConfig struct {
 	FiberJitterUs  uint32
 	RouterDelayUs  uint32
 	NoiseIntensity uint32
+}
+
+const (
+	NPMModeFixedMTU uint32 = iota
+	NPMModeRandomRange
+	NPMModeGaussian
+)
+
+const (
+	DefaultNPMGlobalMTU     uint32 = 1460
+	DefaultNPMMinPacketSize uint32 = 128
+)
+
+// NPMConfig NPM 配置（对应 C 结构体 struct npm_config）
+type NPMConfig struct {
+	Enabled       uint32
+	FillingRate   uint32
+	GlobalMTU     uint32
+	MinPacketSize uint32
+	PaddingMode   uint32
+	DecoyRate     uint32
+}
+
+// NewDefaultNPMConfig 返回当前统一的 NPM 默认配置。
+func NewDefaultNPMConfig(paddingRate uint32) NPMConfig {
+	if paddingRate > 100 {
+		paddingRate = 100
+	}
+
+	return NPMConfig{
+		Enabled:       1,
+		FillingRate:   paddingRate,
+		GlobalMTU:     DefaultNPMGlobalMTU,
+		MinPacketSize: DefaultNPMMinPacketSize,
+		PaddingMode:   NPMModeGaussian,
+		DecoyRate:     0,
+	}
 }
 
 // ThreatHandler 威胁处理器接口
@@ -107,4 +145,41 @@ type ICMPRxEvent struct {
 	DataLen    uint16     // 数据长度
 	Reserved   uint16     // 保留字段
 	Data       [1024]byte // 提取的 Payload
+}
+
+// --- L1 纵深防御相关结构体（与 C 数据面 bpf/common.h 严格字节对齐） ---
+
+// RateLimitConfig 速率限制配置（Go → C，通过 rate_config_map 下发）
+type RateLimitConfig struct {
+	SynPPSLimit  uint32 // SYN 包每秒上限
+	ConnPPSLimit uint32 // 总连接每秒上限
+	Enabled      uint32 // 是否启用
+}
+
+// RateEvent 速率限制触发事件（C → Go，通过 l1_defense_events Ring Buffer 上报）
+type RateEvent struct {
+	Timestamp   uint64 // 纳秒时间戳
+	SourceIP    uint32 // 源 IP（网络字节序）
+	TriggerType uint32 // 0=SYN, 1=CONN
+	CurrentRate uint64 // 当前速率
+}
+
+// SilentConfig 静默响应配置（Go → C，通过 silent_config_map 下发）
+type SilentConfig struct {
+	DropICMPUnreachable uint32 // 拦截 ICMP Unreachable
+	DropTCPRst          uint32 // 拦截非法 TCP RST
+	Enabled             uint32 // 是否启用
+}
+
+// L1Stats L1 层统计计数器（从 l1_stats_map 读取，与 C 侧 struct l1_stats 严格字节对齐）
+type L1Stats struct {
+	ASNDrops       uint64 // ASN 黑名单丢弃数
+	RateDrops      uint64 // 速率限制丢弃数
+	SilentDrops    uint64 // 静默响应丢弃数
+	BlacklistDrops uint64 // 用户级黑名单命中（XDP 层）
+	SanityDrops    uint64 // 非法画像丢弃
+	ProfileDrops   uint64 // 入口准入拒绝
+	TotalChecked   uint64 // 总检查数
+	SynChallenge   uint64 // SYN challenge 触发次数
+	AckForgery     uint64 // ACK 伪造检测次数
 }

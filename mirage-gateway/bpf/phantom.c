@@ -11,18 +11,28 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 
+// 名单条目结构
+struct phantom_entry {
+    __u64 first_seen;
+    __u64 last_seen;
+    __u32 hit_count;
+    __u8  risk_level;  // 0-4
+    __u8  pad[3];
+    __u32 ttl_seconds;
+};
+
 // 钓鱼名单：存储需要重定向的威胁 IP
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 65536);
     __type(key, __u32);   // src_ip
-    __type(value, __u64); // 首次检测时间戳
+    __type(value, struct phantom_entry);
 } phishing_list_map SEC(".maps");
 
-// 蜜罐配置：目标重定向地址
+// 蜜罐配置：分层目标重定向地址（按 risk_level 索引）
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 1);
+    __uint(max_entries, 8);
     __type(key, __u32);
     __type(value, __u32); // honeypot_ip (network order)
 } honeypot_config SEC(".maps");
@@ -90,23 +100,30 @@ int phantom_redirect(struct __sk_buff *skb) {
         return TC_ACT_OK;
     
     __u32 src_ip = ip->saddr;
-    __u32 key = 0;
     
     // 检查是否在钓鱼名单中
-    __u64 *first_seen = bpf_map_lookup_elem(&phishing_list_map, &src_ip);
-    if (!first_seen) {
+    struct phantom_entry *entry = bpf_map_lookup_elem(&phishing_list_map, &src_ip);
+    if (!entry) {
         // 不在名单中，正常放行
-        __u64 *passed = bpf_map_lookup_elem(&phantom_stats, &key);
+        __u32 pass_key = STAT_PASSED;
+        __u64 *passed = bpf_map_lookup_elem(&phantom_stats, &pass_key);
         if (passed) __sync_fetch_and_add(passed, 1);
-        key = STAT_PASSED;
         return TC_ACT_OK;
     }
     
-    // 获取蜜罐 IP
-    __u32 *honeypot_ip = bpf_map_lookup_elem(&honeypot_config, &key);
+    // 更新命中信息
+    entry->last_seen = bpf_ktime_get_ns();
+    __sync_fetch_and_add(&entry->hit_count, 1);
+    
+    // 获取蜜罐 IP（按 risk_level 索引）
+    __u32 level_key = (__u32)entry->risk_level;
+    __u32 *honeypot_ip = bpf_map_lookup_elem(&honeypot_config, &level_key);
     if (!honeypot_ip || *honeypot_ip == 0) {
-        // 蜜罐未配置，正常放行
-        return TC_ACT_OK;
+        // 回退到 level=0 默认蜜罐
+        __u32 default_key = 0;
+        honeypot_ip = bpf_map_lookup_elem(&honeypot_config, &default_key);
+        if (!honeypot_ip || *honeypot_ip == 0)
+            return TC_ACT_OK;
     }
     
     // 保存原始目的 IP
@@ -145,8 +162,8 @@ submit_event:
     }
     
     // 更新统计
-    key = STAT_REDIRECTED;
-    __u64 *redirected = bpf_map_lookup_elem(&phantom_stats, &key);
+    __u32 redir_key = STAT_REDIRECTED;
+    __u64 *redirected = bpf_map_lookup_elem(&phantom_stats, &redir_key);
     if (redirected) __sync_fetch_and_add(redirected, 1);
     
     return TC_ACT_OK;

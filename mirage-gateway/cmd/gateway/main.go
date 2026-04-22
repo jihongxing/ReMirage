@@ -18,9 +18,13 @@ import (
 
 	"mirage-gateway/pkg/api"
 	"mirage-gateway/pkg/cortex"
+	"mirage-gateway/pkg/dataplane"
 	"mirage-gateway/pkg/ebpf"
 	"mirage-gateway/pkg/gswitch"
+	"mirage-gateway/pkg/gtunnel"
+	"mirage-gateway/pkg/gtunnel/stealth"
 	"mirage-gateway/pkg/nerve"
+	"mirage-gateway/pkg/orchestrator/events"
 	"mirage-gateway/pkg/phantom"
 	"mirage-gateway/pkg/security"
 	"mirage-gateway/pkg/strategy"
@@ -47,19 +51,69 @@ type GatewayConfig struct {
 		Level          int           `yaml:"level"`
 		AutoAdjust     bool          `yaml:"auto_adjust"`
 		UpdateInterval time.Duration `yaml:"update_interval"`
+		L1             struct {
+			ASNBlocklistPath string `yaml:"asn_blocklist_path"`
+			CloudRangesPath  string `yaml:"cloud_ranges_path"`
+			RateLimit        struct {
+				SynPPS  uint32 `yaml:"syn_pps"`
+				ConnPPS uint32 `yaml:"conn_pps"`
+				Enabled bool   `yaml:"enabled"`
+			} `yaml:"rate_limit"`
+			SilentResponse struct {
+				DropICMPUnreachable bool `yaml:"drop_icmp_unreachable"`
+				DropTCPRst          bool `yaml:"drop_tcp_rst"`
+				Enabled             bool `yaml:"enabled"`
+			} `yaml:"silent_response"`
+		} `yaml:"l1"`
+		L2 struct {
+			NonceStoreSize     int `yaml:"nonce_store_size"`
+			NonceTTLSeconds    int `yaml:"nonce_ttl_seconds"`
+			HandshakeTimeoutMs int `yaml:"handshake_timeout_ms"`
+		} `yaml:"l2"`
+		L3 struct {
+			BehaviorCheckIntervalSeconds int     `yaml:"behavior_check_interval_seconds"`
+			DeviationThreshold           float64 `yaml:"deviation_threshold"`
+		} `yaml:"l3"`
 	} `yaml:"defense"`
 	MCC struct {
 		Endpoint string             `yaml:"endpoint"`
 		CellID   string             `yaml:"cell_id"`
 		TLS      security.TLSConfig `yaml:"tls"`
 	} `yaml:"mcc"`
+	BDNA struct {
+		Enabled        bool          `yaml:"enabled"`
+		RegistryPath   string        `yaml:"registry_path"`
+		JA4Database    string        `yaml:"ja4_database"`
+		UpdateInterval time.Duration `yaml:"update_interval"`
+	} `yaml:"bdna"`
 	Security SecurityConfig `yaml:"security"`
 	Phantom  struct {
-		HoneypotIP string `yaml:"honeypot_ip"`
+		HoneypotIP          string          `yaml:"honeypot_ip"`
+		Persona             phantom.Persona `yaml:"persona"`
+		HoneypotPool        map[int]string  `yaml:"honeypot_pool"`
+		DefaultTTLSeconds   uint32          `yaml:"default_ttl_seconds"`
+		HighRiskTTLSeconds  uint32          `yaml:"high_risk_ttl_seconds"`
+		LabyrinthMaxDepth   int             `yaml:"labyrinth_max_depth"`
+		LabyrinthMaxDelayMs int             `yaml:"labyrinth_max_delay_ms"`
 	} `yaml:"phantom"`
 	TPROXY struct {
 		ListenAddr string `yaml:"listen_addr"`
 	} `yaml:"tproxy"`
+	DataPlane struct {
+		QUICListenAddr string `yaml:"quic_listen_addr"` // 公网 QUIC/H3 数据面监听地址，默认 :443
+		EnableWSS      bool   `yaml:"enable_wss"`       // 启用 WSS 降级监听
+		EnableWebRTC   bool   `yaml:"enable_webrtc"`
+		EnableICMP     bool   `yaml:"enable_icmp"`
+		EnableDNS      bool   `yaml:"enable_dns"`
+	} `yaml:"data_plane"`
+	Chameleon struct {
+		ListenAddr     string `yaml:"listen_addr"`      // WSS 降级监听地址，默认 :443
+		WSPath         string `yaml:"ws_path"`          // WebSocket 路径，默认 /api/v2/stream
+		FakeServerName string `yaml:"fake_server_name"` // 伪装 Server 头
+		CertFile       string `yaml:"cert_file"`
+		KeyFile        string `yaml:"key_file"`
+		CAFile         string `yaml:"ca_file"`
+	} `yaml:"chameleon"`
 }
 
 // SecurityConfig 安全加固配置
@@ -179,6 +233,21 @@ func main() {
 	}
 	log.Println("✅ eBPF 程序已全量挂载")
 
+	bdnaProfileUpdater := ebpf.NewBDNAProfileUpdater(loader)
+	if cfg.BDNA.Enabled {
+		registry, err := bdnaProfileUpdater.SeedRegistryFromFile(cfg.BDNA.RegistryPath)
+		if err != nil {
+			log.Printf("⚠️ B-DNA registry 装载失败（降级运行）: %v", err)
+		} else if err := bdnaProfileUpdater.SetActiveProfile(registry.DefaultActiveProfile); err != nil {
+			log.Printf("⚠️ B-DNA 初始画像激活失败（降级运行）: %v", err)
+		} else {
+			log.Printf("✅ B-DNA 握手画像 registry 已装载: version=%s default=%s(%d)",
+				registry.RegistryVersion, registry.DefaultProfileName(), registry.DefaultActiveProfile)
+		}
+	} else {
+		log.Println("⚠️ B-DNA 已禁用，跳过握手画像 registry 装载")
+	}
+
 	// 5. 策略引擎
 	var applier *ebpf.DefenseApplier
 	engine := strategy.NewStrategyEngine(func(level strategy.DefenseLevel) error {
@@ -221,6 +290,121 @@ func main() {
 
 	log.Println("✅ 威胁编排模块已启动")
 
+	// 6.5 零信任三层纵深防御
+	// ① 加载本地威胁情报库
+	var intelProvider *threat.ThreatIntelProvider
+	asnPath := cfg.Defense.L1.ASNBlocklistPath
+	cloudPath := cfg.Defense.L1.CloudRangesPath
+	if asnPath != "" && cloudPath != "" {
+		var err error
+		intelProvider, err = threat.NewThreatIntelProvider(asnPath, cloudPath)
+		if err != nil {
+			log.Printf("⚠️ 威胁情报库加载失败（降级运行）: %v", err)
+		} else {
+			log.Println("✅ 威胁情报库已加载")
+		}
+	}
+
+	// ② 同步 ASN 网段到 eBPF Map
+	if intelProvider != nil {
+		exports := intelProvider.GetASNBlockEntries()
+		asnEntries := make([]ebpf.ASNBlockEntry, 0, len(exports))
+		for _, e := range exports {
+			asnEntries = append(asnEntries, ebpf.ASNBlockEntry{CIDR: e.CIDR, ASN: e.ASN})
+		}
+		if len(asnEntries) > 0 {
+			if err := applier.SyncASNBlocklist(asnEntries); err != nil {
+				log.Printf("⚠️ ASN 黑名单同步失败: %v", err)
+			} else {
+				log.Printf("✅ ASN 黑名单已同步: %d 条目", len(asnEntries))
+			}
+		} else {
+			log.Println("⚠️ ASN 黑名单为空，L1 清洗未生效")
+		}
+	}
+
+	// ③ 同步速率限制配置
+	if cfg.Defense.L1.RateLimit.Enabled {
+		rlCfg := &ebpf.RateLimitConfig{
+			SynPPSLimit:  cfg.Defense.L1.RateLimit.SynPPS,
+			ConnPPSLimit: cfg.Defense.L1.RateLimit.ConnPPS,
+			Enabled:      1,
+		}
+		if rlCfg.SynPPSLimit == 0 {
+			rlCfg.SynPPSLimit = 50
+		}
+		if rlCfg.ConnPPSLimit == 0 {
+			rlCfg.ConnPPSLimit = 200
+		}
+		if err := applier.SyncRateLimitConfig(rlCfg); err != nil {
+			log.Printf("⚠️ 速率限制配置同步失败: %v", err)
+		} else {
+			log.Println("✅ L1 速率限制已配置")
+		}
+	}
+
+	// ④ 同步静默响应配置
+	if cfg.Defense.L1.SilentResponse.Enabled {
+		silentCfg := &ebpf.SilentConfig{
+			DropICMPUnreachable: boolToUint32(cfg.Defense.L1.SilentResponse.DropICMPUnreachable),
+			DropTCPRst:          boolToUint32(cfg.Defense.L1.SilentResponse.DropTCPRst),
+			Enabled:             1,
+		}
+		if err := applier.SyncSilentConfig(silentCfg); err != nil {
+			log.Printf("⚠️ 静默响应配置同步失败: %v", err)
+		} else {
+			log.Println("✅ L1 静默响应已配置")
+		}
+	}
+
+	// ⑤ 启动 L1 事件监听
+	riskScorer := cortex.NewRiskScorer(blacklist)
+	riskScorer.StartDecay(ctx)
+	l1Monitor := threat.NewL1Monitor(loader, riskScorer)
+	if intelProvider != nil {
+		l1Monitor.SetIntelProvider(intelProvider)
+	}
+	l1Monitor.StartEventLoop(ctx)
+	log.Println("✅ L1 事件监听已启动")
+
+	// ⑥ NonceStore + 清理
+	nonceTTL := time.Duration(cfg.Defense.L2.NonceTTLSeconds) * time.Second
+	if nonceTTL == 0 {
+		nonceTTL = 5 * time.Minute
+	}
+	nonceSize := cfg.Defense.L2.NonceStoreSize
+	if nonceSize == 0 {
+		nonceSize = 100000
+	}
+	nonceStore := threat.NewNonceStore(nonceSize, nonceTTL)
+	nonceStore.StartCleanup(ctx)
+	log.Println("✅ NonceStore 抗重放已启动")
+
+	// ⑦ HandshakeGuard
+	hsTimeout := time.Duration(cfg.Defense.L2.HandshakeTimeoutMs) * time.Millisecond
+	if hsTimeout == 0 {
+		hsTimeout = 300 * time.Millisecond
+	}
+	handshakeGuard := threat.NewHandshakeGuard(hsTimeout, blacklist, riskScorer)
+	log.Println("✅ HandshakeGuard 已初始化")
+
+	// ⑧ ProtocolDetector
+	protocolDetector := threat.NewProtocolDetector(riskScorer, blacklist)
+	log.Println("✅ ProtocolDetector 已初始化")
+
+	// ⑨ BehaviorMonitor
+	devThreshold := cfg.Defense.L3.DeviationThreshold
+	if devThreshold == 0 {
+		devThreshold = 0.7
+	}
+	behaviorMonitor := cortex.NewBehaviorMonitor(cortex.DefaultBaseline(), devThreshold, riskScorer)
+	behaviorMonitor.StartMonitoring(ctx)
+	log.Println("✅ BehaviorMonitor 行为基线监控已启动")
+
+	// 抑制未使用变量警告（初始化副作用已生效）
+	_ = intelProvider
+	_ = behaviorMonitor
+
 	// 7. 威胁监控器 + 事件源注册
 	reader, err := ebpf.NewRingBufferReader(loader.GetMap("threat_events"), nil)
 	if err != nil {
@@ -239,7 +423,7 @@ func main() {
 		loader.GetMap("sni_map"),
 		loader.GetMap("domain_ctrl"),
 	)
-	gswitchMgr.SetJA4Map(loader.GetMap("active_profile_map"))
+	gswitchMgr.SetBDNAProfileSwitcher(bdnaProfileUpdater)
 	gswitchMgr.Start()
 	log.Println("✅ G-Switch 域名转生管理器已启动")
 
@@ -253,18 +437,54 @@ func main() {
 	go cortexAnalyzer.Start(ctx)
 	log.Println("✅ Cortex 威胁感知中枢已启动")
 
+	// 9.5 Phantom → Cortex 联动：蜜罐命中上报
+	phantomThreatBus := cortex.NewThreatBus(nil)
+	honeypotReporter := phantom.NewHoneypotReporter(phantomThreatBus)
+
 	// 10. Phantom 影子欺骗管理器（新增）
 	phantomMgr := phantom.NewManager()
 	phantomMaps := phantom.BuildMapSet(loader)
 	if err := phantomMgr.SetMaps(phantomMaps); err != nil {
 		log.Printf("⚠️ Phantom 初始化失败（降级运行）: %v", err)
 	} else {
+		// 兼容旧配置：单一蜜罐 IP
 		if cfg.Phantom.HoneypotIP != "" {
 			phantomMgr.SetHoneypotIP(cfg.Phantom.HoneypotIP)
 		}
+		// 分层目标池配置
+		for level, ip := range cfg.Phantom.HoneypotPool {
+			if err := phantomMgr.SetHoneypotPool(level, ip); err != nil {
+				log.Printf("⚠️ Phantom 目标池 level=%d 配置失败: %v", level, err)
+			}
+		}
+		// 启动 TTL 清理器
+		phantomMgr.StartTTLCleaner(ctx)
+		// 启动事件监控
 		phantomMgr.StartEventMonitor()
 		log.Println("✅ Phantom 影子欺骗管理器已启动")
 	}
+
+	// Phantom Dispatcher 初始化（Persona + 迷宫配置）
+	phantomDispatcher := phantom.NewDispatcher()
+	persona := cfg.Phantom.Persona
+	if persona.CompanyName == "" {
+		persona = phantom.DefaultPersona
+	}
+	phantomDispatcher.SetPersona(persona)
+	if cfg.Phantom.LabyrinthMaxDepth > 0 {
+		phantomDispatcher.GetLabyrinth().SetMaxDepth(cfg.Phantom.LabyrinthMaxDepth)
+	}
+	if cfg.Phantom.LabyrinthMaxDelayMs > 0 {
+		phantomDispatcher.GetLabyrinth().SetDelayConfig(
+			50*time.Millisecond,
+			1.5,
+			time.Duration(cfg.Phantom.LabyrinthMaxDelayMs)*time.Millisecond,
+		)
+	}
+
+	// 绑定 HoneypotReporter 到 Phantom 蜜罐服务
+	_ = honeypotReporter
+	_ = phantomDispatcher
 
 	// 11. BurnEngine 实时烧录引擎（新增）
 	burnEngine := ebpf.NewBurnEngine(
@@ -297,6 +517,139 @@ func main() {
 	} else {
 		log.Println("✅ TPROXY 透明代理桥接器已启动")
 	}
+
+	// 12.5 V2 编排组件初始化
+	// 正确依赖顺序：EventDispatcher → ChameleonListener → Orchestrator → StealthControlPlane
+	// ChameleonListener 必须先于 Orchestrator 启动，否则 WSS DialFunc 无法连接到本机监听端口。
+
+	// ① EventDispatcher
+	v2EventRegistry := events.NewEventRegistry()
+	if err := events.RegisterV2Handlers(v2EventRegistry); err != nil {
+		log.Fatalf("❌ V2 handler 注册失败: %v", err)
+	}
+	v2Dedup := events.NewDeduplicationStore()
+	v2Dispatcher := events.NewEventDispatcher(v2EventRegistry, v2Dedup, nil)
+	log.Println("✅ V2 EventDispatcher 已创建（handler 已接线）")
+
+	v2Adapter := api.NewV2CommandAdapter(v2Dispatcher)
+	log.Println("✅ V2 CommandAdapter 已创建")
+
+	// ② ChameleonListener — 必须先于 Orchestrator 启动（WSS DialFunc 依赖本机监听）
+	var chameleonListener *gtunnel.ChameleonListener
+	if cfg.DataPlane.EnableWSS {
+		chameleonAddr := cfg.Chameleon.ListenAddr
+		if chameleonAddr == "" {
+			chameleonAddr = ":443"
+		}
+		chameleonWSPath := cfg.Chameleon.WSPath
+		if chameleonWSPath == "" {
+			chameleonWSPath = "/api/v2/stream"
+		}
+		chameleonFake := cfg.Chameleon.FakeServerName
+		if chameleonFake == "" {
+			chameleonFake = "cloudflare"
+		}
+		clConfig := gtunnel.ChameleonListenerConfig{
+			ListenAddr:     chameleonAddr,
+			WSPath:         chameleonWSPath,
+			FakeServerName: chameleonFake,
+			CertFile:       cfg.Chameleon.CertFile,
+			KeyFile:        cfg.Chameleon.KeyFile,
+			CAFile:         cfg.Chameleon.CAFile,
+			MaxConnections: 1000,
+			IdleTimeout:    60 * time.Second,
+			ReadLimit:      65536,
+		}
+		var clErr error
+		chameleonListener, clErr = gtunnel.NewChameleonListener(clConfig)
+		if clErr != nil {
+			log.Printf("⚠️ ChameleonListener 创建失败（WSS 降级不可用）: %v", clErr)
+		} else {
+			if err := chameleonListener.Start(); err != nil {
+				log.Printf("⚠️ ChameleonListener 启动失败: %v", err)
+				chameleonListener = nil
+			} else {
+				log.Println("✅ ChameleonListener WSS 降级数据面已启动")
+			}
+		}
+	}
+
+	// ③ Orchestrator — 唯一多协议编排主链（S-01 收敛）
+	// Gateway 是服务端，不主动拨号。使用被动模式：
+	// ChameleonListener 接受入站连接 → 通过 AdoptInboundConn 注入 Orchestrator
+	orchConfig := gtunnel.DefaultOrchestratorConfig()
+	orchConfig.EnableQUIC = false // Gateway 不出站拨号 QUIC
+	orchConfig.EnableWSS = chameleonListener != nil
+	orchConfig.EnableWebRTC = cfg.DataPlane.EnableWebRTC && chameleonListener != nil
+	orchConfig.EnableICMP = cfg.DataPlane.EnableICMP
+	orchConfig.EnableDNS = cfg.DataPlane.EnableDNS
+	orchestrator := gtunnel.NewOrchestrator(orchConfig)
+
+	// 被动模式启动：不执行 HappyEyeballs 竞速，只启动 probeLoop + receiveLoop
+	// 入站连接通过 ChameleonListener 回调注入
+	orchestrator.StartPassive(ctx)
+
+	// 数据面注入器：Orchestrator 收到的解隧 IP 包通过此接口注入本机网络栈。
+	// 优先尝试 TUN 设备；不可用时降级为 NoopInjector（结构化告警 + 计数）。
+	var dpInjector dataplane.Injector
+	tunInjector, tunErr := dataplane.NewTUNInjector(dataplane.DefaultTUNConfig())
+	if tunErr != nil {
+		log.Printf("⚠️ [DataPlane] TUN 设备不可用，降级为 NoopInjector: %v", tunErr)
+		dpInjector = dataplane.NewNoopInjector()
+	} else {
+		dpInjector = tunInjector
+	}
+
+	// 设置收包回调：Orchestrator → DataPlane Injector
+	orchestrator.SetPacketCallback(func(data []byte) {
+		if len(data) == 0 {
+			return
+		}
+		if err := dpInjector.InjectIPPacket(data); err != nil {
+			// NoopInjector 会自行限频打日志，这里只在非 Noop 时打
+			if _, isNoop := dpInjector.(*dataplane.NoopInjector); !isNoop {
+				log.Printf("[DataPlane] IP 包注入失败: %v", err)
+			}
+		}
+	})
+
+	log.Println("✅ Orchestrator 已启动（被动模式，等待入站连接）")
+
+	// 接线 ChameleonListener → Orchestrator（入站连接注入 + 数据转发）
+	if chameleonListener != nil {
+		cl := chameleonListener
+		orch := orchestrator
+
+		// 新客户端连接时：将 WSS 连接包装为 TransportConn 注入 Orchestrator
+		cl.SetClientConnectCallback(func(clientID string, conn *gtunnel.ChameleonServerConn) {
+			adapter := gtunnel.NewChameleonServerConnAdapter(conn, clientID)
+			orch.AdoptInboundConn(adapter, gtunnel.TransportWebSocket)
+			log.Printf("🔗 [Chameleon→Orchestrator] 客户端 %s 入站连接已注入", clientID)
+		})
+
+		// 收包回调：ChameleonListener 收到的包按 clientID 精确喂入对应适配器
+		cl.SetPacketCallback(func(clientID string, data []byte) {
+			orch.FeedInboundPacket(gtunnel.TransportWebSocket, clientID, data)
+		})
+
+		// 反向路径：Orchestrator 发出的包通过 activePath（即注入的 ChameleonServerConn）自动到达客户端
+		// 不需要额外的 SetPacketCallback 广播 — Send() 直接走 activePath.Conn.Send()
+	}
+
+	// ④ StealthControlPlane — 双通道隐蔽控制面
+	stealthCP := stealth.NewStealthControlPlane(stealth.StealthControlPlaneOpts{
+		Dispatcher: &stealthDispatcherAdapter{inner: v2Dispatcher},
+	})
+	// ReceiveLoop 内部对 mux==nil / decoder==nil 做了安全等待（100ms/500ms 轮询），不会 panic。
+	// 当前 Mux/Encoder/Decoder 均为 nil，状态为 ChannelQueued，命令会排队到 cmdQueue。
+	// 激活路径：未来 QUIC/H3 bearer listener 建立后，构造 ShadowStreamMux 并重建 StealthControlPlane。
+	// 注意：当前 stealth 包没有 SetMux/AttachBearer 方法，激活需要重建实例。
+	go func() {
+		if err := stealthCP.ReceiveLoop(ctx); err != nil {
+			log.Printf("⚠️ StealthControlPlane ReceiveLoop 退出: %v", err)
+		}
+	}()
+	log.Println("✅ StealthControlPlane 已启动（ChannelQueued — 等待 QUIC/H3 bearer 建立后重建实例激活）")
 
 	// 13. gRPC 客户端（mTLS 强制）
 	var grpcClient *api.GRPCClient
@@ -383,15 +736,21 @@ func main() {
 	serverTLS, _ := tlsMgr.GetServerTLSConfig()
 	handler := api.NewCommandHandler(loader, blacklist, gswitchMgr)
 	handler.SetMotorDownlink(&motorDownlinkAdapter{md: motorDownlink})
+	handler.SetV2Adapter(v2Adapter)
 
 	// 注入安全组件
-	if cfg.Security.CommandSecret != "" {
-		handler.SetAuth(api.NewCommandAuthenticator(cfg.Security.CommandSecret))
+	if cfg.Security.CommandSecret == "" {
+		log.Fatalf("❌ CommandSecret 为空，拒绝启动（安全策略要求）")
 	}
+	cmdAuth := api.NewCommandAuthenticator(cfg.Security.CommandSecret)
+	cmdAuth.SetNonceStore(nonceStore)
+	handler.SetAuth(cmdAuth)
 	handler.SetAudit(api.NewCommandAuditor())
 	handler.SetRateLimiter(api.NewCommandRateLimiter())
 
 	grpcServer = api.NewGRPCServer(50847, serverTLS, handler)
+	grpcServer.SetListenerWrapper(handshakeGuard.WrapListener)
+	grpcServer.SetProtocolDetector(protocolDetector)
 	if err := grpcServer.Start(); err != nil {
 		log.Fatalf("❌ gRPC 服务端启动失败: %v", err)
 	} else {
@@ -443,6 +802,12 @@ func main() {
 	graceful.RegisterModule(&shutdownAdapter{"Phantom", func(ctx context.Context) error { phantomMgr.Stop(); return nil }})
 	graceful.RegisterModule(&shutdownAdapter{"BurnEngine", func(ctx context.Context) error { burnEngine.Stop(); return nil }})
 	graceful.RegisterModule(&shutdownAdapter{"TPROXY", func(ctx context.Context) error { tproxyBridge.Stop(); return nil }})
+	graceful.RegisterModule(&shutdownAdapter{"DataPlane", func(ctx context.Context) error { return dpInjector.Close() }})
+	graceful.RegisterModule(&shutdownAdapter{"Orchestrator", func(ctx context.Context) error { return orchestrator.Close() }})
+	if chameleonListener != nil {
+		graceful.RegisterModule(&shutdownAdapter{"ChameleonListener", func(ctx context.Context) error { return chameleonListener.Stop() }})
+	}
+	graceful.RegisterModule(&shutdownAdapter{"StealthCP", func(ctx context.Context) error { stealthCP.Close(); return nil }})
 	if grpcClient != nil {
 		graceful.RegisterModule(&shutdownAdapter{"gRPC-Client", func(ctx context.Context) error { grpcClient.Close(); return nil }})
 	}
@@ -543,8 +908,26 @@ func loadConfig(path string) *GatewayConfig {
 	if cfg.MCC.Endpoint == "" {
 		cfg.MCC.Endpoint = "https://mirage-os:50847"
 	}
+	if cfg.BDNA.RegistryPath == "" {
+		cfg.BDNA.RegistryPath = "configs/bdna/profile-registry.v1.json"
+	}
 
 	return cfg
+}
+
+// stealthDispatcherAdapter 适配 events.EventDispatcher → stealth.EventDispatcher
+// stealth.EventDispatcher: Dispatch(ctx, interface{})
+// events.EventDispatcher: Dispatch(ctx, *ControlEvent)
+type stealthDispatcherAdapter struct {
+	inner events.EventDispatcher
+}
+
+func (a *stealthDispatcherAdapter) Dispatch(ctx context.Context, event interface{}) error {
+	ce, ok := event.(*events.ControlEvent)
+	if !ok {
+		return fmt.Errorf("stealthDispatcherAdapter: expected *events.ControlEvent, got %T", event)
+	}
+	return a.inner.Dispatch(ctx, ce)
 }
 
 // motorDownlinkAdapter 适配 nerve.MotorDownlink → api.MotorDownlinkApplier
@@ -562,6 +945,14 @@ func (a *motorDownlinkAdapter) ApplyDesiredState(cfg *api.DesiredStatePayload) (
 		FiberJitterUs:  cfg.FiberJitterUs,
 		RouterDelayUs:  cfg.RouterDelayUs,
 	})
+}
+
+// boolToUint32 将 bool 转换为 uint32（1/0），用于 eBPF Map 配置下发
+func boolToUint32(b bool) uint32 {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // startEnhancedHealthServer 启动增强健康检查

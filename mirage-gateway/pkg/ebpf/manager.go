@@ -3,8 +3,10 @@
 package ebpf
 
 import (
+	"encoding/binary"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -49,6 +51,11 @@ func (da *DefenseApplier) Start() {
 	if err := da.applyStrategy(da.config); err != nil {
 		log.Printf("❌ 应用初始策略失败: %v", err)
 		return
+	}
+
+	// 同步默认入口画像（失败不阻断启动）
+	if err := da.SyncIngressProfiles(DefaultIngressProfiles()); err != nil {
+		log.Printf("⚠️ 入口画像同步失败（降级）: %v", err)
 	}
 
 	// 启动定期更新
@@ -142,6 +149,7 @@ func (da *DefenseApplier) applyStrategy(config *DefenseConfig) error {
 		JitterMeanUs:   config.JitterMeanUs,
 		JitterStddevUs: config.JitterStddevUs,
 		TemplateID:     1,
+		PaddingRate:    config.PaddingRate,
 		FiberJitterUs:  config.JitterMeanUs / 5,
 		RouterDelayUs:  config.JitterMeanUs / 10,
 		NoiseIntensity: config.NoiseIntensity,
@@ -208,6 +216,91 @@ func (da *DefenseApplier) GetCurrentConfig() *DefenseConfig {
 	return da.config
 }
 
+// ASNBlockEntry ASN 黑名单条目
+type ASNBlockEntry struct {
+	CIDR string // CIDR 网段（如 "3.0.0.0/15"）
+	ASN  uint32 // ASN 编号
+}
+
+// SyncASNBlocklist 将 ASN 黑名单条目同步到 asn_blocklist_lpm eBPF Map
+func (da *DefenseApplier) SyncASNBlocklist(entries []ASNBlockEntry) error {
+	lpmMap := da.loader.GetMap("asn_blocklist_lpm")
+	if lpmMap == nil {
+		return fmt.Errorf("asn_blocklist_lpm Map 不存在")
+	}
+
+	var failCount int
+	for _, entry := range entries {
+		_, ipNet, err := net.ParseCIDR(entry.CIDR)
+		if err != nil {
+			failCount++
+			continue
+		}
+
+		ip4 := ipNet.IP.To4()
+		if ip4 == nil {
+			failCount++
+			continue
+		}
+
+		ones, _ := ipNet.Mask.Size()
+
+		// LPM Trie key: prefixlen(4 bytes) + ip(4 bytes)
+		key := make([]byte, 8)
+		binary.LittleEndian.PutUint32(key[0:4], uint32(ones))
+		copy(key[4:8], ip4)
+
+		value := entry.ASN
+		if err := lpmMap.Put(key, &value); err != nil {
+			log.Printf("[L1Defense] ❌ ASN LPM 写入失败: %s (ASN %d): %v", entry.CIDR, entry.ASN, err)
+			failCount++
+		}
+	}
+
+	if failCount > 0 {
+		log.Printf("[L1Defense] ASN 黑名单同步完成: %d/%d 成功, %d 失败",
+			len(entries)-failCount, len(entries), failCount)
+	} else {
+		log.Printf("[L1Defense] ✅ ASN 黑名单同步完成: %d 条目", len(entries))
+	}
+
+	return nil
+}
+
+// SyncRateLimitConfig 将速率限制配置同步到 rate_config_map eBPF Map
+func (da *DefenseApplier) SyncRateLimitConfig(cfg *RateLimitConfig) error {
+	rateConfigMap := da.loader.GetMap("rate_config_map")
+	if rateConfigMap == nil {
+		return fmt.Errorf("rate_config_map Map 不存在")
+	}
+
+	key := uint32(0)
+	if err := rateConfigMap.Put(&key, cfg); err != nil {
+		return fmt.Errorf("[L1Defense] 写入 rate_config_map 失败: %w", err)
+	}
+
+	log.Printf("[L1Defense] ✅ 速率限制配置已同步: SYN=%d/s, CONN=%d/s, Enabled=%d",
+		cfg.SynPPSLimit, cfg.ConnPPSLimit, cfg.Enabled)
+	return nil
+}
+
+// SyncSilentConfig 将静默响应配置同步到 silent_config_map eBPF Map
+func (da *DefenseApplier) SyncSilentConfig(cfg *SilentConfig) error {
+	silentConfigMap := da.loader.GetMap("silent_config_map")
+	if silentConfigMap == nil {
+		return fmt.Errorf("silent_config_map Map 不存在")
+	}
+
+	key := uint32(0)
+	if err := silentConfigMap.Put(&key, cfg); err != nil {
+		return fmt.Errorf("[L1Defense] 写入 silent_config_map 失败: %w", err)
+	}
+
+	log.Printf("[L1Defense] ✅ 静默响应配置已同步: DropICMP=%d, DropRST=%d, Enabled=%d",
+		cfg.DropICMPUnreachable, cfg.DropTCPRst, cfg.Enabled)
+	return nil
+}
+
 // AdjustDefenseLevel 调整防御等级
 func (da *DefenseApplier) AdjustDefenseLevel(level uint32) error {
 	if level != 10 && level != 20 && level != 30 {
@@ -224,5 +317,95 @@ func (da *DefenseApplier) AdjustDefenseLevel(level uint32) error {
 	}
 
 	da.UpdateConfig(newConfig)
+	return nil
+}
+
+// IngressProfile 入口画像配置（Go 侧结构体，对应 C 侧 struct ingress_profile）
+type IngressProfile struct {
+	Port          uint16 // 监听端口
+	AllowedProto  uint8  // 0x01=TCP, 0x02=UDP, 0x03=BOTH
+	RequireMinLen uint8  // 最小载荷长度
+	UDPMinPayload uint32 // UDP 最小载荷（QUIC Initial ≥ 1200）
+}
+
+// SyncIngressProfiles 将入口画像配置同步到 ingress_profile_map eBPF Map（7.3）
+func (da *DefenseApplier) SyncIngressProfiles(profiles []IngressProfile) error {
+	profileMap := da.loader.GetMap("ingress_profile_map")
+	if profileMap == nil {
+		return fmt.Errorf("ingress_profile_map Map 不存在（降级：入口画像检查跳过）")
+	}
+
+	for _, p := range profiles {
+		key := p.Port
+		if err := profileMap.Put(&key, &p); err != nil {
+			log.Printf("[L1Defense] ❌ 入口画像写入失败: port=%d: %v", p.Port, err)
+			continue
+		}
+	}
+
+	log.Printf("[L1Defense] ✅ 入口画像同步完成: %d 个入口", len(profiles))
+	return nil
+}
+
+// DefaultIngressProfiles 返回 Mirage 默认入口画像
+func DefaultIngressProfiles() []IngressProfile {
+	return []IngressProfile{
+		{Port: 443, AllowedProto: 0x03, UDPMinPayload: 1200}, // QUIC + TLS（QUIC Initial ≥ 1200）
+		{Port: 8443, AllowedProto: 0x01},                     // WSS（仅 TCP）
+		{Port: 3478, AllowedProto: 0x02, UDPMinPayload: 20},  // WebRTC TURN（UDP）
+	}
+}
+
+// UpdateIngressProfiles 运行时动态更新入口画像（通过 updateCh 异步执行）
+func (da *DefenseApplier) UpdateIngressProfiles(profiles []IngressProfile) error {
+	go func() {
+		if err := da.SyncIngressProfiles(profiles); err != nil {
+			log.Printf("[L1Defense] ⚠️ 动态更新入口画像失败: %v", err)
+		}
+	}()
+	return nil
+}
+
+// ReadL1Stats 从 l1_stats_map 读取统计数据
+func (da *DefenseApplier) ReadL1Stats() (*L1Stats, error) {
+	statsMap := da.loader.GetMap("l1_stats_map")
+	if statsMap == nil {
+		return nil, fmt.Errorf("l1_stats_map Map 不存在")
+	}
+
+	key := uint32(0)
+	var stats L1Stats
+	if err := statsMap.Lookup(&key, &stats); err != nil {
+		return nil, fmt.Errorf("读取 l1_stats_map 失败: %w", err)
+	}
+
+	return &stats, nil
+}
+
+// SyncSynValidationConfig 将 SYN 验证配置同步到 syn_config_map eBPF Map
+func (da *DefenseApplier) SyncSynValidationConfig(enabled bool, threshold uint32) error {
+	synConfigMap := da.loader.GetMap("syn_config_map")
+	if synConfigMap == nil {
+		return fmt.Errorf("syn_config_map Map 不存在")
+	}
+
+	key := uint32(0)
+	enabledVal := uint32(0)
+	if enabled {
+		enabledVal = 1
+	}
+	value := struct {
+		Enabled            uint32
+		ChallengeThreshold uint32
+	}{
+		Enabled:            enabledVal,
+		ChallengeThreshold: threshold,
+	}
+
+	if err := synConfigMap.Put(&key, &value); err != nil {
+		return fmt.Errorf("[L1Defense] 写入 syn_config_map 失败: %w", err)
+	}
+
+	log.Printf("[L1Defense] ✅ SYN 验证配置已同步: enabled=%v, threshold=%d", enabled, threshold)
 	return nil
 }

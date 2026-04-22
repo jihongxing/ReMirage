@@ -57,18 +57,18 @@ type GSwitchManager struct {
 	currentDomain *Domain
 
 	// eBPF Map 引用
-	sniMap      *ebpf.Map
-	domainCtrl  *ebpf.Map
-	ja4Map      *ebpf.Map // B-DNA JA4 模板 Map
+	sniMap              *ebpf.Map
+	domainCtrl          *ebpf.Map
+	bdnaProfileSwitcher BDNAProfileSwitcher
 
 	// M.C.C. 通报回调
 	onDomainBurned func(domain *Domain)
 	onBDNAReset    func(reason string) // B-DNA 重置回调
 
 	// 耗材冷却机制
-	recentBurns     []time.Time   // 最近战死时间戳
-	burnRateWindow  time.Duration // 统计窗口
-	burnRateThreshold int         // 触发 B-DNA Reset 的阈值
+	recentBurns       []time.Time   // 最近战死时间戳
+	burnRateWindow    time.Duration // 统计窗口
+	burnRateThreshold int           // 触发 B-DNA Reset 的阈值
 
 	// 配置
 	minStandbyCount int           // 最小热备数量
@@ -99,11 +99,16 @@ func NewGSwitchManager(sniMap, domainCtrl *ebpf.Map) *GSwitchManager {
 	}
 }
 
-// SetJA4Map 设置 JA4 Map (用于 B-DNA Reset)
-func (gm *GSwitchManager) SetJA4Map(ja4Map *ebpf.Map) {
+// SetBDNAProfileSwitcher 设置 B-DNA 画像切换器。
+func (gm *GSwitchManager) SetBDNAProfileSwitcher(switcher BDNAProfileSwitcher) {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
-	gm.ja4Map = ja4Map
+	gm.bdnaProfileSwitcher = switcher
+}
+
+// SetJA4Map 兼容旧调用方，内部桥接到 active_profile_map 切换器。
+func (gm *GSwitchManager) SetJA4Map(ja4Map *ebpf.Map) {
+	gm.SetBDNAProfileSwitcher(&rawMapBDNAProfileSwitcher{activeProfileMap: ja4Map})
 }
 
 // SetBDNAResetCallback 设置 B-DNA 重置回调
@@ -227,7 +232,7 @@ func (gm *GSwitchManager) TriggerEscape(reason string) error {
 		return fmt.Errorf("更新 SNI Map 失败: %w", err)
 	}
 
-	log.Printf("🦎 域名转生完成: %s → %s", 
+	log.Printf("🦎 域名转生完成: %s → %s",
 		gm.burnedPool[len(gm.burnedPool)-1].Name, newDomain.Name)
 
 	// 5. 如果战死频率过高，触发 B-DNA Reset
@@ -245,7 +250,7 @@ func (gm *GSwitchManager) TriggerEscape(reason string) error {
 // checkBurnRate 检查战死频率
 func (gm *GSwitchManager) checkBurnRate() bool {
 	cutoff := time.Now().Add(-gm.burnRateWindow)
-	
+
 	// 清理过期记录
 	var recent []time.Time
 	for _, t := range gm.recentBurns {
@@ -260,23 +265,19 @@ func (gm *GSwitchManager) checkBurnRate() bool {
 
 // triggerBDNAReset 触发 B-DNA 重置
 func (gm *GSwitchManager) triggerBDNAReset(reason string) {
-	if gm.ja4Map == nil {
-		log.Printf("⚠️  JA4 Map 未设置，跳过 B-DNA Reset")
+	if gm.bdnaProfileSwitcher == nil {
+		log.Printf("⚠️  B-DNA 画像切换器未设置，跳过画像重置")
 		return
 	}
 
-	// 随机选择新的 JA4 模板
-	randBytes := make([]byte, 1)
-	rand.Read(randBytes)
-	templateID := uint32(randBytes[0] % 5) // 5 个预设模板
+	profileID := randomBDNAProfileID(gm.bdnaProfileSwitcher)
 
-	key := uint32(0)
-	if err := gm.ja4Map.Put(&key, &templateID); err != nil {
+	if err := gm.bdnaProfileSwitcher.SetActiveProfile(profileID); err != nil {
 		log.Printf("⚠️  B-DNA Reset 失败: %v", err)
 		return
 	}
 
-	log.Printf("🎭 B-DNA Reset 完成: template=%d (reason=%s)", templateID, reason)
+	log.Printf("🎭 B-DNA 画像已切换: profile=%d (reason=%s)", profileID, reason)
 }
 
 // updateSNIMap 更新 eBPF SNI 映射

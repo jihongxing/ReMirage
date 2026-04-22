@@ -285,7 +285,39 @@ func (o *Orchestrator) Start(ctx context.Context) error {
 	// 启动心跳探测循环
 	go o.probeLoop(ctx)
 
+	// 启动收包循环：从活跃路径持续读取数据并触发 onPacketRecv 回调
+	go o.receiveLoop(ctx)
+
 	return nil
+}
+
+// receiveLoop 从当前活跃路径持续读取数据，触发 onPacketRecv 回调。
+// 路径切换时自动跟随 activePath。
+func (o *Orchestrator) receiveLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-o.stopCh:
+			return
+		default:
+		}
+
+		data, err := o.Recv()
+		if err != nil {
+			// activePath 为空或连接断开，短暂等待后重试
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		o.mu.RLock()
+		cb := o.onPacketRecv
+		o.mu.RUnlock()
+
+		if cb != nil {
+			cb(data)
+		}
+	}
 }
 
 // enabledPhase1Types 返回 Phase 1 中启用的协议类型（排除 WebRTC）
@@ -479,6 +511,84 @@ func (o *Orchestrator) RegisterDialFunc(t TransportType, fn func(ctx context.Con
 		o.dialFuncs = make(map[TransportType]func(ctx context.Context) (TransportConn, error))
 	}
 	o.dialFuncs[t] = fn
+}
+
+// AdoptInboundConn 接受一个外部已建立的入站连接，注册为受管路径。
+// 用于 Gateway 服务端模式：Listener 接受客户端连接后注入 Orchestrator。
+// 同类型替换时：关闭旧连接，新连接无条件成为活跃路径。
+func (o *Orchestrator) AdoptInboundConn(conn TransportConn, t TransportType) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	wasActive := false
+	// 关闭同类型旧连接
+	if old, exists := o.paths[t]; exists && old.Conn != nil {
+		if o.activePath == old {
+			wasActive = true
+		}
+		old.Conn.Close()
+	}
+
+	priority := typeToPriority(t)
+	path := &ManagedPath{
+		Conn:      conn,
+		Priority:  priority,
+		Type:      t,
+		Enabled:   true,
+		Available: true,
+		Phase:     1,
+	}
+	o.paths[t] = path
+
+	// 无条件切换为活跃路径的条件：
+	// 1. 没有活跃路径
+	// 2. 新路径优先级更高
+	// 3. 同类型替换（旧的就是活跃路径）
+	if o.activePath == nil || priority < o.activePath.Priority || wasActive {
+		o.activePath = path
+		o.setState(StateOrcActive)
+		o.notifyFECMTU(conn)
+		log.Printf("🔗 [Orchestrator] 入站连接已接管为活跃路径: type=%d", t)
+	} else {
+		log.Printf("🔗 [Orchestrator] 入站连接已注册为备用路径: type=%d", t)
+	}
+
+	if t == TransportWebSocket {
+		o.wssConn = conn
+	}
+}
+
+// StartPassive 启动被动模式调度器（不执行 HappyEyeballs 竞速）。
+// 用于 Gateway 服务端：不主动拨号，只管理通过 AdoptInboundConn 注入的连接。
+// 启动 probeLoop 和 receiveLoop。
+func (o *Orchestrator) StartPassive(ctx context.Context) {
+	go o.probeLoop(ctx)
+	go o.receiveLoop(ctx)
+	log.Println("🔗 [Orchestrator] 被动模式已启动（probeLoop + receiveLoop）")
+}
+
+// FeedInboundPacket 将入站数据包喂入指定类型路径的适配器。
+// 按 clientID 精确路由：只喂给匹配的适配器，避免切换窗口内喂错连接。
+func (o *Orchestrator) FeedInboundPacket(t TransportType, clientID string, data []byte) {
+	o.mu.RLock()
+	path, ok := o.paths[t]
+	o.mu.RUnlock()
+
+	if !ok || path.Conn == nil {
+		return
+	}
+
+	adapter, isAdapter := path.Conn.(*ChameleonServerConnAdapter)
+	if !isAdapter {
+		return
+	}
+
+	// 精确匹配：只喂给 clientID 一致的适配器
+	if adapter.ClientID() != clientID {
+		return
+	}
+
+	adapter.FeedPacket(data)
 }
 
 // dialWebRTC 通过 WSS 信令通道拉起 WebRTC DataChannel

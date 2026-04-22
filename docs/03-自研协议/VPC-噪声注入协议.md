@@ -1,3 +1,9 @@
+---
+Status: derived
+Target Truth: docs/protocols/vpc.md
+Migration: 当前有效协议语义已迁移到 docs/protocols/vpc.md，本文降级为解释性输入材料
+---
+
 # VPC 噪声注入协议
 
 ## 一、协议定位

@@ -15,6 +15,30 @@ defense:
   auto_adjust: false          # 自动调节
   update_interval: 60s        # 策略更新间隔
 
+  # L1 纵深防御（XDP/TC 层）
+  l1:
+    asn_blocklist_path: "configs/asn_database.json"
+    cloud_ranges_path: "configs/cloud_ranges.json"
+    rate_limit:
+      syn_pps: 50
+      conn_pps: 200
+      enabled: true
+    silent_response:
+      drop_icmp_unreachable: true
+      drop_tcp_rst: true
+      enabled: true
+
+  # L2 密码学层防御（Go 用户空间）
+  l2:
+    nonce_store_size: 100000
+    nonce_ttl_seconds: 300
+    handshake_timeout_ms: 300
+
+  # L3 行为层防御（Go 用户空间）
+  l3:
+    behavior_check_interval_seconds: 10
+    deviation_threshold: 0.7
+
 # NPM (流量伪装)
 npm:
   enabled: true
@@ -81,6 +105,7 @@ gtunnel:
 # B-DNA (指纹识别)
 bdna:
   enabled: true
+  registry_path: "configs/bdna/profile-registry.v1.json"
   ja4_database: "/etc/mirage/ja4.db"  # JA4 指纹库
   update_interval: 24h        # 更新间隔
 
@@ -126,6 +151,27 @@ ingress_policy:
       params: { pps: 50 }
       priority: 50
 
+# Phantom（影子欺骗）
+phantom:
+  enabled: true
+  persona:
+    company_name: "CloudBridge Systems"
+    domain: "cloudbridge.io"
+    tag_line: "Enterprise Cloud Infrastructure"
+    primary_color: "#2563eb"
+    error_prefix: "CB"
+    api_version: "v2"
+    copyright_year: 2026
+  honeypot_pool:
+    0: "10.99.1.100"   # 默认
+    1: "10.99.1.101"   # 低风险
+    2: "10.99.1.102"   # 中风险
+    3: "10.99.1.103"   # 高风险
+  default_ttl_seconds: 3600
+  high_risk_ttl_seconds: 86400
+  labyrinth_max_depth: 5
+  labyrinth_max_delay_ms: 3000
+
 # 安全
 security:
   command_secret: "${MIRAGE_COMMAND_SECRET}"  # HMAC 签名密钥（高危命令校验）
@@ -158,3 +204,20 @@ mcc:
     key_file: ""
     ca_file: ""
     server_name: mirage-os
+
+# 数据面配置
+data_plane:
+  quic_listen_addr: ":443"    # 公网 QUIC/H3 数据面监听地址（B-01b，待实现）
+  enable_wss: true            # 启用 WSS 降级监听
+  enable_webrtc: false        # WebRTC 依赖 WSS 信令
+  enable_icmp: false          # ICMP Tunnel
+  enable_dns: false           # DNS Tunnel
+
+# Chameleon WSS 降级监听配置
+chameleon:
+  listen_addr: ":8443"        # WSS 降级监听地址（避免与 gRPC 50847 冲突）
+  ws_path: "/api/v2/stream"   # WebSocket 路径
+  fake_server_name: "cloudflare"
+  cert_file: ""               # TLS 证书（与 mcc.tls 共用或独立配置）
+  key_file: ""
+  ca_file: ""                 # 客户端 CA（mTLS 验证）

@@ -29,31 +29,31 @@ const (
 
 // ShadowDomain 影子域名
 type ShadowDomain struct {
-	Name        string    `json:"name"`
-	IP          string    `json:"ip"`
-	CreatedAt   time.Time `json:"created_at"`
-	WarmupAt    *time.Time `json:"warmup_at"`
-	IsWarmedUp  bool      `json:"is_warmed_up"`
-	UsageCount  int       `json:"usage_count"`
+	Name       string     `json:"name"`
+	IP         string     `json:"ip"`
+	CreatedAt  time.Time  `json:"created_at"`
+	WarmupAt   *time.Time `json:"warmup_at"`
+	IsWarmedUp bool       `json:"is_warmed_up"`
+	UsageCount int        `json:"usage_count"`
 }
 
 // SwitchEvent 切换事件
 type SwitchEvent struct {
-	OldDomain   string       `json:"old_domain"`
-	NewDomain   string       `json:"new_domain"`
-	Reason      SwitchReason `json:"reason"`
-	ReputationScore float64  `json:"reputation_score"`
-	Timestamp   time.Time    `json:"timestamp"`
+	OldDomain       string       `json:"old_domain"`
+	NewDomain       string       `json:"new_domain"`
+	Reason          SwitchReason `json:"reason"`
+	ReputationScore float64      `json:"reputation_score"`
+	Timestamp       time.Time    `json:"timestamp"`
 }
 
 // ErrorDistribution 错误分布
 type ErrorDistribution struct {
-	HTTP403Count  int       `json:"http_403_count"`
-	HTTP451Count  int       `json:"http_451_count"`
-	HTTP503Count  int       `json:"http_503_count"`
-	RSTCount      int       `json:"rst_count"`
-	TimeoutCount  int       `json:"timeout_count"`
-	WindowStart   time.Time `json:"window_start"`
+	HTTP403Count int       `json:"http_403_count"`
+	HTTP451Count int       `json:"http_451_count"`
+	HTTP503Count int       `json:"http_503_count"`
+	RSTCount     int       `json:"rst_count"`
+	TimeoutCount int       `json:"timeout_count"`
+	WindowStart  time.Time `json:"window_start"`
 }
 
 // AutonomousGSwitch 自适应逃逸引擎
@@ -76,8 +76,8 @@ type AutonomousGSwitch struct {
 	switchHistory []*SwitchEvent
 
 	// eBPF Map 引用
-	sniMap     *ebpf.Map
-	ja4Map     *ebpf.Map
+	sniMap              *ebpf.Map
+	bdnaProfileSwitcher BDNAProfileSwitcher
 
 	// 回调
 	onSwitch func(event *SwitchEvent)
@@ -105,7 +105,7 @@ func NewAutonomousGSwitch(sniMap, ja4Map *ebpf.Map) *AutonomousGSwitch {
 		errorDist:           &ErrorDistribution{WindowStart: time.Now()},
 		switchHistory:       make([]*SwitchEvent, 0),
 		sniMap:              sniMap,
-		ja4Map:              ja4Map,
+		bdnaProfileSwitcher: &rawMapBDNAProfileSwitcher{activeProfileMap: ja4Map},
 		reputationThreshold: 40.0,
 		errorBurstThreshold: 10,
 		warmupInterval:      5 * time.Minute,
@@ -296,21 +296,16 @@ func (ag *AutonomousGSwitch) updateSNIMap(domain string) error {
 
 // resetJA4Template 重置 JA4 模板
 func (ag *AutonomousGSwitch) resetJA4Template() {
-	if ag.ja4Map == nil {
+	if ag.bdnaProfileSwitcher == nil {
 		return
 	}
 
-	// 随机选择新的 JA4 模板
-	templates := []uint32{0, 1, 2, 3, 4} // 预设模板 ID
-	randBytes := make([]byte, 1)
-	rand.Read(randBytes)
-	templateID := templates[int(randBytes[0])%len(templates)]
+	profileID := randomBDNAProfileID(ag.bdnaProfileSwitcher)
 
-	key := uint32(0)
-	if err := ag.ja4Map.Put(&key, &templateID); err != nil {
+	if err := ag.bdnaProfileSwitcher.SetActiveProfile(profileID); err != nil {
 		log.Printf("⚠️  重置 JA4 模板失败: %v", err)
 	} else {
-		log.Printf("🎭 JA4 模板已重置: template=%d", templateID)
+		log.Printf("🎭 B-DNA 画像已切换: profile=%d", profileID)
 	}
 }
 

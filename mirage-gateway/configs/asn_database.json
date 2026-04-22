@@ -1,0 +1,98 @@
+[
+  {
+    "network": "3.0.0.0/15",
+    "asn": 16509,
+    "org": "Amazon.com Inc. (AWS)",
+    "country": "US"
+  },
+  {
+    "network": "52.92.0.0/14",
+    "asn": 16509,
+    "org": "Amazon.com Inc. (AWS)",
+    "country": "US"
+  },
+  {
+    "network": "13.64.0.0/11",
+    "asn": 8075,
+    "org": "Microsoft Corporation (Azure)",
+    "country": "US"
+  },
+  {
+    "network": "20.33.0.0/16",
+    "asn": 8075,
+    "org": "Microsoft Corporation (Azure)",
+    "country": "US"
+  },
+  {
+    "network": "34.64.0.0/10",
+    "asn": 15169,
+    "org": "Google LLC (GCP)",
+    "country": "US"
+  },
+  {
+    "network": "35.184.0.0/13",
+    "asn": 15169,
+    "org": "Google LLC (GCP)",
+    "country": "US"
+  },
+  {
+    "network": "47.52.0.0/16",
+    "asn": 45102,
+    "org": "Alibaba Cloud (Aliyun)",
+    "country": "CN"
+  },
+  {
+    "network": "47.74.0.0/15",
+    "asn": 45102,
+    "org": "Alibaba Cloud (Aliyun)",
+    "country": "SG"
+  },
+  {
+    "network": "49.51.0.0/16",
+    "asn": 132203,
+    "org": "Tencent Cloud Computing",
+    "country": "CN"
+  },
+  {
+    "network": "129.226.0.0/16",
+    "asn": 132203,
+    "org": "Tencent Cloud Computing",
+    "country": "HK"
+  },
+  {
+    "network": "198.41.128.0/17",
+    "asn": 13335,
+    "org": "Cloudflare Inc.",
+    "country": "US"
+  },
+  {
+    "network": "104.16.0.0/13",
+    "asn": 13335,
+    "org": "Cloudflare Inc.",
+    "country": "US"
+  },
+  {
+    "network": "45.33.32.0/20",
+    "asn": 63949,
+    "org": "Linode LLC (Akamai)",
+    "country": "US"
+  },
+  {
+    "network": "128.199.0.0/16",
+    "asn": 14061,
+    "org": "DigitalOcean LLC",
+    "country": "US"
+  },
+  {
+    "network": "5.101.0.0/16",
+    "asn": 200350,
+    "org": "Yandex Cloud",
+    "country": "RU"
+  },
+  {
+    "network": "185.220.100.0/24",
+    "asn": 205100,
+    "org": "F3 Netze e.V. (Tor Exit)",
+    "country": "DE"
+  }
+]

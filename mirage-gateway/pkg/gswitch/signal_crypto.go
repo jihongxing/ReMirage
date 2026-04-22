@@ -35,6 +35,8 @@ type SignalCrypto struct {
 
 	// 反重放：上次成功接收的信令时间戳
 	lastAcceptedTimestamp int64
+	// 当前 Epoch（世代编号）
+	currentEpoch uint64
 }
 
 // NewSignalCryptoPublisher 创建 OS 侧发布器（签名+加密）
@@ -93,16 +95,19 @@ type GatewayEntry struct {
 
 // SignalPayload 信令明文载荷
 type SignalPayload struct {
-	Timestamp int64          // Unix epoch seconds
-	TTL       uint32         // 有效期（秒）
-	Gateways  []GatewayEntry // 存活网关列表
-	Domains   []string       // 备用域名列表
+	Timestamp  int64          // Unix epoch seconds
+	TTL        uint32         // 有效期（秒）
+	Epoch      uint64         // 世代编号，单调递增
+	ManifestID [16]byte       // 路由表版本标识
+	ExpireAt   int64          // 绝对过期时间
+	Gateways   []GatewayEntry // 存活网关列表
+	Domains    []string       // 备用域名列表
 }
 
 // SerializePayload 序列化信令载荷（确定性字节序列）
 func SerializePayload(p *SignalPayload) []byte {
 	// 预估大小
-	size := 4 + 1 + 8 + 4 + 1 + len(p.Gateways)*7 + 1
+	size := 4 + 1 + 8 + 4 + 8 + 16 + 8 + 1 + len(p.Gateways)*7 + 1
 	for _, d := range p.Domains {
 		size += 1 + len(d)
 	}
@@ -120,6 +125,16 @@ func SerializePayload(p *SignalPayload) []byte {
 	ttl := make([]byte, 4)
 	binary.LittleEndian.PutUint32(ttl, p.TTL)
 	buf = append(buf, ttl...)
+	// Epoch (8B LE)
+	epoch := make([]byte, 8)
+	binary.LittleEndian.PutUint64(epoch, p.Epoch)
+	buf = append(buf, epoch...)
+	// ManifestID (16B)
+	buf = append(buf, p.ManifestID[:]...)
+	// ExpireAt (8B LE)
+	expireAt := make([]byte, 8)
+	binary.LittleEndian.PutUint64(expireAt, uint64(p.ExpireAt))
+	buf = append(buf, expireAt...)
 	// Gateway Count (1B)
 	buf = append(buf, byte(len(p.Gateways)))
 	// Gateways
@@ -163,6 +178,24 @@ func DeserializePayload(data []byte) (*SignalPayload, error) {
 	// TTL
 	ttl := binary.LittleEndian.Uint32(data[offset : offset+4])
 	offset += 4
+	// Epoch (8B LE)
+	var epoch uint64
+	if offset+8 <= len(data) {
+		epoch = binary.LittleEndian.Uint64(data[offset : offset+8])
+		offset += 8
+	}
+	// ManifestID (16B)
+	var manifestID [16]byte
+	if offset+16 <= len(data) {
+		copy(manifestID[:], data[offset:offset+16])
+		offset += 16
+	}
+	// ExpireAt (8B LE)
+	var expireAt int64
+	if offset+8 <= len(data) {
+		expireAt = int64(binary.LittleEndian.Uint64(data[offset : offset+8]))
+		offset += 8
+	}
 
 	// Gateway Count
 	if offset >= len(data) {
@@ -208,10 +241,13 @@ func DeserializePayload(data []byte) (*SignalPayload, error) {
 	}
 
 	return &SignalPayload{
-		Timestamp: ts,
-		TTL:       ttl,
-		Gateways:  gateways,
-		Domains:   domains,
+		Timestamp:  ts,
+		TTL:        ttl,
+		Epoch:      epoch,
+		ManifestID: manifestID,
+		ExpireAt:   expireAt,
+		Gateways:   gateways,
+		Domains:    domains,
 	}, nil
 }
 
@@ -354,7 +390,7 @@ func (sc *SignalCrypto) OpenSignal(sealed []byte) (*SignalPayload, error) {
 		return nil, fmt.Errorf("信令反序列化失败: %w", err)
 	}
 
-	// 8. 反重放校验：Timestamp + TTL
+	// 8. 反重放校验：Timestamp + TTL + Epoch + ExpireAt
 	if err := sc.validateTimestamp(payload); err != nil {
 		return nil, err
 	}
@@ -365,9 +401,14 @@ func (sc *SignalCrypto) OpenSignal(sealed []byte) (*SignalPayload, error) {
 	return payload, nil
 }
 
-// validateTimestamp 时间戳硬核校验（Anti-Replay）
+// validateTimestamp 时间戳硬核校验（Anti-Replay + Epoch 世代化）
 func (sc *SignalCrypto) validateTimestamp(p *SignalPayload) error {
 	now := time.Now().Unix()
+
+	// 绝对过期时间校验（即使验签通过也拒绝）
+	if p.ExpireAt > 0 && p.ExpireAt < now {
+		return fmt.Errorf("信令已过期(ExpireAt): expire=%d, now=%d", p.ExpireAt, now)
+	}
 
 	// 信令是否过期：Timestamp + TTL < now
 	expiry := p.Timestamp + int64(p.TTL)
@@ -378,6 +419,21 @@ func (sc *SignalCrypto) validateTimestamp(p *SignalPayload) error {
 	// 信令是否来自未来（时钟偏差容忍 60s）
 	if p.Timestamp > now+60 {
 		return fmt.Errorf("信令时间戳来自未来: ts=%d, now=%d", p.Timestamp, now)
+	}
+
+	// Epoch 世代化校验
+	if p.Epoch > 0 && p.Epoch < sc.currentEpoch {
+		return fmt.Errorf("信令 Epoch 过旧: epoch=%d < current=%d", p.Epoch, sc.currentEpoch)
+	}
+
+	// 同 Epoch 要求更高 Timestamp
+	if p.Epoch == sc.currentEpoch && p.Timestamp <= sc.lastAcceptedTimestamp {
+		return fmt.Errorf("信令重放检测: ts=%d <= last=%d (epoch=%d)", p.Timestamp, sc.lastAcceptedTimestamp, p.Epoch)
+	}
+
+	// 更新 Epoch
+	if p.Epoch > sc.currentEpoch {
+		sc.currentEpoch = p.Epoch
 	}
 
 	// 反重放：不接受比上次成功接收更老的信令

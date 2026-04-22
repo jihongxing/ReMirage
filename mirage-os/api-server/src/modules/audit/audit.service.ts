@@ -26,8 +26,21 @@ export class AuditService {
 
   constructor(private prisma: PrismaService) {}
 
+  /** 敏感键黑名单 */
+  private static readonly SENSITIVE_KEYS = new Set([
+    'password', 'passwordHash', 'password_hash',
+    'totpCode', 'totp_code', 'totpSecret', 'totp_secret',
+    'token', 'secret', 'signature', 'key',
+    'ed25519Pubkey', 'ed25519_pubkey',
+  ]);
+
   async log(input: AuditLogInput): Promise<void> {
     try {
+      // 字段级红线过滤：写入前扫描并移除敏感键
+      const sanitizedParams = input.actionParams
+        ? this.stripSensitiveKeys(input.actionParams)
+        : undefined;
+
       await this.prisma.auditLog.create({
         data: {
           operatorId: input.operatorId ?? 'anonymous',
@@ -35,14 +48,25 @@ export class AuditService {
           sourceIp: input.sourceIp ?? '0.0.0.0',
           targetResource: input.targetResource,
           actionType: input.actionType,
-          actionParams: input.actionParams ?? undefined,
+          actionParams: sanitizedParams ?? undefined,
           result: input.result,
         },
       });
     } catch (error) {
-      // 审计日志写入失败不应阻断业务请求
       this.logger.error('审计日志写入失败', error);
     }
+  }
+
+  private stripSensitiveKeys(obj: Record<string, any>): Record<string, any> {
+    if (!obj || typeof obj !== 'object') return obj;
+    const result: Record<string, any> = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (AuditService.SENSITIVE_KEYS.has(key)) continue;
+      result[key] = typeof value === 'object' && value !== null
+        ? this.stripSensitiveKeys(value)
+        : value;
+    }
+    return result;
   }
 
   async query(params: AuditQueryParams) {

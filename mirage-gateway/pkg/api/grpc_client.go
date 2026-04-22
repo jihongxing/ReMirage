@@ -90,6 +90,8 @@ func (c *GRPCClient) Connect(ctx context.Context) error {
 			c.connected.Store(true)
 			c.degradedSince = time.Time{}
 			log.Printf("[gRPC Client] 已连接到 %s", c.endpoint)
+			// 连接成功后 flush 缓存的威胁事件
+			c.flushEventBuffer()
 			return nil
 		}
 
@@ -213,6 +215,37 @@ func (c *GRPCClient) GetBufferCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.eventBuffer)
+}
+
+// flushEventBuffer 将缓存的威胁事件批量发送
+func (c *GRPCClient) flushEventBuffer() {
+	c.mu.Lock()
+	if len(c.eventBuffer) == 0 {
+		c.mu.Unlock()
+		return
+	}
+	events := make([]*pb.ThreatEvent, len(c.eventBuffer))
+	copy(events, c.eventBuffer)
+	c.eventBuffer = c.eventBuffer[:0]
+	c.mu.Unlock()
+
+	log.Printf("[gRPC Client] 开始 flush 缓存威胁事件: %d 条", len(events))
+
+	req := &pb.ThreatRequest{
+		GatewayId: c.gatewayID,
+		Events:    events,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err := c.uplinkClient.ReportThreat(ctx, req)
+	if err != nil {
+		log.Printf("[gRPC Client] flush 缓存事件失败，重新缓存: %v", err)
+		c.bufferEvents(events)
+	} else {
+		log.Printf("[gRPC Client] ✅ 缓存威胁事件已补发: %d 条", len(events))
+	}
 }
 
 // checkDegraded 检查是否应标记为 DEGRADED

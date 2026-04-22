@@ -1,3 +1,9 @@
+---
+Status: input
+Target Truth: docs/governance/boundaries/component-responsibilities.md (编排职责) + mirage-gateway/pkg/gtunnel/orchestrator.go (运行时)
+Migration: V2 升级方向纪要，结论已部分体现在 Orchestrator 实现中，本文保留为决策输入材料
+---
+
 # Mirage V2 升级核心纪要：编排内核
 
 ## 一、文档性质

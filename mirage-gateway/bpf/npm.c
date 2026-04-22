@@ -19,23 +19,6 @@
  * NPM 专用 Map 定义
  * ============================================ */
 
-// NPM 全局配置
-struct npm_global_config {
-    __u32 enabled;              // 是否启用
-    __u32 filling_rate;         // 填充概率 (0-100)
-    __u32 global_mtu;           // 全局 MTU (默认 1460)
-    __u32 min_packet_size;      // 最小包大小阈值
-    __u32 padding_mode;         // 0=固定MTU, 1=随机范围, 2=正态分布
-    __u32 decoy_rate;           // 诱饵包注入率 (0-100)
-};
-
-struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 1);
-    __type(key, __u32);
-    __type(value, struct npm_global_config);
-} npm_global_map SEC(".maps");
-
 // NPM 统计
 struct npm_stats {
     __u64 total_packets;        // 总包数
@@ -130,7 +113,7 @@ static __always_inline int handle_npm_padding(struct xdp_md *ctx)
     
     // 1. 获取配置
     __u32 key = 0;
-    struct npm_global_config *cfg = bpf_map_lookup_elem(&npm_global_map, &key);
+    struct npm_config *cfg = bpf_map_lookup_elem(&npm_config_map, &key);
     if (!cfg || !cfg->enabled)
         return XDP_PASS;
     
@@ -254,9 +237,17 @@ static __always_inline int handle_npm_strip(struct xdp_md *ctx)
  * Linux 内核规定：一个网卡接口只能挂载一个 XDP 程序
  * ============================================ */
 
+/* L1 纵深防御（ASN 清洗 + 速率限制 + 主入口） */
+#include "l1_defense.c"
+
 SEC("xdp")
 int npm_xdp_main(struct xdp_md *ctx)
 {
+    // L1 防御检查（最高优先级）
+    int l1_action = handle_l1_defense(ctx);
+    if (l1_action != XDP_PASS)
+        return l1_action;
+
     // 先执行入站剥离
     int action = handle_npm_strip(ctx);
     if (action != XDP_PASS)
@@ -297,6 +288,44 @@ struct {
 } decoy_counter SEC(".maps");
 
 /* ============================================
+ * 隐写术（Steganography）Map 定义
+ * ============================================ */
+
+// 隐写就绪事件（C → Go Ring Buffer）
+struct stego_ready_event {
+    __u64 timestamp;        // 时间戳（纳秒）
+    __u32 dummy_len;        // 废包长度
+    __u32 dummy_seq;        // 废包序列号
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 64 * 1024);     // 64KB
+} stego_ready_map SEC(".maps");
+
+// 隐写指令（Go → C Array Map）
+struct stego_command {
+    __u32 valid;            // 是否有待发送的隐写负载
+    __u32 payload_len;      // 负载长度
+    __u8  payload[1400];    // 隐写负载内容（最大 MTU）
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, struct stego_command);
+} stego_command_map SEC(".maps");
+
+// 隐写序列号计数器
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u32);
+} stego_seq_map SEC(".maps");
+
+/* ============================================
  * TC 程序：诱饵包标记
  * ============================================ */
 
@@ -305,7 +334,7 @@ int npm_decoy_marker(struct __sk_buff *skb)
 {
     // 1. 获取配置
     __u32 key = 0;
-    struct npm_global_config *cfg = bpf_map_lookup_elem(&npm_global_map, &key);
+    struct npm_config *cfg = bpf_map_lookup_elem(&npm_config_map, &key);
     if (!cfg || !cfg->enabled || cfg->decoy_rate == 0)
         return TC_ACT_OK;
     
@@ -323,6 +352,37 @@ int npm_decoy_marker(struct __sk_buff *skb)
     struct npm_stats *stats = bpf_map_lookup_elem(&npm_stats_map, &key);
     if (stats)
         __sync_fetch_and_add(&stats->decoy_packets, 1);
+    
+    // 5. 通知 Go 控制面有废包可供隐写（写入 stego_ready_map）
+    __u32 dummy_len = skb->len;
+    __u32 *seq = bpf_map_lookup_elem(&stego_seq_map, &key);
+    __u32 cur_seq = 0;
+    if (seq) {
+        cur_seq = *seq;
+        __sync_fetch_and_add(seq, 1);
+    }
+
+    struct stego_ready_event *evt = bpf_ringbuf_reserve(&stego_ready_map, sizeof(*evt), 0);
+    if (evt) {
+        evt->timestamp = bpf_ktime_get_ns();
+        evt->dummy_len = dummy_len;
+        evt->dummy_seq = cur_seq;
+        bpf_ringbuf_submit(evt, 0);
+    }
+
+    // 6. 发送前检查 stego_command_map 执行替换
+    struct stego_command *cmd = bpf_map_lookup_elem(&stego_command_map, &key);
+    if (cmd && cmd->valid && cmd->payload_len > 0 && cmd->payload_len <= dummy_len) {
+        // 替换废包内容为隐写负载
+        // 使用 bpf_skb_store_bytes 写入 payload（从 L4 payload 偏移开始）
+        // 注意：实际偏移需要根据协议头计算，这里简化为从以太网头后开始
+        __u32 offset = sizeof(struct ethhdr) + sizeof(struct iphdr);
+        if (offset + cmd->payload_len <= skb->len) {
+            bpf_skb_store_bytes(skb, offset, cmd->payload, cmd->payload_len, 0);
+        }
+        // 清除 valid 标志
+        cmd->valid = 0;
+    }
     
     return TC_ACT_OK;
 }

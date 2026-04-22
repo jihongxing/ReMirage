@@ -1,3 +1,9 @@
+---
+Status: temporary
+Target Truth: mirage-os/ + mirage-gateway/ (运行时实现)
+Migration: 安全整改清单，完成后归档
+---
+
 # Mirage OS / Gateway 安全整改清单
 
 ## 一、文档目标

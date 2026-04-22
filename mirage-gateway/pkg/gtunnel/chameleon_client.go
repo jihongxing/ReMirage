@@ -365,9 +365,10 @@ func deframePackets(message []byte) ([][]byte, error) {
 // ============================================================
 
 // ConnectWithFallback 带降级的连接流程
-// 1. 尝试 QUIC 连接（超时 3s）
-// 2. 超时则自动降级为 WebSocket
-// 3. 降级后持续探测 QUIC，恢复后自动回升
+//
+// Deprecated: 此方法属于 TransportManager 的二元切换体系，已被 Orchestrator 替代。
+// 新代码应使用 Orchestrator.Start() 进行 HappyEyeballs 多协议竞速。
+// 参见 docs/外部零特征消除审计与整改清单.md S-01。
 func (tm *TransportManager) ConnectWithFallback(ctx context.Context) error {
 	// 第一步：尝试 QUIC
 	log.Printf("🚀 [Transport] 尝试 QUIC 连接: %s (超时 %v)", tm.config.QUICAddr, tm.config.FallbackTimeout)
@@ -526,6 +527,8 @@ func (tm *TransportManager) dialQUIC(ctx context.Context) (TransportConn, error)
 }
 
 // probeAndPromote 后台探测 QUIC 并在恢复后回升
+//
+// Deprecated: 已被 Orchestrator.probeLoop() 替代。
 func (tm *TransportManager) probeAndPromote(ctx context.Context) {
 	ticker := time.NewTicker(tm.config.ProbeInterval)
 	defer ticker.Stop()
@@ -562,6 +565,8 @@ func (tm *TransportManager) probeAndPromote(ctx context.Context) {
 }
 
 // promoteToQUIC 回升到 QUIC 主通道
+//
+// Deprecated: 已被 Orchestrator.promote() 替代。
 func (tm *TransportManager) promoteToQUIC(ctx context.Context) {
 	log.Printf("⬆️ [Transport] QUIC 恢复，执行回升...")
 

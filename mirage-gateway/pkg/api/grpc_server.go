@@ -13,11 +13,19 @@ import (
 
 // GRPCServer 下行 gRPC 服务端
 type GRPCServer struct {
-	server    *grpc.Server
-	handler   *CommandHandler
-	port      int
-	tlsConfig *tls.Config
-	running   bool
+	server           *grpc.Server
+	handler          *CommandHandler
+	port             int
+	tlsConfig        *tls.Config
+	running          bool
+	listenerWrapper  func(net.Listener) net.Listener
+	protocolDetector ProtocolDetectorInterface
+}
+
+// ProtocolDetectorInterface 协议检测器接口
+type ProtocolDetectorInterface interface {
+	Detect(conn net.Conn) (isMalicious bool, protocolType string, wrapped net.Conn)
+	HandleMalicious(sourceIP string, protocolType string)
 }
 
 // NewGRPCServer 创建服务端（mTLS 认证）
@@ -27,6 +35,16 @@ func NewGRPCServer(port int, tlsConfig *tls.Config, handler *CommandHandler) *GR
 		port:      port,
 		tlsConfig: tlsConfig,
 	}
+}
+
+// SetListenerWrapper 设置 listener 包装器（如 HandshakeGuard.WrapListener）
+func (s *GRPCServer) SetListenerWrapper(wrapper func(net.Listener) net.Listener) {
+	s.listenerWrapper = wrapper
+}
+
+// SetProtocolDetector 设置协议检测器
+func (s *GRPCServer) SetProtocolDetector(pd ProtocolDetectorInterface) {
+	s.protocolDetector = pd
 }
 
 // Start 启动 gRPC 服务
@@ -68,6 +86,21 @@ func (s *GRPCServer) Start() error {
 		return fmt.Errorf("监听端口 %d 失败: %w", s.port, err)
 	}
 
+	// 应用 listener 包装器（HandshakeGuard 等）
+	if s.listenerWrapper != nil {
+		lis = s.listenerWrapper(lis)
+		log.Printf("[gRPC Server] Listener 已接线防护组件")
+	}
+
+	// 应用协议检测器
+	if s.protocolDetector != nil {
+		lis = &protocolDetectingListener{
+			Listener: lis,
+			detector: s.protocolDetector,
+		}
+		log.Printf("[gRPC Server] ProtocolDetector 已接线")
+	}
+
 	s.running = true
 	go func() {
 		log.Printf("[gRPC Server] 下行服务已启动: %s", listenAddr)
@@ -92,4 +125,28 @@ func (s *GRPCServer) Stop() {
 		s.running = false
 		log.Println("[gRPC Server] 已关闭")
 	}
+}
+
+// protocolDetectingListener 在 Accept 后进行协议检测
+type protocolDetectingListener struct {
+	net.Listener
+	detector ProtocolDetectorInterface
+}
+
+func (pdl *protocolDetectingListener) Accept() (net.Conn, error) {
+	conn, err := pdl.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+
+	isMalicious, protoType, wrapped := pdl.detector.Detect(conn)
+	if isMalicious {
+		host, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
+		pdl.detector.HandleMalicious(host, protoType)
+		wrapped.Close()
+		// 返回下一个连接
+		return pdl.Accept()
+	}
+
+	return wrapped, nil
 }

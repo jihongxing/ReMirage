@@ -1,3 +1,9 @@
+---
+Status: input
+Target Truth: docs/governance/boundaries/runtime-truth-boundaries.md (交付标准)
+Migration: 交付技术规范，待拆分到部署资产和运行时真相边界
+---
+
 Mirage Project 交付技术规范
 方案一：Nginx 流量拟态模块 (mod_mirage)
 1. 交付形态

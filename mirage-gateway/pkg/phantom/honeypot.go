@@ -16,6 +16,9 @@ import (
 type HoneypotServer struct {
 	mu sync.RWMutex
 
+	// 业务画像
+	persona Persona
+
 	// 访问记录
 	accessLog []AccessRecord
 
@@ -33,13 +36,13 @@ type HoneypotServer struct {
 
 // AccessRecord 访问记录
 type AccessRecord struct {
-	Timestamp   time.Time
-	RemoteAddr  string
-	Method      string
-	Path        string
-	UserAgent   string
-	Headers     map[string]string
-	ResponseMS  int64
+	Timestamp  time.Time
+	RemoteAddr string
+	Method     string
+	Path       string
+	UserAgent  string
+	Headers    map[string]string
+	ResponseMS int64
 }
 
 // CanaryToken 金丝雀令牌
@@ -55,11 +58,19 @@ type CanaryToken struct {
 // NewHoneypotServer 创建蜜罐服务器
 func NewHoneypotServer() *HoneypotServer {
 	return &HoneypotServer{
+		persona:      DefaultPersona,
 		accessLog:    make([]AccessRecord, 0, 10000),
 		canaryTokens: make(map[string]*CanaryToken),
 		minDelay:     100 * time.Millisecond,
 		maxDelay:     3 * time.Second,
 	}
+}
+
+// SetPersona 设置业务画像
+func (h *HoneypotServer) SetPersona(p Persona) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.persona = p
 }
 
 // SetDelayRange 设置延迟范围
@@ -95,7 +106,8 @@ func (h *HoneypotServer) Handler() http.Handler {
 
 	// 金丝雀文件
 	mux.HandleFunc("/files/", h.handleCanaryFile)
-	mux.HandleFunc("/canary/", h.handleCanaryCallback)
+	mux.HandleFunc("/static/img/", h.handleCanaryCallback)
+	mux.HandleFunc("/collect", h.handleCanaryCallback)
 
 	// 默认处理
 	mux.HandleFunc("/", h.handleDefault)
@@ -207,9 +219,9 @@ func (h *HoneypotServer) handleCanaryFile(w http.ResponseWriter, r *http.Request
 
 	// 生成带追踪的伪造文件
 	content := map[string]interface{}{
-		"classification": "CONFIDENTIAL",
-		"data":           h.generateRandomData(),
-		"_tracking":      token.ID, // 隐藏追踪 ID
+		"data":   h.generateRandomData(),
+		"ref":    token.ID,
+		"format": "json",
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -246,11 +258,15 @@ func (h *HoneypotServer) handleCanaryCallback(w http.ResponseWriter, r *http.Req
 
 // handleDefault 默认处理
 func (h *HoneypotServer) handleDefault(w http.ResponseWriter, r *http.Request) {
+	p := h.persona
 	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(`<!DOCTYPE html>
-<html><head><title>Service Portal</title></head>
-<body><h1>Welcome</h1><p>Please authenticate to continue.</p></body>
-</html>`))
+	w.Write([]byte(fmt.Sprintf(`<!DOCTYPE html>
+<html><head><title>%s</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;text-align:center;padding:50px;background:#f5f5f5}h1{color:#333}p{color:#666}.footer{padding:40px;color:#999;font-size:0.85em}</style>
+</head><body>
+<h1>Welcome</h1><p>Please authenticate to continue.</p>
+<div class="footer">&copy; %d %s</div>
+</body></html>`, p.CompanyName, p.CopyrightYear, p.CompanyName)))
 }
 
 // createCanaryToken 创建金丝雀令牌

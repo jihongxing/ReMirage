@@ -66,11 +66,12 @@ export class BreachService {
     // 3. 消费 nonce（防重放）
     this.challenges.delete(nonce);
 
-    // 4. 查找拥有 Ed25519 公钥的用户
+    // 4. 查找拥有 Ed25519 公钥的 operator/admin 用户
     const users = await this.prisma.user.findMany({
       where: {
         ed25519Pubkey: { not: null },
         isActive: true,
+        isOperator: true,
       },
     });
 

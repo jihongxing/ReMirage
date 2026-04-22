@@ -1,15 +1,12 @@
-import { Controller, Post, Body, Get, Param, Query, HttpCode, NotFoundException, GoneException } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Query, HttpCode, NotFoundException, GoneException, UseGuards } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { InternalHMACGuard, signInternalRequest } from '../../common/internal-hmac.guard';
 
 /**
  * XMR 异步确认 Webhook + 阅后即焚配置交付
- * 
- * 流程:
- * 1. Go 端 MoneroManager 确认到账后，调用 POST /webhook/xmr/confirmed
- * 2. NestJS 触发自动化配置流水线
- * 3. 用户通过一次性链接 GET /delivery/:token?key=xxx 获取配置
  */
 @Controller('webhook')
+@UseGuards(InternalHMACGuard)
 export class XMRWebhookController {
   constructor(private prisma: PrismaService) {}
 
@@ -28,22 +25,16 @@ export class XMRWebhookController {
       confirmations: number;
     },
   ) {
-    // 1. 记录充值确认
+    // 仅保留 WebSocket 通知功能，不再直接修改用户余额
+    // 余额落账由 Go 端 monero_manager.confirmDeposit() 单一真相源处理
+
+    // 1. 更新充值状态（仅状态标记，不涉及余额）
     await this.prisma.deposit.updateMany({
-      where: { txHash: body.txHash, userId: body.userId },
+      where: { txHash: body.txHash, userId: body.userId, status: 'PENDING' },
       data: { status: 'CONFIRMED' },
     });
 
-    // 2. 增加用户余额
-    await this.prisma.user.update({
-      where: { id: body.userId },
-      data: {
-        remainingQuota: { increment: body.amountUsd },
-        totalDeposit: { increment: body.amountUsd },
-      },
-    });
-
-    // 3. 自动分配蜂窝（如果用户尚未分配）
+    // 2. 自动分配蜂窝（如果用户尚未分配）
     const user = await this.prisma.user.findUnique({
       where: { id: body.userId },
       select: { cellId: true },
@@ -53,23 +44,26 @@ export class XMRWebhookController {
       await this.autoAssignCell(body.userId);
     }
 
-    // 4. 触发 Go Provisioner 生成阅后即焚配置链接
+    // 3. 触发 Go Provisioner 生成阅后即焚配置链接（带 HMAC 签名）
     try {
       const provisionerUrl = process.env.PROVISIONER_URL || 'http://localhost:18443';
+      const bodyStr = JSON.stringify({
+        uid: body.userId,
+        amount_piconero: Math.round(body.amountXmr * 1e12),
+      });
+      const hmacSecret = process.env.INTERNAL_HMAC_SECRET || '';
+      const hmacHeaders = hmacSecret ? signInternalRequest(bodyStr, hmacSecret) : {};
       await fetch(`${provisionerUrl}/internal/provision`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          uid: body.userId,
-          amount_piconero: Math.round(body.amountXmr * 1e12),
-        }),
+        headers: { 'Content-Type': 'application/json', ...hmacHeaders },
+        redirect: 'error',
+        body: bodyStr,
       });
     } catch (err) {
-      // Provisioner 调用失败不阻塞充值确认，用户可手动触发
       console.error('[XMR Webhook] Provisioner 调用失败:', err);
     }
 
-    return { status: 'ok', message: 'provisioning triggered' };
+    return { status: 'ok', message: 'notification sent' };
   }
 
   /**

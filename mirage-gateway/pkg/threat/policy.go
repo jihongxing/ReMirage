@@ -29,8 +29,9 @@ type IngressContext struct {
 
 // IngressPolicy 入口处置策略引擎
 type IngressPolicy struct {
-	rules []PolicyRule
-	mu    sync.RWMutex
+	rules           []PolicyRule
+	admissionScorer *AdmissionScorer
+	mu              sync.RWMutex
 }
 
 // NewIngressPolicy 创建策略引擎
@@ -40,6 +41,13 @@ func NewIngressPolicy(rules []PolicyRule) *IngressPolicy {
 	}
 	copy(p.rules, rules)
 	return p
+}
+
+// SetAdmissionScorer 注入多维准入评分器
+func (p *IngressPolicy) SetAdmissionScorer(scorer *AdmissionScorer) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.admissionScorer = scorer
 }
 
 // Evaluate 评估入口上下文，返回最高优先级匹配动作
@@ -54,6 +62,14 @@ func (p *IngressPolicy) Evaluate(ctx *IngressContext) IngressAction {
 		if rule.matches(ctx) && rule.Priority > bestPriority {
 			bestAction = rule.Action
 			bestPriority = rule.Priority
+		}
+	}
+
+	// 规则匹配结果为 Pass 时，额外检查 AdmissionScorer 的评分
+	if bestAction == ActionPass && p.admissionScorer != nil && ctx.SourceIP != "" {
+		admissionAction := p.admissionScorer.Evaluate(ctx.SourceIP)
+		if admissionAction > bestAction {
+			bestAction = admissionAction
 		}
 	}
 

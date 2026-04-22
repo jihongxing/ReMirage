@@ -1,3 +1,9 @@
+---
+Status: temporary
+Target Truth: 开发任务拆解，结论应回写到对应实现
+Migration: V2 开发 Spec 拆解，完成后归档
+---
+
 # Mirage V2 开发 Spec 分拆任务清单
 
 ## 文档目标
@@ -422,7 +428,7 @@
   - 接收端 HMAC 校验提取
   - 长度严格对齐 NPM 原始废包长度
 - 防御状态切换流量潮汐（Transition_Duration 平滑过渡，马尔可夫链概率矩阵插值）
-- 恒定时间锁与响应混淆（Spin-loop 对齐处理耗时，消除 RTT 侧信道）
+- 恒定时间锁与响应混淆（已降级为最小持锁时间语义，参见 ctlock 降级 ADR）
 
 **涉及模块**：mirage-gateway（pkg/gtunnel/ + bpf/npm.c）+ phantom-client
 

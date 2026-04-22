@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net"
 	"net/http"
@@ -12,9 +13,16 @@ import (
 	pb "mirage-os/api/proto"
 	"mirage-os/pkg/database"
 	"mirage-os/pkg/geo"
+	"mirage-os/pkg/middleware"
 	"mirage-os/services/billing"
 	"mirage-os/services/console"
+	entitlementsvc "mirage-os/services/entitlement"
+	observabilityquery "mirage-os/services/observability-query"
+	personaquery "mirage-os/services/persona-query"
 	"mirage-os/services/provisioning"
+	statequery "mirage-os/services/state-query"
+	topologysvc "mirage-os/services/topology"
+	transactionquery "mirage-os/services/transaction-query"
 
 	"github.com/go-redis/redis/v8"
 	"google.golang.org/grpc"
@@ -121,6 +129,15 @@ func main() {
 	moneroMgr := billing.NewMoneroManager(database.GetDB(), rdb, billing.NewHTTPMoneroRPCClient(""), billing.NewCoinGeckoProvider())
 	billingSvc := billing.NewBillingServiceImpl(database.GetDB(), rdb, moneroMgr)
 
+	// 启动订阅到期管理器（每小时检查到期订阅）
+	subMgrCtx, subMgrCancel := context.WithCancel(context.Background())
+	subMgr := billing.NewSubscriptionManager(database.GetDB(), billingSvc)
+	subMgr.Start(subMgrCtx)
+	defer func() {
+		subMgrCancel()
+		subMgr.Stop()
+	}()
+
 	consoleServer := console.NewConsoleServer(database.GetDB(), billingSvc, inviteSvc, tierRouter, prov)
 	go func() {
 		consoleCfg := console.Config{
@@ -138,6 +155,40 @@ func main() {
 	go func() {
 		if err := grpcServer.Serve(listener); err != nil {
 			log.Fatalf("❌ gRPC 服务器启动失败: %v", err)
+		}
+	}()
+
+	// 10.9 V2 Query Surface — 挂载四个 QueryHandler（带认证中间件）
+	queryMux := http.NewServeMux()
+	db := database.GetDB()
+
+	stateQueryHandler := statequery.NewHandler(db)
+	stateQueryHandler.RegisterRoutes(queryMux)
+
+	personaQueryHandler := personaquery.NewHandler(db)
+	personaQueryHandler.RegisterRoutes(queryMux)
+
+	txQueryHandler := transactionquery.NewHandler(db)
+	txQueryHandler.RegisterRoutes(queryMux)
+
+	obsQueryHandler := observabilityquery.NewHandler(db)
+	obsQueryHandler.RegisterRoutes(queryMux)
+
+	topoHandler := topologysvc.NewHandler(db)
+	topoHandler.RegisterRoutes(queryMux)
+
+	entHandler := entitlementsvc.NewHandler(db)
+	entHandler.RegisterRoutes(queryMux)
+
+	// 认证中间件：所有 query surface 请求必须携带有效签名
+	queryAuth := middleware.NewQueryAuthMiddleware(db)
+	queryAuth.AllowPath("/healthz")
+
+	go func() {
+		queryAddr := getEnv("QUERY_ADDR", ":8080")
+		log.Printf("✅ V2 Query Surface: %s (认证已启用)", queryAddr)
+		if err := http.ListenAndServe(queryAddr, queryAuth.Wrap(queryMux)); err != nil {
+			log.Printf("⚠️ V2 Query HTTP 启动失败: %v", err)
 		}
 	}()
 

@@ -51,6 +51,32 @@ var packagePrices = map[pb.PackageType]map[string]PackagePriceInfo{
 	},
 }
 
+// 等级订阅价格表（美分/月）
+var tierPrices = map[string]uint64{
+	models.PlanStandardMonthly: 29900,  // $299/月
+	models.PlanPlatinumMonthly: 99900,  // $999/月
+	models.PlanDiamondMonthly:  299900, // $2,999/月
+}
+
+// 等级映射
+var tierLevelMap = map[string]int{
+	models.PlanStandardMonthly: 1,
+	models.PlanPlatinumMonthly: 2,
+	models.PlanDiamondMonthly:  3,
+}
+
+// GetTierPrice 查询等级订阅价格（导出供测试使用）
+func GetTierPrice(planType string) (uint64, bool) {
+	price, ok := tierPrices[planType]
+	return price, ok
+}
+
+// GetTierLevel 查询等级映射（导出供测试使用）
+func GetTierLevel(planType string) (int, bool) {
+	level, ok := tierLevelMap[planType]
+	return level, ok
+}
+
 // GetPackagePrice 查询流量包价格（导出供测试使用）
 func GetPackagePrice(pkg pb.PackageType, cellLevel string) (PackagePriceInfo, bool) {
 	levels, ok := packagePrices[pkg]
@@ -415,4 +441,112 @@ func PurchaseQuotaPure(balanceUSD float64, remainingQuota int64, pkg pb.PackageT
 	}
 
 	return balanceUSD - totalPrice, remainingQuota + totalQuota, nil
+}
+
+// PurchaseTierSubscription 购买等级订阅
+func (s *BillingServiceImpl) PurchaseTierSubscription(ctx context.Context, req *pb.TierSubscriptionRequest) (*pb.TierSubscriptionResponse, error) {
+	planType := req.GetPlanType()
+	priceUSD, ok := tierPrices[planType]
+	if !ok {
+		return nil, status.Error(codes.InvalidArgument, "invalid plan_type")
+	}
+	newLevel, ok := tierLevelMap[planType]
+	if !ok {
+		return nil, status.Error(codes.InvalidArgument, "invalid plan_type")
+	}
+
+	totalPrice := float64(priceUSD) / 100.0
+	var resp *pb.TierSubscriptionResponse
+
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var user models.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("user_id = ?", req.GetAccountId()).
+			First(&user).Error; err != nil {
+			return status.Error(codes.NotFound, "account not found")
+		}
+
+		if user.BalanceUSD < totalPrice {
+			return status.Error(codes.FailedPrecondition, "insufficient balance")
+		}
+
+		// 降级拒绝：目标等级 < 当前等级时返回错误，降级在到期后由定时任务处理
+		if newLevel < user.CellLevel {
+			return status.Error(codes.FailedPrecondition, "downgrade takes effect after current subscription expires")
+		}
+
+		// 扣减余额
+		if err := tx.Model(&user).Update("balance_usd", gorm.Expr("balance_usd - ?", totalPrice)).Error; err != nil {
+			return status.Error(codes.Internal, "failed to deduct balance")
+		}
+
+		// 更新等级和订阅信息
+		expiresAt := time.Now().Add(30 * 24 * time.Hour)
+		if err := tx.Model(&user).Updates(map[string]any{
+			"cell_level":                newLevel,
+			"subscription_expires_at":   expiresAt,
+			"subscription_package_type": planType,
+		}).Error; err != nil {
+			return status.Error(codes.Internal, "failed to update tier")
+		}
+
+		// 创建购买记录（月费不含流量，quota_bytes=0）
+		purchase := models.QuotaPurchase{
+			UserID:      req.GetAccountId(),
+			PackageType: planType,
+			QuotaBytes:  0,
+			CostUSD:     totalPrice,
+			CellLevel:   newLevel,
+			ExpiresAt:   &expiresAt,
+		}
+		if err := tx.Create(&purchase).Error; err != nil {
+			return status.Error(codes.Internal, "failed to create purchase record")
+		}
+
+		// 计费流水
+		billingLog := models.BillingLog{
+			UserID:  req.GetAccountId(),
+			CostUSD: totalPrice,
+			LogType: "subscription",
+		}
+		if err := tx.Create(&billingLog).Error; err != nil {
+			return status.Error(codes.Internal, "failed to create billing log")
+		}
+
+		newBalance := user.BalanceUSD - totalPrice
+		resp = &pb.TierSubscriptionResponse{
+			Success:          true,
+			Message:          "subscription activated",
+			CostUsd:          priceUSD,
+			RemainingBalance: uint64(newBalance * 100),
+			NewCellLevel:     int32(newLevel),
+			ExpiresAt:        expiresAt.Unix(),
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// PurchaseTierPure 纯函数版本，用于属性测试
+func PurchaseTierPure(balanceUSD float64, currentLevel int, planType string) (newBalance float64, newLevel int, err error) {
+	priceUSD, ok := tierPrices[planType]
+	if !ok {
+		return balanceUSD, currentLevel, fmt.Errorf("invalid plan_type")
+	}
+	newLvl, ok := tierLevelMap[planType]
+	if !ok {
+		return balanceUSD, currentLevel, fmt.Errorf("invalid plan_type")
+	}
+	totalPrice := float64(priceUSD) / 100.0
+	if balanceUSD < totalPrice {
+		return balanceUSD, currentLevel, fmt.Errorf("insufficient balance")
+	}
+	if newLvl < currentLevel {
+		return balanceUSD, currentLevel, fmt.Errorf("downgrade not immediate")
+	}
+	return balanceUSD - totalPrice, newLvl, nil
 }

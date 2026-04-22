@@ -200,3 +200,45 @@ func TestProperty_SwitchCellTargetConstraints(t *testing.T) {
 		}
 	})
 }
+
+// Feature: v1-tiered-service, Property: 分配结果的 cell_level <= 用户 cell_level
+// **Validates: Requirements 4.5**
+func TestProperty_SelectBestCellForTierLevelConstraint(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		numCells := rapid.IntRange(1, 20).Draw(t, "num_cells")
+		cells := make([]CellWithLoad, numCells)
+		for i := range cells {
+			cells[i] = CellWithLoad{
+				Cell: models.Cell{
+					CellID:    rapid.StringMatching(`cell-[a-z]{3}[0-9]`).Draw(t, "cell_id"),
+					CellLevel: rapid.IntRange(1, 3).Draw(t, "cell_level"),
+					Status:    rapid.SampledFrom([]string{"active", "offline"}).Draw(t, "status"),
+				},
+				LoadPercent: float32(rapid.IntRange(0, 100).Draw(t, "load")),
+			}
+		}
+		userLevel := rapid.IntRange(1, 3).Draw(t, "user_level")
+
+		result, allocatedLevel, err := SelectBestCellForTier(cells, userLevel)
+		if err != nil {
+			// No cells available - verify no active cells with acceptable load exist at any level <= userLevel
+			for _, c := range cells {
+				if c.Cell.Status == "active" && c.Cell.CellLevel <= userLevel {
+					threshold := getTierLoadThresholdLocal(c.Cell.CellLevel)
+					if c.LoadPercent < threshold {
+						t.Fatalf("found available cell but SelectBestCellForTier returned error")
+					}
+				}
+			}
+			return
+		}
+
+		// Key invariant: allocated cell_level <= user cell_level
+		if allocatedLevel > userLevel {
+			t.Fatalf("allocated level %d > user level %d", allocatedLevel, userLevel)
+		}
+		if result.Cell.CellLevel > userLevel {
+			t.Fatalf("result cell level %d > user level %d", result.Cell.CellLevel, userLevel)
+		}
+	})
+}

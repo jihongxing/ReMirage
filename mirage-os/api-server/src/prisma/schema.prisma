@@ -1,3 +1,7 @@
+// ⚠️ 适配层：运行时数据库真相为 mirage-os/pkg/models/db.go（参见 ADR-001）
+// 本文件仅用于 NestJS API 层的查询映射，不作为表结构变更的源头。
+// 所有表结构变更必须先修改 GORM Models，再同步到此文件。
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -26,20 +30,25 @@ enum DepositStatus {
 }
 
 model User {
-  id             String   @id @default(uuid())
-  username       String   @unique
-  passwordHash   String   @map("password_hash")
-  ed25519Pubkey  String?  @map("ed25519_pubkey")
-  totpSecret     String?  @map("totp_secret")
-  remainingQuota Decimal  @default(0) @map("remaining_quota") @db.Decimal(20, 8)
-  totalDeposit   Decimal  @default(0) @map("total_deposit") @db.Decimal(20, 8)
-  totalConsumed  Decimal  @default(0) @map("total_consumed") @db.Decimal(20, 8)
-  cellId         String?  @map("cell_id")
-  cell           Cell?    @relation(fields: [cellId], references: [id])
-  inviteCodeUsed String?  @map("invite_code_used")
-  isActive       Boolean  @default(true) @map("is_active")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  id               String    @id @default(uuid())
+  username         String    @unique
+  passwordHash     String    @map("password_hash")
+  ed25519Pubkey    String?   @map("ed25519_pubkey")
+  totpSecret       String?   @map("totp_secret")
+  remainingQuota   Decimal   @default(0) @map("remaining_quota") @db.Decimal(20, 8)
+  totalDeposit     Decimal   @default(0) @map("total_deposit") @db.Decimal(20, 8)
+  totalConsumed    Decimal   @default(0) @map("total_consumed") @db.Decimal(20, 8)
+  cellId           String?   @map("cell_id")
+  cell             Cell?     @relation(fields: [cellId], references: [id])
+  inviteCodeUsed   String?   @map("invite_code_used")
+  isActive         Boolean   @default(true) @map("is_active")
+  isOperator       Boolean   @default(false) @map("is_operator")
+  invitedBy        String?   @map("invited_by")
+  inviteRoot       String?   @map("invite_root")
+  inviteDepth      Int       @default(0) @map("invite_depth")
+  observationEndsAt DateTime? @map("observation_ends_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
 
   billingLogs     BillingLog[]
   deposits        Deposit[]
@@ -79,6 +88,10 @@ model Gateway {
   threatLevel       Int           @default(0) @map("threat_level")
   activeConnections BigInt        @default(0) @map("active_connections")
   memoryUsageMb     Int           @default(0) @map("memory_usage_mb")
+  downlinkAddr      String?       @map("downlink_addr")
+  version           String?
+  maxSessions       Int?          @map("max_sessions")
+  activeSessions    Int           @default(0) @map("active_sessions")
   createdAt         DateTime      @default(now()) @map("created_at")
   updatedAt         DateTime      @updatedAt @map("updated_at")
 
@@ -173,13 +186,18 @@ model Deposit {
   amountXmr     Decimal?      @map("amount_xmr") @db.Decimal(20, 12)
   exchangeRate  Decimal?      @map("exchange_rate") @db.Decimal(20, 8)
   currency      String        @default("XMR")
-  txHash        String?       @unique @map("tx_hash")
+  txHash        String?       @map("tx_hash")
+  transferIndex Int?          @map("transfer_index")
   paymentId     String?       @map("payment_id")
+  subAddress    String?       @map("sub_address")
   confirmations Int           @default(0)
   status        DepositStatus @default(PENDING)
   confirmedAt   DateTime?     @map("confirmed_at")
   createdAt     DateTime      @default(now()) @map("created_at")
 
+  quotaPurchases QuotaPurchase[]
+
+  @@unique([txHash, transferIndex])
   @@map("deposits")
 }
 
@@ -187,6 +205,8 @@ model QuotaPurchase {
   id        String   @id @default(uuid())
   userId    String   @map("user_id")
   user      User     @relation(fields: [userId], references: [id])
+  depositId String?  @map("deposit_id")
+  deposit   Deposit? @relation(fields: [depositId], references: [id])
   quotaGb   Decimal  @map("quota_gb") @db.Decimal(20, 8)
   price     Decimal  @db.Decimal(20, 8)
   cellLevel String   @map("cell_level")

@@ -1,3 +1,9 @@
+---
+Status: derived
+Target Truth: docs/protocols/gswitch.md
+Migration: 当前有效协议语义已迁移到 docs/protocols/gswitch.md，本文降级为解释性输入材料
+---
+
 # G-Switch 域名转生协议
 
 ## 一、协议定位

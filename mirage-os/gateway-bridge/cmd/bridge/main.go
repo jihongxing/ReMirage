@@ -11,6 +11,8 @@ import (
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 
 	"mirage-os/gateway-bridge/pkg/config"
 	"mirage-os/gateway-bridge/pkg/crypto"
@@ -22,6 +24,8 @@ import (
 	"mirage-os/gateway-bridge/pkg/rest"
 	"mirage-os/gateway-bridge/pkg/store"
 	"mirage-os/gateway-bridge/pkg/topology"
+
+	"mirage-os/services/provisioning"
 )
 
 func main() {
@@ -109,6 +113,17 @@ func main() {
 	restHandler := rest.NewHandler(enforcer, dispatcher, db, rdb)
 	mux := http.NewServeMux()
 	restHandler.RegisterRoutes(mux)
+
+	// 初始化 Provisioning 路由（使用 GORM DB）
+	gormDB, err := gorm.Open(postgres.Open(cfg.Database.DSN), &gorm.Config{})
+	if err != nil {
+		log.Fatalf("[FATAL] connect gorm postgres: %v", err)
+	}
+	provisionerSvc := provisioning.NewProvisioner(gormDB)
+	provisioningHandler := provisioning.NewHTTPHandler(provisionerSvc)
+	provisioningHandler.RegisterRoutes(mux)
+	log.Println("[INFO] Provisioning routes registered")
+
 	restAddr := "127.0.0.1:7000"
 	if cfg.REST != nil && cfg.REST.Addr != "" {
 		restAddr = cfg.REST.Addr

@@ -102,3 +102,17 @@ func (sm *SessionManager) GetSession(sessionID string) *SessionInfo {
 	defer sm.mu.RUnlock()
 	return sm.sessions[sessionID]
 }
+
+// DisconnectUser 断开指定用户的所有会话，返回断开的会话数
+// 用于配额熔断时仅断开该用户连接，不影响其他用户
+func (sm *SessionManager) DisconnectUser(userID string) int {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sids := sm.byUser[userID]
+	count := len(sids)
+	for _, sid := range sids {
+		delete(sm.sessions, sid)
+	}
+	delete(sm.byUser, userID)
+	return count
+}

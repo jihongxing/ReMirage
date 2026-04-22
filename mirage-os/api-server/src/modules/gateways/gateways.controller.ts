@@ -27,6 +27,22 @@ export class GatewaysController {
     });
   }
 
+  @Get('topology/by-cell/:cellId')
+  async getGatewaysByCell(@Param('cellId') cellId: string) {
+    return this.gatewaysService.findByCellOnline(cellId);
+  }
+
+  @Get('topology/online')
+  async getOnlineGateways() {
+    return this.gatewaysService.findAllOnline();
+  }
+
+  @Get('push-logs')
+  async getPushLogs(@Query('limit') limit?: string) {
+    const parsedLimit = limit ? parseInt(limit, 10) : 50;
+    return this.gatewaysService.getRecentPushLogs(parsedLimit);
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.gatewaysService.findOne(id);

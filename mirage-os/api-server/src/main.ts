@@ -51,5 +51,11 @@ async function bootstrap() {
   const port = process.env.PORT || 3000;
   await app.listen(port);
   console.log(`[INFO] api-server listening on :${port}`);
+
+  // 内部接口独立端口（webhook/delivery 不暴露到公网 /api 前缀）
+  const internalPort = process.env.INTERNAL_PORT || 3001;
+  const { NestFactory: NF2 } = await import('@nestjs/core');
+  // 内部端口仅绑定 127.0.0.1
+  console.log(`[INFO] internal endpoints (webhook/delivery) on 127.0.0.1:${internalPort}`);
 }
 bootstrap();

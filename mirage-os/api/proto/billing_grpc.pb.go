@@ -19,11 +19,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	BillingService_CreateAccount_FullMethodName  = "/mirage.billing.v1.BillingService/CreateAccount"
-	BillingService_Deposit_FullMethodName        = "/mirage.billing.v1.BillingService/Deposit"
-	BillingService_GetBalance_FullMethodName     = "/mirage.billing.v1.BillingService/GetBalance"
-	BillingService_PurchaseQuota_FullMethodName  = "/mirage.billing.v1.BillingService/PurchaseQuota"
-	BillingService_GetBillingLogs_FullMethodName = "/mirage.billing.v1.BillingService/GetBillingLogs"
+	BillingService_CreateAccount_FullMethodName            = "/mirage.billing.v1.BillingService/CreateAccount"
+	BillingService_Deposit_FullMethodName                  = "/mirage.billing.v1.BillingService/Deposit"
+	BillingService_GetBalance_FullMethodName               = "/mirage.billing.v1.BillingService/GetBalance"
+	BillingService_PurchaseQuota_FullMethodName            = "/mirage.billing.v1.BillingService/PurchaseQuota"
+	BillingService_GetBillingLogs_FullMethodName           = "/mirage.billing.v1.BillingService/GetBillingLogs"
+	BillingService_PurchaseTierSubscription_FullMethodName = "/mirage.billing.v1.BillingService/PurchaseTierSubscription"
 )
 
 // BillingServiceClient is the client API for BillingService service.
@@ -42,6 +43,8 @@ type BillingServiceClient interface {
 	PurchaseQuota(ctx context.Context, in *PurchaseRequest, opts ...grpc.CallOption) (*PurchaseResponse, error)
 	// 查询计费流水
 	GetBillingLogs(ctx context.Context, in *BillingLogsRequest, opts ...grpc.CallOption) (*BillingLogsResponse, error)
+	// 购买等级订阅
+	PurchaseTierSubscription(ctx context.Context, in *TierSubscriptionRequest, opts ...grpc.CallOption) (*TierSubscriptionResponse, error)
 }
 
 type billingServiceClient struct {
@@ -102,6 +105,16 @@ func (c *billingServiceClient) GetBillingLogs(ctx context.Context, in *BillingLo
 	return out, nil
 }
 
+func (c *billingServiceClient) PurchaseTierSubscription(ctx context.Context, in *TierSubscriptionRequest, opts ...grpc.CallOption) (*TierSubscriptionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TierSubscriptionResponse)
+	err := c.cc.Invoke(ctx, BillingService_PurchaseTierSubscription_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BillingServiceServer is the server API for BillingService service.
 // All implementations must embed UnimplementedBillingServiceServer
 // for forward compatibility.
@@ -118,6 +131,8 @@ type BillingServiceServer interface {
 	PurchaseQuota(context.Context, *PurchaseRequest) (*PurchaseResponse, error)
 	// 查询计费流水
 	GetBillingLogs(context.Context, *BillingLogsRequest) (*BillingLogsResponse, error)
+	// 购买等级订阅
+	PurchaseTierSubscription(context.Context, *TierSubscriptionRequest) (*TierSubscriptionResponse, error)
 	mustEmbedUnimplementedBillingServiceServer()
 }
 
@@ -142,6 +157,9 @@ func (UnimplementedBillingServiceServer) PurchaseQuota(context.Context, *Purchas
 }
 func (UnimplementedBillingServiceServer) GetBillingLogs(context.Context, *BillingLogsRequest) (*BillingLogsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetBillingLogs not implemented")
+}
+func (UnimplementedBillingServiceServer) PurchaseTierSubscription(context.Context, *TierSubscriptionRequest) (*TierSubscriptionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PurchaseTierSubscription not implemented")
 }
 func (UnimplementedBillingServiceServer) mustEmbedUnimplementedBillingServiceServer() {}
 func (UnimplementedBillingServiceServer) testEmbeddedByValue()                        {}
@@ -254,6 +272,24 @@ func _BillingService_GetBillingLogs_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BillingService_PurchaseTierSubscription_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TierSubscriptionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BillingServiceServer).PurchaseTierSubscription(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BillingService_PurchaseTierSubscription_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BillingServiceServer).PurchaseTierSubscription(ctx, req.(*TierSubscriptionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BillingService_ServiceDesc is the grpc.ServiceDesc for BillingService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -280,6 +316,10 @@ var BillingService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetBillingLogs",
 			Handler:    _BillingService_GetBillingLogs_Handler,
+		},
+		{
+			MethodName: "PurchaseTierSubscription",
+			Handler:    _BillingService_PurchaseTierSubscription_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

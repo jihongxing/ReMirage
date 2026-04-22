@@ -49,4 +49,25 @@ export class GatewaysService {
     });
     return result.count;
   }
+
+  async findByCellOnline(cellId: string) {
+    return this.prisma.gateway.findMany({
+      where: { cellId, status: 'ONLINE' },
+      include: { cell: true },
+    });
+  }
+
+  async findAllOnline() {
+    return this.prisma.gateway.findMany({
+      where: { status: 'ONLINE' },
+      include: { cell: true },
+    });
+  }
+
+  async getRecentPushLogs(limit: number) {
+    return this.prisma.pushLog.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+  }
 }

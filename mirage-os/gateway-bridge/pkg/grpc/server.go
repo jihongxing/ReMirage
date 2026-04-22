@@ -2,10 +2,13 @@ package grpc
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -71,9 +74,34 @@ func NewServer(cfg config.GRPCConfig, enforcer *quota.Enforcer,
 func (s *Server) Start() error {
 	var opts []grpc.ServerOption
 	if s.tlsEnabled {
-		creds, err := credentials.NewServerTLSFromFile(s.tlsCert, s.tlsKey)
+		// 使用 mTLS: RequireAndVerifyClientCert
+		tlsCert, err := tls.LoadX509KeyPair(s.tlsCert, s.tlsKey)
 		if err != nil {
-			return fmt.Errorf("load tls: %w", err)
+			return fmt.Errorf("load tls cert: %w", err)
+		}
+
+		var creds credentials.TransportCredentials
+		if s.tlsCA != "" {
+			caCert, err := os.ReadFile(s.tlsCA)
+			if err != nil {
+				return fmt.Errorf("load ca cert: %w", err)
+			}
+			caPool := x509.NewCertPool()
+			if !caPool.AppendCertsFromPEM(caCert) {
+				return fmt.Errorf("failed to parse CA cert")
+			}
+			tlsConfig := &tls.Config{
+				Certificates: []tls.Certificate{tlsCert},
+				ClientCAs:    caPool,
+				ClientAuth:   tls.RequireAndVerifyClientCert,
+				MinVersion:   tls.VersionTLS13,
+			}
+			creds = credentials.NewTLS(tlsConfig)
+		} else {
+			creds, err = credentials.NewServerTLSFromFile(s.tlsCert, s.tlsKey)
+			if err != nil {
+				return fmt.Errorf("load tls: %w", err)
+			}
 		}
 		opts = append(opts, grpc.Creds(creds))
 
@@ -119,17 +147,17 @@ func (s *Server) SyncHeartbeat(ctx context.Context, req *pb.HeartbeatRequest) (*
 		return nil, status.Error(codes.InvalidArgument, "timestamp is required")
 	}
 
-	// UPSERT gateways 表
+	// UPSERT gateways 表（列名对齐 GORM Gateway model — ADR-001）
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO gateways (id, status, last_heartbeat, ebpf_loaded, threat_level, active_connections, memory_usage_mb, updated_at)
+		INSERT INTO gateways (gateway_id, status, last_heartbeat_at, ebpf_loaded, current_threat_level, active_connections, memory_bytes, updated_at)
 		VALUES ($1, $2, NOW(), $3, $4, $5, $6, NOW())
-		ON CONFLICT (id) DO UPDATE SET
+		ON CONFLICT (gateway_id) DO UPDATE SET
 			status = EXCLUDED.status,
-			last_heartbeat = NOW(),
+			last_heartbeat_at = NOW(),
 			ebpf_loaded = EXCLUDED.ebpf_loaded,
-			threat_level = EXCLUDED.threat_level,
+			current_threat_level = EXCLUDED.current_threat_level,
 			active_connections = EXCLUDED.active_connections,
-			memory_usage_mb = EXCLUDED.memory_usage_mb,
+			memory_bytes = EXCLUDED.memory_bytes,
 			updated_at = NOW()
 	`, req.GatewayId, mapStatus(req.Status), req.EbpfLoaded, req.ThreatLevel, req.ActiveConnections, req.MemoryUsageMb)
 	if err != nil {
@@ -137,8 +165,14 @@ func (s *Server) SyncHeartbeat(ctx context.Context, req *pb.HeartbeatRequest) (*
 		return nil, status.Error(codes.Internal, "database error")
 	}
 
-	// 更新拓扑索引
-	s.registry.UpdateHeartbeat(req.GatewayId, req.ActiveSessions, req.StateHash)
+	// 更新拓扑索引（带指标，7.5 - 接通真实数据）
+	s.registry.UpdateHeartbeatWithMetrics(
+		req.GatewayId,
+		req.ActiveSessions,
+		int32(req.ThreatLevel),
+		0, // CPU usage - 待 proto 增加字段
+		req.MemoryUsageMb,
+	)
 
 	// Redis 缓存在线状态
 	rctx := context.Background()
@@ -307,8 +341,8 @@ func (s *Server) markStaleGatewaySessions() {
 	ctx := context.Background()
 	// 查找心跳超时超过 90 秒的 Gateway
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id FROM gateways
-		WHERE last_heartbeat < NOW() - INTERVAL '90 seconds'
+		SELECT gateway_id FROM gateways
+		WHERE last_heartbeat_at < NOW() - INTERVAL '90 seconds'
 		  AND status != 'OFFLINE'
 	`)
 	if err != nil {
@@ -376,6 +410,20 @@ func (s *Server) ReportSessionEvent(ctx context.Context, req *pb.SessionEventReq
 		`, req.SessionId)
 		if err != nil {
 			log.Printf("[ERROR] disconnect client_session: %v", err)
+		}
+
+	case pb.SessionEventType_SESSION_FUSE_TRIGGERED:
+		// 配额熔断事件：写入 BillingLog（log_type = fuse）
+		if req.UserId != "" {
+			_, err := s.db.ExecContext(ctx, `
+				INSERT INTO billing_logs (gateway_id, user_id, log_type, created_at)
+				VALUES ($1, $2, 'fuse', NOW())
+			`, req.GatewayId, req.UserId)
+			if err != nil {
+				log.Printf("[ERROR] write fuse billing_log (user=%s): %v", req.UserId, err)
+			} else {
+				log.Printf("[INFO] 用户 %s 配额熔断已记录 (gateway=%s)", req.UserId, req.GatewayId)
+			}
 		}
 	}
 

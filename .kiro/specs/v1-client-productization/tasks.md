@@ -1,0 +1,269 @@
+# Implementation Plan: Client 产品化（拓扑学习 + 订阅托管 + 后台服务化）
+
+## Overview
+
+将 phantom-client 从前台 CLI 原型升级为可长期常驻、自愈、可托管的正式产品形态。按依赖顺序实施：基础设施层 → 拓扑层 → 订阅层 → 服务层 → 主入口重构 → 集成联调。
+
+## Tasks
+
+- [x] 1. 基础设施层：PersistStore + Keyring + PhysicalNICDetector
+  - [x] 1.1 创建 `pkg/persist/store.go`，实现 PersistConfig 结构体、Load/Save 函数（JSON 文件读写）
+    - 定义 PersistConfig 包含 BootstrapPool、CertFingerprint、UserID、OSEndpoint、LastEntitlement
+    - 实现原子写入（写临时文件 → rename）防止崩溃导致配置损坏
+    - _Requirements: 9.3_
+  - [x]* 1.2 Property 3: PersistConfig 序列化往返测试
+    - **Property 3: PersistConfig 序列化往返**
+    - 使用 rapid 生成任意 PersistConfig，验证 Save→Load 等价
+    - **Validates: Requirements 9.3**
+  - [x] 1.3 创建 `pkg/persist/keyring.go`，实现 Keyring 接口及平台适配
+    - 定义 Keyring interface（Store/Load/Delete）
+    - Linux: 使用 go-keyring 库封装 Secret Service / keyctl
+    - Windows: 使用 go-keyring 库封装 Credential Manager
+    - 回退: 内存持有 + 告警日志
+    - _Requirements: 9.4_
+  - [x] 1.4 创建 `pkg/nicdetect/detect.go`，定义 PhysicalNICDetector 接口
+    - 定义 `DetectOutbound(targetIP string) (net.IP, error)` 接口
+    - 实现 NewDetector() 工厂函数
+    - _Requirements: 13.1, 13.5_
+  - [x] 1.5 创建 `pkg/nicdetect/detect_linux.go`，实现 Linux 路由表查询
+    - 通过 `ip route get <gateway_ip>` 解析 src 字段获取出口 IP
+    - 不向外部发送任何探测包
+    - _Requirements: 13.2, 13.5_
+  - [x] 1.6 创建 `pkg/nicdetect/detect_windows.go`，实现 Windows 路由表查询
+    - 通过 `route print` 或 GetBestRoute2 API 获取出口接口
+    - _Requirements: 13.3_
+  - [x] 1.7 实现 NIC 回退逻辑：枚举非 loopback、非 TUN 接口，选第一个有效 IPv4
+    - 在 detect.go 中实现 fallbackDetect() 公共回退函数
+    - _Requirements: 13.4_
+  - [x]* 1.8 Property 18: NIC 回退接口选择测试
+    - **Property 18: NIC 回退接口选择**
+    - 使用 rapid 生成任意网络接口列表组合，验证回退选择逻辑正确性
+    - **Validates: Requirements 13.4**
+
+- [x] 2. Checkpoint - 基础设施层验证
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 3. 拓扑层：数据模型 + TopoVerifier + RuntimeTopology
+  - [x] 3.1 在 `pkg/gtclient/topo.go` 中定义 RouteTableResponse、GatewayNode 数据结构
+    - RouteTableResponse: Gateways, Version, PublishedAt, Signature
+    - GatewayNode: IP, Port, Priority, Region, CellID
+    - 实现 JSON 序列化标签
+    - _Requirements: 1.2_
+  - [x]* 3.2 Property 1: RouteTableResponse 序列化往返测试
+    - **Property 1: RouteTableResponse 序列化往返**
+    - 使用 rapid 生成任意 RouteTableResponse，验证 JSON Marshal→Unmarshal 等价
+    - **Validates: Requirements 1.2**
+  - [x] 3.3 在 `pkg/gtclient/topo.go` 中实现 TopoVerifier
+    - NewTopoVerifier(psk []byte)：PSK 前 32 字节派生 HMAC 密钥
+    - Verify(resp): HMAC-SHA256 签名校验 + 版本单调递增 + 发布时间防回滚 + Gateway 列表非空
+    - IsPaused(): 连续 3 次签名失败 → 暂停 30 分钟
+    - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5_
+  - [x]* 3.4 Property 10: 单调版本+时间戳接受策略测试
+    - **Property 10: 单调版本+时间戳接受策略**
+    - 使用 rapid 生成任意版本号和时间戳对，验证仅 version > V 且 publishedAt > T 时接受
+    - **Validates: Requirements 2.3, 5.3**
+  - [x]* 3.5 Property 11: HMAC 签名校验测试
+    - **Property 11: HMAC 签名校验**
+    - 使用 rapid 生成有效响应 + 正确密钥验证通过；篡改任意字节验证失败
+    - **Validates: Requirements 5.2**
+  - [x] 3.6 实现 RuntimeTopology 结构体（替代现有 RouteTable）
+    - Update(nodes, version, pubTime): 写入节点列表、版本号、发布时间
+    - NextByPriority(exclude): 按优先级升序返回节点（排除指定 IP）
+    - Count(), Version(), IsEmpty() 辅助方法
+    - _Requirements: 1.3, 4.4_
+  - [x]* 3.7 Property 5: RuntimeTopology 更新正确性测试
+    - **Property 5: RuntimeTopology 更新正确性**
+    - 使用 rapid 生成任意 GatewayNode 列表，验证 Count() 等于列表长度
+    - **Validates: Requirements 1.3, 3.3**
+  - [x]* 3.8 Property 8: 优先级有序网关选择测试
+    - **Property 8: 优先级有序网关选择**
+    - 使用 rapid 生成不同优先级的 GatewayNode 列表，验证 NextByPriority 按优先级升序返回
+    - **Validates: Requirements 1.5**
+
+- [x] 4. 拓扑层：TopoRefresher + 双池分离 + 退化等级
+  - [x] 4.1 实现 ExponentialBackoff 工具结构体
+    - 支持 base、max、当前失败次数，计算 min(base × 2^N, max)
+    - 支持 Reset() 重置
+    - _Requirements: 2.2_
+  - [x]* 4.2 Property 9: 指数退避计算测试
+    - **Property 9: 指数退避计算**
+    - 使用 rapid 生成任意 N/base/max，验证 delay = min(base × 2^N, max)
+    - **Validates: Requirements 2.2, 6.4**
+  - [x] 4.3 实现 TopoRefresher（周期拉取 + 退避 + 告警）
+    - NewTopoRefresher(cfg): 配置 OS 端点、认证密钥、刷新周期
+    - Start(ctx): 启动后台 goroutine 周期拉取
+    - PullOnce(ctx): 单次拉取 → TopoVerifier 校验 → 写入 RuntimeTopology
+    - 拉取失败保留现有拓扑，指数退避重试
+    - 连续 3 次失败发出告警事件
+    - 恢复成功重置退避
+    - _Requirements: 1.1, 2.1, 2.2, 2.3, 2.4, 2.5, 1.4_
+  - [x]* 4.4 Property 6: 拉取失败保留现有拓扑测试
+    - **Property 6: 拉取失败保留现有拓扑**
+    - 使用 rapid 生成已有 RuntimeTopology 状态，模拟拉取失败，验证节点列表/版本号/更新时间不变
+    - **Validates: Requirements 1.4**
+  - [x] 4.5 修改 `pkg/gtclient/client.go`，实现双池分离
+    - 将现有 RouteTable 替换为 RuntimeTopology（可更新）
+    - BootstrapPool 保持 `[]token.GatewayEndpoint` 只读
+    - 重连优先级：L1 RuntimeTopology → L2 BootstrapPool → L3 Resonance
+    - _Requirements: 4.1, 4.2, 4.3, 4.5_
+  - [x]* 4.6 Property 7: BootstrapPool 不可变性测试
+    - **Property 7: BootstrapPool 不可变性**
+    - 使用 rapid 生成初始 BootstrapPool + 任意 RuntimeTopology 更新序列，验证 BootstrapPool 不变
+    - **Validates: Requirements 4.1, 4.3**
+  - [x] 4.7 在 `pkg/gtclient/state.go` 中扩展 DegradationLevel 和 DegradationEvent
+    - 定义 L1_Normal / L2_Degraded / L3_LastResort 枚举
+    - DegradationEvent: Level, Reason, EnteredAt, Attempts, Duration
+    - 在 GTunnelClient 中增加 DegradationLevel() 方法和退化事件发射
+    - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5_
+  - [x]* 4.8 Property 16: 退化事件完整性测试
+    - **Property 16: 退化事件完整性**
+    - 使用 rapid 生成任意退化等级转换，验证 DegradationEvent 字段完整性
+    - **Validates: Requirements 10.2, 10.3, 10.5**
+
+- [x] 5. Checkpoint - 拓扑层验证
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 6. 订阅托管层：Entitlement + ServiceClassPolicy + GraceWindow
+  - [x] 6.1 创建 `pkg/entitlement/manager.go`，实现 Entitlement 数据模型和 EntitlementManager
+    - Entitlement: ExpiresAt, QuotaRemaining, ServiceClass, Banned, FetchedAt
+    - ServiceClass 枚举: Standard, Platinum, Diamond
+    - EntitlementManager: 周期拉取（默认 10min）、指数退避、状态变更事件、banned 回调
+    - Start(ctx) / Current() / Stop()
+    - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5_
+  - [x]* 6.2 Property 2: Entitlement 序列化往返测试
+    - **Property 2: Entitlement 序列化往返**
+    - 使用 rapid 生成任意 Entitlement，验证 JSON Marshal→Unmarshal 等价
+    - **Validates: Requirements 6.2**
+  - [x]* 6.3 Property 12: 状态变更事件触发测试
+    - **Property 12: 状态变更事件触发**
+    - 使用 rapid 生成任意两个 Entitlement A/B，验证 A≠B 触发事件、A=B 不触发
+    - **Validates: Requirements 6.3**
+  - [x] 6.4 创建 `pkg/entitlement/policy.go`，实现 ServiceClassPolicy
+    - PolicyForClass(class): 返回对应等级的运行时行为参数
+    - Standard: 退避 5s/120s, Resonance 禁用, 心跳 30s, 拓扑 10min
+    - Platinum: 退避 2s/60s, Resonance 启用, 心跳 15s, 拓扑 5min
+    - Diamond: 退避 1s/30s, Resonance 启用, 心跳 10s, 拓扑 2min
+    - _Requirements: 7.1, 7.2, 7.3, 7.4_
+  - [x]* 6.5 Property 13: ServiceClass → Policy 映射测试
+    - **Property 13: ServiceClass → Policy 映射**
+    - 验证每个 ServiceClass 返回正确策略参数，Standard.ResonanceEnabled=false，Platinum/Diamond=true
+    - **Validates: Requirements 7.2, 7.4**
+  - [x] 6.6 创建 `pkg/entitlement/grace.go`，实现 GraceWindow
+    - NewGraceWindow(duration): 默认 24h
+    - RecordSuccess(ent): 记录最近成功拉取时间和缓存状态
+    - IsWithinGrace(): now - lastSuccessAt < duration
+    - DetermineScenario(ent, controlPlaneReachable): 按优先级分类离线场景
+    - CachedEntitlement(): 返回缓存的订阅状态
+    - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5_
+  - [x]* 6.7 Property 14: Grace Window 时间计算测试
+    - **Property 14: Grace Window 时间计算**
+    - 使用 rapid 生成任意 lastSuccessAt 和 duration，验证 IsWithinGrace 正确性
+    - **Validates: Requirements 11.1**
+  - [x]* 6.8 Property 15: 离线场景分类测试
+    - **Property 15: 离线场景分类**
+    - 使用 rapid 生成任意状态组合，验证 DetermineScenario 返回正确场景且优先级正确
+    - **Validates: Requirements 11.2**
+
+- [x] 7. Checkpoint - 订阅层验证
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 8. 服务层：KillSwitch 扩展 + HealthGuardian + DaemonManager
+  - [x] 8.1 扩展 `pkg/killswitch/killswitch.go`，增加 RouteState 持久化和残留清理
+    - RouteState: OriginalGW, OriginalIface, CurrentGWIP, TUNName, ActivatedAt
+    - PersistState(path): Activate 成功后持久化路由状态到 JSON 文件
+    - CleanupStaleRoutes(path): 启动时检测残留路由（TUN 设备 + /32 host route）并清理
+    - Activate 中途失败回滚已执行步骤
+    - _Requirements: 14.1, 14.2, 14.3, 14.4, 14.5_
+  - [x]* 8.2 Property 4: RouteState 序列化往返测试
+    - **Property 4: RouteState 序列化往返**
+    - 使用 rapid 生成任意 RouteState，验证 PersistState→Load 等价
+    - **Validates: Requirements 14.4**
+  - [x]* 8.3 Property 17: KillSwitch 事务回滚测试
+    - **Property 17: KillSwitch 事务回滚**
+    - 使用 mock Platform 注入任意步骤失败，验证事务完成后路由状态等于事务前状态
+    - **Validates: Requirements 14.1, 14.2**
+  - [x] 8.4 创建 `pkg/daemon/health.go`，实现 HealthGuardian
+    - HealthCheck: Name, Healthy, Detail
+    - Register(name, checkFn): 注册健康检查项
+    - Start(ctx): 按周期（默认 30s）执行所有检查
+    - 检查项：TUN 设备存在、QUIC 连接存活、KillSwitch 路由一致、Entitlement 有效
+    - 发现异常时尝试自修复（重建 TUN、修复路由）
+    - _Requirements: 12.1, 12.2, 12.3_
+  - [x] 8.5 创建 `pkg/daemon/manager.go`，实现 DaemonManager
+    - Install/Uninstall/Start/Stop/Status 方法
+    - _Requirements: 8.1, 8.2_
+  - [x] 8.6 创建 `pkg/daemon/service_linux.go`，实现 systemd service unit 生成和注册
+    - 生成 `/etc/systemd/system/phantom-client.service`
+    - 配置 Restart=on-failure, RestartSec=5s
+    - _Requirements: 8.1, 12.4_
+  - [x] 8.7 创建 `pkg/daemon/service_windows.go`，实现 Windows Service 注册
+    - 通过 golang.org/x/sys/windows/svc 注册
+    - Recovery 设置自动重启
+    - _Requirements: 8.2, 12.4_
+
+- [x] 9. Checkpoint - 服务层验证
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 10. 主入口重构：Provisioning + Daemon 模式 + 信号处理
+  - [x] 10.1 创建 `cmd/phantom/provision.go`，实现 Provisioning Flow
+    - 接受 token/URI → 兑换配置 → 验证连通性
+    - 持久化非敏感配置到 PersistStore
+    - 存储敏感材料到 Keyring
+    - 注册系统服务
+    - _Requirements: 9.1, 9.3, 9.4_
+  - [x] 10.2 重构 `cmd/phantom/main.go`，拆分 daemon 模式和 foreground 模式
+    - 增加 --daemon / --foreground / --provision 参数
+    - daemon 模式：无 stdin 依赖，日志输出到文件/journald
+    - foreground 模式：保持当前 CLI 行为
+    - 启动时检查本地配置，无配置提示执行 Provisioning
+    - _Requirements: 8.3, 8.4, 8.5, 9.2, 9.5_
+  - [x] 10.3 在 main.go 中集成 Resonance Resolver 注入
+    - 初始化阶段构造 ResonanceResolver 并注入 GTunnelClient
+    - 根据 ServiceClass 决定是否启用
+    - _Requirements: 3.1, 3.2, 7.4_
+  - [x] 10.4 在 main.go 中集成 TopoRefresher 和 EntitlementManager 启动
+    - daemon 启动后启动 TopoRefresher 周期拉取
+    - 启动 EntitlementManager 周期同步
+    - 绑定 ServiceClass 变更回调，即时调整运行时行为
+    - _Requirements: 2.1, 6.1, 7.1, 7.5_
+  - [x] 10.5 在 main.go 中集成 HealthGuardian 启动和信号处理
+    - 注册 TUN/QUIC/KillSwitch/Entitlement 四项健康检查
+    - defer + signal handler 双重保护执行 Deactivate
+    - 启动时通过 CleanupStaleRoutes 检测并清理残留路由
+    - _Requirements: 12.1, 12.5, 14.3, 14.5_
+  - [x] 10.6 修改 QUICEngine.Connect()，替换 8.8.8.8:53 探测为 PhysicalNICDetector
+    - 注入 PhysicalNICDetector 接口
+    - Connect 时调用 DetectOutbound(gatewayIP) 获取物理出口 IP
+    - 失败时使用回退逻辑
+    - _Requirements: 13.1, 13.4, 13.5_
+
+- [x] 11. 集成联调：绝境发现接入 + 端到端验证
+  - [x] 11.1 实现绝境发现成功后写入 RuntimeTopology + 立即触发 PullRouteTable
+    - 绝境发现成功的节点同时写入 RuntimeTopology
+    - 建链成功后立即触发一次完整拓扑拉取
+    - _Requirements: 3.3, 3.5_
+  - [x] 11.2 实现 banned 场景：立即受控断开 + 清除本地敏感材料
+    - EntitlementManager 检测 banned=true → 通知 GTunnelClient 断开
+    - 调用 Keyring.Delete 清除 PSK/AuthKey
+    - _Requirements: 6.5, 11.2_
+  - [x] 11.3 实现 Grace Window 到期场景：进入只读模式
+    - Grace 到期后禁止拓扑刷新和服务等级变更
+    - 维持已有连接
+    - 控制面恢复后立即同步并恢复正常
+    - _Requirements: 11.3, 11.4_
+  - [x]* 11.4 编写端到端集成测试
+    - 测试 Provisioning → Daemon 启动 → 拓扑拉取 → 订阅同步 → 重连降级 完整流程
+    - 使用 mock OS 控制面和 mock Gateway
+    - _Requirements: 1.1, 6.1, 8.1, 9.1_
+
+- [x] 12. Final checkpoint - 全量验证
+  - Ensure all tests pass, ask the user if questions arise.
+
+## Notes
+
+- Tasks marked with `*` are optional and can be skipped for faster MVP
+- Each task references specific requirements for traceability
+- Checkpoints ensure incremental validation
+- Property tests validate universal correctness properties (18 properties from design)
+- Go 语言实现，使用 `pgregory.net/rapid` 作为 PBT 框架（项目已有依赖）
+- 前置依赖 Spec 1-3（FSM/Route）和 Spec 2-3（OS Control Plane）假定已就绪

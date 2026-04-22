@@ -2,8 +2,10 @@ package killswitch
 
 import (
 	"fmt"
+	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"pgregory.net/rapid"
 )
@@ -306,6 +308,194 @@ func TestProperty_TransactionalAtomicity(t *testing.T) {
 			}
 
 			currentIP = newIP
+		}
+	})
+}
+
+// Feature: v1-client-productization, Property 4: RouteState 序列化往返
+// **Validates: Requirements 14.4**
+func TestProperty_RouteStateRoundTrip(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		original := &RouteState{
+			OriginalGW:    rapid.StringMatching(`\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}`).Draw(t, "originalGW"),
+			OriginalIface: rapid.StringMatching(`[a-z]{2,6}[0-9]`).Draw(t, "originalIface"),
+			CurrentGWIP:   rapid.StringMatching(`\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}`).Draw(t, "currentGWIP"),
+			TUNName:       rapid.StringMatching(`[a-z]{3,8}[0-9]`).Draw(t, "tunName"),
+			ActivatedAt:   time.Unix(rapid.Int64Range(0, 2000000000).Draw(t, "activatedAt"), 0).UTC(),
+		}
+
+		// Save to temp file
+		dir, err := os.MkdirTemp("", "killswitch-test-*")
+		if err != nil {
+			t.Fatalf("MkdirTemp: %v", err)
+		}
+		defer os.RemoveAll(dir)
+		path := dir + "/route-state.json"
+
+		if err := SaveRouteState(path, original); err != nil {
+			t.Fatalf("SaveRouteState: %v", err)
+		}
+
+		// Load back
+		loaded, err := LoadRouteState(path)
+		if err != nil {
+			t.Fatalf("LoadRouteState: %v", err)
+		}
+
+		// Verify round-trip equivalence
+		if original.OriginalGW != loaded.OriginalGW {
+			t.Fatalf("OriginalGW mismatch: %q vs %q", original.OriginalGW, loaded.OriginalGW)
+		}
+		if original.OriginalIface != loaded.OriginalIface {
+			t.Fatalf("OriginalIface mismatch: %q vs %q", original.OriginalIface, loaded.OriginalIface)
+		}
+		if original.CurrentGWIP != loaded.CurrentGWIP {
+			t.Fatalf("CurrentGWIP mismatch: %q vs %q", original.CurrentGWIP, loaded.CurrentGWIP)
+		}
+		if original.TUNName != loaded.TUNName {
+			t.Fatalf("TUNName mismatch: %q vs %q", original.TUNName, loaded.TUNName)
+		}
+		if !original.ActivatedAt.Equal(loaded.ActivatedAt) {
+			t.Fatalf("ActivatedAt mismatch: %v vs %v", original.ActivatedAt, loaded.ActivatedAt)
+		}
+	})
+}
+
+// failableMockPlatform is a mock Platform that can inject failure at a specific step.
+type failableMockPlatform struct {
+	mu           sync.Mutex
+	defaultGW    string
+	defaultIface string
+	hostRoutes   map[string]bool
+	defaultDel   bool
+	tunDefault   bool
+
+	failAtStep int // 0=never fail, 1=GetDefaultGateway, 2=DeleteDefaultRoute, 3=AddDefaultRoute, 4=AddHostRoute
+	stepCount  int
+}
+
+func newFailableMockPlatform(failAt int) *failableMockPlatform {
+	return &failableMockPlatform{
+		defaultGW:    "192.168.1.1",
+		defaultIface: "eth0",
+		hostRoutes:   make(map[string]bool),
+		failAtStep:   failAt,
+	}
+}
+
+func (m *failableMockPlatform) mayFail(step int) error {
+	m.stepCount++
+	if m.failAtStep == step {
+		return fmt.Errorf("injected failure at step %d", step)
+	}
+	return nil
+}
+
+func (m *failableMockPlatform) GetDefaultGateway() (string, string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.mayFail(1); err != nil {
+		return "", "", err
+	}
+	return m.defaultGW, m.defaultIface, nil
+}
+
+func (m *failableMockPlatform) DeleteDefaultRoute() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.mayFail(2); err != nil {
+		return err
+	}
+	m.defaultDel = true
+	return nil
+}
+
+func (m *failableMockPlatform) AddDefaultRoute(tunName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.mayFail(3); err != nil {
+		return err
+	}
+	m.tunDefault = true
+	return nil
+}
+
+func (m *failableMockPlatform) AddHostRoute(ip, gateway, iface string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.mayFail(4); err != nil {
+		return err
+	}
+	m.hostRoutes[ip] = true
+	return nil
+}
+
+func (m *failableMockPlatform) DeleteHostRoute(ip string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.hostRoutes, ip)
+	return nil
+}
+
+func (m *failableMockPlatform) RestoreDefaultRoute(gateway, iface string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.defaultDel = false
+	m.tunDefault = false
+	return nil
+}
+
+func (m *failableMockPlatform) snapshot() (bool, bool, map[string]bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	routes := make(map[string]bool)
+	for k, v := range m.hostRoutes {
+		routes[k] = v
+	}
+	return m.defaultDel, m.tunDefault, routes
+}
+
+// Feature: v1-client-productization, Property 17: KillSwitch 事务回滚
+// **Validates: Requirements 14.1, 14.2**
+func TestProperty_KillSwitchTransactionRollback(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		// Inject failure at step 2, 3, or 4 (step 1 is GetDefaultGateway which fails before any mutation)
+		failStep := rapid.IntRange(2, 4).Draw(t, "failStep")
+
+		mock := newFailableMockPlatform(failStep)
+		ks := NewKillSwitchWithPlatform("mirage0", mock)
+
+		// Capture pre-transaction state
+		preDefaultDel, preTunDefault, preHostRoutes := mock.snapshot()
+
+		// Attempt Activate — should fail at the injected step
+		gatewayIP := rapid.StringMatching(`\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}`).Draw(t, "gatewayIP")
+		err := ks.Activate(gatewayIP)
+		if err == nil {
+			t.Fatal("expected Activate to fail with injected failure")
+		}
+
+		// Verify post-transaction state equals pre-transaction state
+		postDefaultDel, postTunDefault, postHostRoutes := mock.snapshot()
+
+		if preDefaultDel != postDefaultDel {
+			t.Fatalf("defaultDel changed: pre=%v post=%v (failStep=%d)", preDefaultDel, postDefaultDel, failStep)
+		}
+		if preTunDefault != postTunDefault {
+			t.Fatalf("tunDefault changed: pre=%v post=%v (failStep=%d)", preTunDefault, postTunDefault, failStep)
+		}
+		if len(preHostRoutes) != len(postHostRoutes) {
+			t.Fatalf("hostRoutes count changed: pre=%d post=%d (failStep=%d)", len(preHostRoutes), len(postHostRoutes), failStep)
+		}
+		for k := range preHostRoutes {
+			if !postHostRoutes[k] {
+				t.Fatalf("hostRoute %s lost after rollback (failStep=%d)", k, failStep)
+			}
+		}
+
+		// KillSwitch should NOT be activated
+		if ks.IsActivated() {
+			t.Fatal("kill switch should not be activated after failed Activate")
 		}
 	})
 }

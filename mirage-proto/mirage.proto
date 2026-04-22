@@ -170,6 +170,7 @@ enum SessionEventType {
     SESSION_CONNECTED = 0;
     SESSION_DISCONNECTED = 1;
     SESSION_MIGRATING = 2;
+    SESSION_FUSE_TRIGGERED = 3;  // 配额熔断：用户配额耗尽
 }
 
 message SessionEventRequest {

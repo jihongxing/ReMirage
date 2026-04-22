@@ -13,17 +13,26 @@ import (
 	"time"
 )
 
-// LabyrinthEngine 无限迷宫引擎
+// MaxLabyrinthDepth 迷宫最大深度
+const MaxLabyrinthDepth = 5
+
+// LabyrinthEngine 有限迷宫引擎
 type LabyrinthEngine struct {
 	mu sync.RWMutex
+
+	// 业务画像
+	persona Persona
+
+	// 最大深度
+	maxDepth int
 
 	// 路径深度统计
 	depthStats map[string]int // IP -> 最大深度
 
 	// 延迟配置
-	baseDelay    time.Duration
-	delayFactor  float64 // 指数增长因子
-	maxDelay     time.Duration
+	baseDelay   time.Duration
+	delayFactor float64 // 指数增长因子
+	maxDelay    time.Duration
 
 	// 语义词库
 	pathSegments []string
@@ -37,10 +46,12 @@ type LabyrinthEngine struct {
 // NewLabyrinthEngine 创建迷宫引擎
 func NewLabyrinthEngine() *LabyrinthEngine {
 	return &LabyrinthEngine{
+		persona:     DefaultPersona,
+		maxDepth:    MaxLabyrinthDepth,
 		depthStats:  make(map[string]int),
 		baseDelay:   50 * time.Millisecond,
 		delayFactor: 1.5,
-		maxDelay:    30 * time.Second,
+		maxDelay:    3 * time.Second,
 		pathSegments: []string{
 			"api", "v2", "v3", "internal", "admin", "system",
 			"users", "accounts", "transactions", "audit",
@@ -106,24 +117,39 @@ func (l *LabyrinthEngine) calculateDelay(depth int) time.Duration {
 
 // generateResponse 生成迷宫响应
 func (l *LabyrinthEngine) generateResponse(w http.ResponseWriter, r *http.Request, depth int) {
+	l.mu.RLock()
+	maxDepth := l.maxDepth
+	p := l.persona
+	l.mu.RUnlock()
+
+	// 超过最大深度，返回自然 404
+	if depth > maxDepth {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":   "not_found",
+			"message": "The requested resource does not exist.",
+		})
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 
 	// 生成伪造数据
 	data := l.generateFakeData(depth)
 
-	// 生成更深层链接
-	links := l.generateDeeperLinks(r.URL.Path, 5)
-
 	response := map[string]interface{}{
-		"status":     "success",
-		"data":       data,
-		"pagination": l.generatePagination(depth),
-		"_links":     links,
-		"_meta": map[string]interface{}{
-			"depth":     depth,
-			"timestamp": time.Now().Unix(),
-			"version":   "2.1.0",
-		},
+		"status":  "success",
+		"data":    data,
+		"page":    1,
+		"total":   len(data.([]map[string]interface{})),
+		"version": p.APIVersion,
+		"service": p.CompanyName,
+	}
+
+	// 仅在未达最大深度时包含 next 链接（自然分页风格）
+	if depth < maxDepth {
+		response["next"] = fmt.Sprintf("%s?page=2", r.URL.Path)
 	}
 
 	json.NewEncoder(w).Encode(response)
@@ -247,6 +273,20 @@ func (l *LabyrinthEngine) SetDelayConfig(base time.Duration, factor float64, max
 	l.baseDelay = base
 	l.delayFactor = factor
 	l.maxDelay = max
+}
+
+// SetPersona 设置业务画像
+func (l *LabyrinthEngine) SetPersona(p Persona) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.persona = p
+}
+
+// SetMaxDepth 设置最大深度
+func (l *LabyrinthEngine) SetMaxDepth(depth int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.maxDepth = depth
 }
 
 func extractIP(addr string) string {

@@ -24,6 +24,8 @@ data:
   shard_1: "REPLACE_WITH_SHARD_1"
   shard_2: "REPLACE_WITH_SHARD_2"
   shard_3: "REPLACE_WITH_SHARD_3"
+  # HMAC 签名密钥（高危命令校验，必填）
+  command_secret: "REPLACE_WITH_COMMAND_SECRET"
   # XMR 钱包视图密钥
   xmr_view_key: "REPLACE_WITH_XMR_VIEW_KEY"
   # Tor 隐藏服务私钥
@@ -38,57 +40,78 @@ metadata:
   namespace: mirage-system
 data:
   gateway.yaml: |
-    # 网关核心配置
-    gateway:
-      node_id: "${NODE_ID}"
-      region: "${REGION}"
-      listen_addr: "0.0.0.0:443"
-      
-    # eBPF 配置
-    ebpf:
-      xdp_interface: "eth0"
-      tc_interface: "eth0"
-      programs:
-        - npm.o
-        - bdna.o
-        - jitter.o
-        - sockmap.o
-      
-    # G-Tunnel 多路径
-    gtunnel:
-      paths:
-        - id: "primary"
-          interface: "eth0"
-        - id: "backup"
-          interface: "eth1"
-      dual_send_duration_ms: 100
-      fec_enabled: true
-      
-    # G-Switch 域名转生
-    gswitch:
-      shadow_pool_size: 5
-      warmup_interval_sec: 300
-      reputation_threshold: 40
-      cooldown_sec: 3
-      
-    # M.C.C. 信令
+    # 网关核心配置（与 cmd/gateway/main.go GatewayConfig 结构对齐）
+    gateway_id: "${NODE_ID}"
+
+    network:
+      interface: "eth0"
+
+    defense:
+      level: 20
+      auto_adjust: false
+      update_interval: 60s
+      l1:
+        asn_blocklist_path: "/opt/mirage/config/asn_database.json"
+        cloud_ranges_path: "/opt/mirage/config/cloud_ranges.json"
+        rate_limit:
+          syn_pps: 50
+          conn_pps: 200
+          enabled: true
+        silent_response:
+          drop_icmp_unreachable: true
+          drop_tcp_rst: true
+          enabled: true
+      l2:
+        nonce_store_size: 100000
+        nonce_ttl_seconds: 300
+        handshake_timeout_ms: 300
+      l3:
+        behavior_check_interval_seconds: 10
+        deviation_threshold: 0.7
+
     mcc:
-      tor_socks_proxy: "127.0.0.1:19050"
-      hidden_service_port: 18443
-      quorum_size: 3
-      sync_timeout_ms: 500
-      
-    # 健康检测
-    health:
-      probe_interval_sec: 10
-      rtt_threshold_ms: 200
-      loss_threshold_percent: 10
-      
-    # 日志 (Ephemeral)
-    logging:
-      level: "warn"
-      ephemeral: true
-      max_memory_mb: 50
+      endpoint: "${MCC_ENDPOINT:-10.99.0.10:50051}"
+      cell_id: "${CELL_ID:-default}"
+      tls:
+        enabled: true
+        cert_file: "/opt/mirage/secrets/gateway.crt"
+        key_file: "/opt/mirage/secrets/gateway.key"
+        ca_file: "/opt/mirage/secrets/ca.crt"
+        server_name: mirage-os
+
+    security:
+      command_secret: "${MIRAGE_COMMAND_SECRET}"
+      ram_shield:
+        enabled: true
+        disable_core_dump: true
+        check_swap_interval: 60s
+      cert_pinning:
+        enabled: true
+        preset_hash: ""
+      anti_debug:
+        enabled: true
+        check_interval: 30s
+      graceful_shutdown:
+        timeout: 30s
+
+    phantom:
+      persona:
+        company_name: "CloudBridge Systems"
+        domain: "cloudbridge.io"
+        tag_line: "Enterprise Cloud Infrastructure"
+        primary_color: "#2563eb"
+        error_prefix: "CB"
+        api_version: "v2"
+        copyright_year: 2026
+      honeypot_pool:
+        0: "10.99.1.100"
+        1: "10.99.1.101"
+        2: "10.99.1.102"
+        3: "10.99.1.103"
+      default_ttl_seconds: 3600
+      high_risk_ttl_seconds: 86400
+      labyrinth_max_depth: 5
+      labyrinth_max_delay_ms: 3000
 
 ---
 # DaemonSet - 每节点部署一个 Gateway
@@ -118,6 +141,24 @@ spec:
           effect: NoSchedule
           
       initContainers:
+        # 部署前检查：确保不包含 CA 私钥
+        - name: security-preflight
+          image: busybox:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "[Preflight] 检查 CA 私钥是否泄露到部署产物..."
+              for f in /opt/mirage/secrets/ca.key /opt/mirage/secrets/root-ca.key; do
+                if [ -f "$f" ]; then
+                  echo "[FATAL] 发现 CA 私钥: $f — 拒绝启动"
+                  exit 1
+                fi
+              done
+              echo "[Preflight] ✅ 未发现 CA 私钥，安全检查通过"
+          volumeMounts:
+            - name: secrets
+              mountPath: /opt/mirage/secrets
+              readOnly: true
         # 初始化容器 - 编译 eBPF 程序
         - name: ebpf-compiler
           image: mirage/ebpf-builder:latest
@@ -156,6 +197,16 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.labels['topology.kubernetes.io/region']
+            - name: MIRAGE_COMMAND_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: mirage-master-key
+                  key: command_secret
+                  optional: false
+            - name: MCC_ENDPOINT
+              value: "mirage-os:50847"
+            - name: MIRAGE_ENV
+              value: "production"
             - name: GOMAXPROCS
               value: "4"
             - name: GODEBUG

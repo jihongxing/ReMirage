@@ -40,6 +40,14 @@ func (r *HoneypotReporter) ReportAccess(record *AccessRecord) {
 	log.Printf("[HoneypotReporter] 蜜罐命中上报: IP=%s Path=%s", record.RemoteAddr, record.Path)
 }
 
+// SyncEBPFStats 将 eBPF 数据面 STAT_REDIRECTED 同步到 Prometheus 指标
+func (r *HoneypotReporter) SyncEBPFStats(mgr *Manager) {
+	stats := mgr.GetPhantomStats()
+	// 使用 Add 将 eBPF 侧累计重定向数同步到 mirage_honeypot_hit_total
+	// 注意：Prometheus Counter 只能递增，这里用差值方式
+	threat.HoneypotHitTotal.WithLabelValues(threat.GetGatewayID()).Add(float64(stats.Redirected))
+}
+
 // BindToHoneypot 将上报器绑定到蜜罐服务器的 onAccess 回调
 func (r *HoneypotReporter) BindToHoneypot(server *HoneypotServer) {
 	server.OnAccess(func(record *AccessRecord) {

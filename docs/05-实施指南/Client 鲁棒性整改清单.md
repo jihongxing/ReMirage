@@ -1,3 +1,9 @@
+---
+Status: temporary
+Target Truth: phantom-client/ (运行时实现)
+Migration: Client 整改清单，完成后归档
+---
+
 # Mirage Client 鲁棒性整改清单
 
 ## 一、文档目标

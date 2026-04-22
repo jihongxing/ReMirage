@@ -6,26 +6,17 @@ import {
   NotFoundException,
   GoneException,
   Header,
+  UseGuards,
 } from '@nestjs/common';
+import { InternalHMACGuard, signInternalRequest } from '../../common/internal-hmac.guard';
 
 /**
  * 阅后即焚配置交付端点
- * 
- * 用户通过一次性加密链接获取客户端配置
- * 链接被访问一次后立即销毁，不留痕迹
- * 
- * 注意：实际的加密/解密和链接管理由 Go 端 Provisioner 处理
- * 此 Controller 仅作为 HTTP 代理层，转发到 Go 端 API
+ * 挂载 InternalHMACGuard 鉴权
  */
 @Controller('delivery')
+@UseGuards(InternalHMACGuard)
 export class DeliveryController {
-  /**
-   * 兑换配置链接
-   * GET /delivery/:token?key=<base64url_aes_key>
-   * 
-   * 成功返回解密后的 JSON 配置
-   * 链接立即销毁
-   */
   @Get(':token')
   @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
   @Header('Pragma', 'no-cache')
@@ -38,15 +29,19 @@ export class DeliveryController {
       throw new NotFoundException();
     }
 
-    // 转发到 Go 端 Provisioner API
-    // 实际部署中通过内部 gRPC 或 HTTP 调用
     try {
+      const provisionerUrl = process.env.PROVISIONER_URL || 'http://localhost:18443';
+      const bodyStr = JSON.stringify({ token, decrypt_key: key });
+      const hmacSecret = process.env.INTERNAL_HMAC_SECRET || '';
+      const hmacHeaders = hmacSecret ? signInternalRequest(bodyStr, hmacSecret) : {};
+
       const response = await fetch(
-        `${process.env.PROVISIONER_URL || 'http://localhost:18443'}/internal/delivery/redeem`,
+        `${provisionerUrl}/internal/delivery/redeem`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token, decrypt_key: key }),
+          headers: { 'Content-Type': 'application/json', ...hmacHeaders },
+          redirect: 'error',
+          body: bodyStr,
         },
       );
 
@@ -60,8 +55,7 @@ export class DeliveryController {
         throw new NotFoundException();
       }
 
-      const config = await response.json();
-      return config;
+      return await response.json();
     } catch (err) {
       if (err instanceof NotFoundException || err instanceof GoneException) {
         throw err;

@@ -1,3 +1,9 @@
+---
+Status: input
+Target Truth: docs/protocols/stack.md (控制契约层) + mirage-gateway/pkg/gtunnel/stealth/ (运行时)
+Migration: 隐蔽控制面设计，部分结论已体现在 StealthControlPlane 实现中，本文保留为架构输入材料
+---
+
 \# Mirage V2 隐蔽控制面与 DPI 对抗承载架构 (Stealth Control Plane RFC)
 
 \*\*版本:\*\* v2.0.1-OpSec

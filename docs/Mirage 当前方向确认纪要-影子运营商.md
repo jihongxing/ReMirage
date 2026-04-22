@@ -1,3 +1,9 @@
+---
+Status: derived
+Target Truth: docs/governance/boundaries/product-scope.md
+Migration: 影子运营商路线核心结论（200客户/低暴露/非平台化/运营原则）已回写到 product-scope.md，本文保留为决策背景材料
+---
+
 # Mirage 当前方向确认纪要：影子运营商路线
 
 ## 一、文档性质

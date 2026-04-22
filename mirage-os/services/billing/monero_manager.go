@@ -214,27 +214,21 @@ func NewMoneroManager(db *gorm.DB, rdb *redis.Client, rpcClient MoneroRPCClient,
 	}
 }
 
-// GenerateDepositAddress 生成充值地址（子地址）
+// GenerateDepositAddress 生成充值地址（订单级子地址模型）
+// 每次充值请求生成新子地址并关联到 Deposit 记录
 func (mm *MoneroManager) GenerateDepositAddress(ctx context.Context, userID string) (string, error) {
 	var user models.User
 	if err := mm.DB.Where("user_id = ?", userID).First(&user).Error; err != nil {
 		return "", fmt.Errorf("用户不存在: %w", err)
 	}
 
-	if user.XMRAddress != "" {
-		return user.XMRAddress, nil
-	}
-
+	// 每次请求生成独立子地址
 	address, err := mm.RPCClient.CreateAddress(ctx, 0)
 	if err != nil {
 		return "", fmt.Errorf("生成子地址失败: %w", err)
 	}
 
-	if err := mm.DB.Model(&user).Update("xmr_address", address).Error; err != nil {
-		return "", fmt.Errorf("保存地址失败: %w", err)
-	}
-
-	log.Printf("💰 [Monero] 为用户 %s 生成充值地址: %s", userID, address)
+	log.Printf("💰 [Monero] 为用户 %s 生成订单级充值子地址: %s", userID, address)
 	return address, nil
 }
 
@@ -294,17 +288,26 @@ func (mm *MoneroManager) getTransactionConfirmations(ctx context.Context, txHash
 	return result.Confirmations, nil
 }
 
-// confirmDeposit 确认充值
+// confirmDeposit 确认充值（单一真相源，幂等）
 func (mm *MoneroManager) confirmDeposit(deposit *models.Deposit) {
 	log.Printf("💰 [Monero] 确认充值: 用户=%s, 金额=%.8f XMR", deposit.UserID, deposit.AmountXMR)
 
 	err := mm.DB.Transaction(func(tx *gorm.DB) error {
+		// 幂等保护：仅 PENDING → CONFIRMED 可落账
 		now := time.Now()
-		if err := tx.Model(deposit).Updates(map[string]any{
-			"status":       "confirmed",
-			"confirmed_at": &now,
-		}).Error; err != nil {
-			return fmt.Errorf("更新充值状态失败: %w", err)
+		result := tx.Model(deposit).
+			Where("status = ?", "pending").
+			Updates(map[string]any{
+				"status":       "confirmed",
+				"confirmed_at": &now,
+			})
+		if result.Error != nil {
+			return fmt.Errorf("更新充值状态失败: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			// 状态前置条件不满足（已确认或已失败），跳过落账
+			log.Printf("💰 [Monero] 充值 %s 状态非 pending，跳过落账", deposit.TxHash)
+			return nil
 		}
 
 		if err := tx.Model(&models.User{}).

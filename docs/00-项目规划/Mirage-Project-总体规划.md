@@ -1,3 +1,9 @@
+---
+Status: input
+Target Truth: docs/governance/boundaries/product-scope.md
+Migration: 产品边界与商业模型结论已迁移到 product-scope.md，本文保留为历史规划输入材料
+---
+
 # Mirage Project 总体实施规划（剃刀版）
 
 ## 项目定位

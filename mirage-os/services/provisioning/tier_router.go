@@ -43,18 +43,13 @@ func NewTierRouter(db *gorm.DB) *TierRouter {
 }
 
 // DetermineUserTier 判定用户等级
-// 规则：
-//   - BalanceUSD >= 500 或 CellLevel=3 → Diamond
-//   - BalanceUSD >= 100 或 CellLevel=2 → Platinum
-//   - 其他 → Standard
+// 规则：直接返回用户已购买的 cell_level，不再基于余额推导
+// cell_level 仅通过 PurchaseTierSubscription 或到期降级任务变更
 func DetermineUserTier(user *models.User) int {
-	if user.CellLevel == 3 || user.BalanceUSD >= 500 {
-		return 3 // Diamond
+	if user.CellLevel >= 1 && user.CellLevel <= 3 {
+		return user.CellLevel
 	}
-	if user.CellLevel == 2 || user.BalanceUSD >= 100 {
-		return 2 // Platinum
-	}
-	return 1 // Standard
+	return 1 // Default: Standard
 }
 
 // TierLabel 等级标签
@@ -69,11 +64,48 @@ func TierLabel(level int) string {
 	}
 }
 
-// AllocateGateway 为用户分配 Gateway（按等级路由，物理隔离）
-// Diamond: 独占节点（active_connections == 0，仅 cell_level=3 的蜂窝）
-// Platinum: 低负载节点（connections < 50，仅 cell_level>=2 的蜂窝）
-// Standard: 共享池（connections < 200，仅 cell_level=1 的蜂窝）
-// ⚠️ 跨级分配严厉禁止
+// TierConfig 等级服务差异配置
+type TierConfig struct {
+	MaxLoadPercent   float32 // 分配时的负载阈值
+	ConnectionRatio  float32 // 连接上限比例（相对默认值）
+	RecoveryPriority int     // 恢复优先级（数字越大越优先）
+}
+
+var tierConfigs = map[int]TierConfig{
+	1: {MaxLoadPercent: 80, ConnectionRatio: 1.0, RecoveryPriority: 1}, // Standard
+	2: {MaxLoadPercent: 60, ConnectionRatio: 0.7, RecoveryPriority: 2}, // Platinum
+	3: {MaxLoadPercent: 40, ConnectionRatio: 0.4, RecoveryPriority: 3}, // Diamond
+}
+
+// GetTierLoadThreshold 获取等级负载阈值
+func GetTierLoadThreshold(level int) float32 {
+	if cfg, ok := tierConfigs[level]; ok {
+		return cfg.MaxLoadPercent
+	}
+	return 80
+}
+
+// GetTierConnectionRatio 获取等级连接上限比例
+func GetTierConnectionRatio(level int) float32 {
+	if cfg, ok := tierConfigs[level]; ok {
+		return cfg.ConnectionRatio
+	}
+	return 1.0
+}
+
+// GetTierRecoveryPriority 获取等级恢复优先级
+func GetTierRecoveryPriority(level int) int {
+	if cfg, ok := tierConfigs[level]; ok {
+		return cfg.RecoveryPriority
+	}
+	return 1
+}
+
+// AllocateGateway 为用户分配 Gateway（按等级路由，支持降级分配）
+// Diamond: 独占节点（负载 < 40%，仅 cell_level=3 的蜂窝）
+// Platinum: 低负载节点（负载 < 60%，仅 cell_level=2 的蜂窝）
+// Standard: 共享池（负载 < 80%，仅 cell_level=1 的蜂窝）
+// 降级分配：对应等级池无可用 Cell 时降级到低一级资源池
 func (r *TierRouter) AllocateGateway(userID string) (*GatewayRoute, error) {
 	var user models.User
 	if err := r.db.Where("user_id = ?", userID).First(&user).Error; err != nil {
@@ -82,22 +114,33 @@ func (r *TierRouter) AllocateGateway(userID string) (*GatewayRoute, error) {
 
 	tier := DetermineUserTier(&user)
 
-	// 更新用户等级（如果变化）
-	if user.CellLevel != tier {
-		r.db.Model(&user).Update("cell_level", tier)
+	// cell_level 不再自动更新，仅通过 PurchaseTierSubscription 或到期降级任务变更
+
+	// 按等级查询可用 Gateway，支持降级分配
+	var routes []GatewayRoute
+	var allocatedTier int
+	for level := tier; level >= 1; level-- {
+		var err error
+		routes, err = r.queryAvailableGateways(level)
+		if err == nil && len(routes) > 0 {
+			allocatedTier = level
+			if level < tier {
+				log.Printf("⚠️ [TierRouter] 用户等级 %s(%d) 资源池无可用节点，降级到 %s(%d) 资源池: user=%s",
+					TierLabel(tier), tier, TierLabel(level), level, userID)
+			}
+			break
+		}
 	}
 
-	// 查询可用 Gateway（严格按等级隔离）
-	routes, err := r.queryAvailableGateways(tier)
-	if err != nil || len(routes) == 0 {
+	if len(routes) == 0 {
 		return nil, fmt.Errorf("无可用 %s 级别节点", TierLabel(tier))
 	}
 
 	// 选择最优节点
-	best := r.selectBest(routes, tier)
+	best := r.selectBest(routes, allocatedTier)
 
 	// 使用 FOR UPDATE 锁定 Gateway 行，防止并发分配同一节点
-	err = r.db.Transaction(func(tx *gorm.DB) error {
+	err := r.db.Transaction(func(tx *gorm.DB) error {
 		var gw models.Gateway
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("gateway_id = ? AND is_online = true AND phase = 2", best.GatewayID).
@@ -106,7 +149,7 @@ func (r *TierRouter) AllocateGateway(userID string) (*GatewayRoute, error) {
 		}
 
 		// Diamond 独占检查
-		if tier == 3 && gw.ActiveConnections > 0 {
+		if allocatedTier == 3 && gw.ActiveConnections > 0 {
 			return fmt.Errorf("Diamond 节点已被占用")
 		}
 
@@ -122,27 +165,32 @@ func (r *TierRouter) AllocateGateway(userID string) (*GatewayRoute, error) {
 	}
 
 	log.Printf("✅ [TierRouter] 分配 %s 节点: user=%s, gw=%s, ip=%s",
-		TierLabel(tier), userID, best.GatewayID, best.IPAddress)
+		TierLabel(allocatedTier), userID, best.GatewayID, best.IPAddress)
 
 	return best, nil
 }
 
-// queryAvailableGateways 查询指定等级的可用 Gateway（严格物理隔离）
+// queryAvailableGateways 查询指定等级的可用 Gateway（按等级应用不同负载阈值）
 func (r *TierRouter) queryAvailableGateways(tier int) ([]GatewayRoute, error) {
 	var gateways []models.Gateway
 
-	// 基础条件：在线 + 服役中
-	query := r.db.Where("gateways.is_online = ? AND gateways.phase = 2", true)
+	// 获取等级对应的连接上限比例
+	connRatio := GetTierConnectionRatio(tier)
 
+	// 基础条件：在线 + 服役中 + 非受攻击/排空/死亡状态
+	query := r.db.Where("gateways.is_online = ? AND gateways.phase = 2", true).
+		Where("gateways.status NOT IN ?", []string{"UNDER_ATTACK", "DRAINING", "DEAD"})
+
+	// 按等级筛选蜂窝 + 应用连接上限比例
 	switch tier {
-	case 3: // Diamond: 独占，仅 level=3 蜂窝
+	case 3: // Diamond: 独占，仅 level=3 蜂窝，连接上限 * 0.4
 		query = query.Where("gateways.active_connections = 0").
 			Where("gateways.cell_id IN (SELECT cell_id FROM cells WHERE cell_level = 3 AND status = 'active')")
-	case 2: // Platinum: 低负载，仅 level=2 蜂窝
-		query = query.Where("gateways.active_connections < 50").
+	case 2: // Platinum: 仅 level=2 蜂窝，连接上限 * 0.7
+		query = query.Where("gateways.active_connections < (SELECT max_gateways FROM cells WHERE cells.cell_id = gateways.cell_id) * ?", connRatio).
 			Where("gateways.cell_id IN (SELECT cell_id FROM cells WHERE cell_level = 2 AND status = 'active')")
-	default: // Standard: 共享池，仅 level=1 蜂窝
-		query = query.Where("gateways.active_connections < 200").
+	default: // Standard: 仅 level=1 蜂窝，连接上限 * 1.0
+		query = query.Where("gateways.active_connections < (SELECT max_gateways FROM cells WHERE cells.cell_id = gateways.cell_id) * ?", connRatio).
 			Where("gateways.cell_id IN (SELECT cell_id FROM cells WHERE cell_level = 1 AND status = 'active')")
 	}
 

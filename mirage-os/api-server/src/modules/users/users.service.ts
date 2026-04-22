@@ -30,7 +30,25 @@ export class UsersService {
   async findOne(id: string) {
     const user = await this.prisma.user.findUnique({
       where: { id },
-      include: { cell: true },
+      select: {
+        id: true,
+        username: true,
+        remainingQuota: true,
+        totalDeposit: true,
+        totalConsumed: true,
+        cellId: true,
+        cell: true,
+        isActive: true,
+        isOperator: true,
+        inviteCodeUsed: true,
+        invitedBy: true,
+        inviteRoot: true,
+        inviteDepth: true,
+        observationEndsAt: true,
+        createdAt: true,
+        updatedAt: true,
+        // 排除: passwordHash, totpSecret, ed25519Pubkey
+      },
     });
     if (!user) throw new NotFoundException('用户不存在');
     return user;

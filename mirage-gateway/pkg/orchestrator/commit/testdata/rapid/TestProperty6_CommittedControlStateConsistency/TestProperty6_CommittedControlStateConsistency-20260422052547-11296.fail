@@ -1,0 +1,6 @@
+# 2026/04/22 05:25:47.388874 [TestProperty6_CommittedControlStateConsistency] [rapid] draw epoch: 0x2
+# 2026/04/22 05:25:47.389382 [TestProperty6_CommittedControlStateConsistency] Feature: v2-commit-engine, Property 6: execute failed: failure: Validate failed: tx conflict: existing tx 7f1f28ba-1fb1-41c6-9793-9337b3e085b4 (SurvivalModeSwitch) is active
+# 
+v0.4.8#3283629614194400310
+0x9e7d5d367dadc
+0x1

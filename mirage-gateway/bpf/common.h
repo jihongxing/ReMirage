@@ -73,13 +73,14 @@ struct defense_config {
     __u64 timestamp;            // 配置时间戳
 };
 
-// NPM 填充配置
+// NPM 配置
 struct npm_config {
     __u32 enabled;              // 是否启用（0/1）
-    __u32 probability;          // 填充概率（0-100）
-    __u32 min_padding;          // 最小填充（字节）
-    __u32 max_padding;          // 最大填充（字节）
-    __u32 distribution;         // 分布类型（0=uniform, 1=gaussian）
+    __u32 filling_rate;         // 填充概率（0-100）
+    __u32 global_mtu;           // 目标 MTU
+    __u32 min_packet_size;      // 小包跳过阈值
+    __u32 padding_mode;         // 0=固定 MTU, 1=随机区间, 2=正态分布
+    __u32 decoy_rate;           // 诱饵包比例（0-100）
 };
 
 // Jitter-Lite 配置
@@ -158,7 +159,7 @@ struct {
 
 // NPM 配置 Map
 struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(max_entries, 1);
     __type(key, __u32);
     __type(value, struct npm_config);
@@ -359,5 +360,135 @@ static __always_inline int report_threat(
  * ============================================ */
 
 // 注意：license 定义移至各 .c 文件中，避免重复定义
+
+/* ============================================
+ * L1 纵深防御：结构体定义
+ * ============================================ */
+
+/* L1 防御：速率限制配置（Go → C） */
+struct rate_limit_config {
+    __u32 syn_pps_limit;        /* SYN 包每秒上限（默认 50） */
+    __u32 conn_pps_limit;       /* 总连接每秒上限（默认 200） */
+    __u32 enabled;              /* 是否启用 */
+};
+
+/* L1 防御：每 IP 速率计数器 */
+struct rate_counter {
+    __u64 syn_count;            /* SYN 包计数 */
+    __u64 conn_count;           /* 总连接计数 */
+    __u64 window_start;         /* 窗口起始时间（纳秒） */
+};
+
+/* L1 防御：速率限制触发事件（C → Go） */
+struct rate_event {
+    __u64 timestamp;
+    __u32 source_ip;
+    __u32 trigger_type;         /* 0=SYN, 1=CONN */
+    __u64 current_rate;
+};
+
+/* L1 防御：静默响应配置（Go → C） */
+struct silent_config {
+    __u32 drop_icmp_unreachable;  /* 拦截 ICMP Unreachable */
+    __u32 drop_tcp_rst;           /* 拦截非法 TCP RST */
+    __u32 enabled;
+};
+
+/* L1 防御：统计计数器 */
+struct l1_stats {
+    __u64 asn_drops;
+    __u64 rate_drops;
+    __u64 silent_drops;
+    __u64 blacklist_drops;      /* 用户级黑名单命中（XDP 层） */
+    __u64 sanity_drops;         /* 非法画像丢弃 */
+    __u64 profile_drops;        /* 入口准入拒绝 */
+    __u64 total_checked;
+    __u64 syn_challenge;        /* SYN challenge 触发次数 */
+    __u64 ack_forgery;          /* ACK 伪造检测次数 */
+};
+
+/* ============================================
+ * L1 纵深防御：eBPF Map 定义
+ * ============================================ */
+
+/* ASN 黑名单 LPM Trie（Go → C，与 blacklist_lpm 独立） */
+struct {
+    __uint(type, BPF_MAP_TYPE_LPM_TRIE);
+    __uint(max_entries, 131072);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __type(key, struct lpm_key);
+    __type(value, __u32);         /* ASN 编号（用于统计归因） */
+} asn_blocklist_lpm SEC(".maps");
+
+/* 速率限制计数器（Per-IP LRU） */
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 65536);
+    __type(key, __u32);           /* 源 IP */
+    __type(value, struct rate_counter);
+} rate_limit_map SEC(".maps");
+
+/* 速率限制配置（Go → C） */
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, struct rate_limit_config);
+} rate_config_map SEC(".maps");
+
+/* 静默响应配置（Go → C） */
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, struct silent_config);
+} silent_config_map SEC(".maps");
+
+/* L1 防御事件 Ring Buffer（C → Go） */
+struct {
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 256 * 1024);
+} l1_defense_events SEC(".maps");
+
+/* L1 统计计数器（Per-CPU） */
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, struct l1_stats);
+} l1_stats_map SEC(".maps");
+
+/* ============================================
+ * L1 纵深防御：SYN 无状态验证 Map
+ * ============================================ */
+
+/* SYN 验证状态 */
+struct syn_state {
+    __u64 cookie;               /* 验证 cookie（基于 saddr+dport+timestamp 的 hash） */
+    __u64 timestamp;            /* 记录时间戳 */
+    __u8  validated;            /* 是否已验证通过 */
+};
+
+/* SYN 验证配置 */
+struct syn_config {
+    __u32 enabled;              /* 是否启用 SYN 验证 */
+    __u32 challenge_threshold;  /* 触发 challenge 的 SYN 速率阈值 */
+};
+
+/* SYN 验证 Map（Per-IP LRU） */
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 131072);
+    __type(key, __u32);           /* 源 IP */
+    __type(value, struct syn_state);
+} syn_validation_map SEC(".maps");
+
+/* SYN 验证配置（Go → C） */
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, struct syn_config);
+} syn_config_map SEC(".maps");
 
 #endif /* __MIRAGE_COMMON_H__ */

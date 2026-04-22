@@ -17,7 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cilium/ebpf"
+	goebpf "github.com/cilium/ebpf"
+	"mirage-gateway/pkg/ebpf"
 )
 
 // TacticalMode 战术模式
@@ -73,15 +74,15 @@ type MCCSignalReceiver struct {
 	torConnected bool
 
 	// 加密
-	gcm       cipher.AEAD
-	hwKey     []byte // 硬件指纹派生密钥
+	gcm   cipher.AEAD
+	hwKey []byte // 硬件指纹派生密钥
 
 	// eBPF Map 引用
-	globalPolicyMap  *ebpf.Map
-	npmConfigMap     *ebpf.Map
-	jitterConfigMap  *ebpf.Map
-	emergencyCtrlMap *ebpf.Map
-	ghostModeMap     *ebpf.Map
+	globalPolicyMap  *goebpf.Map
+	npmConfigMap     *goebpf.Map
+	jitterConfigMap  *goebpf.Map
+	emergencyCtrlMap *goebpf.Map
+	ghostModeMap     *goebpf.Map
 
 	// 回调
 	onTacticalUpdate func(TacticalMode)
@@ -131,7 +132,7 @@ func NewMCCSignalReceiver(hwFingerprint []byte) (*MCCSignalReceiver, error) {
 }
 
 // SetEBPFMaps 设置 eBPF Map 引用
-func (r *MCCSignalReceiver) SetEBPFMaps(globalPolicy, npmConfig, jitterConfig, emergencyCtrl, ghostMode *ebpf.Map) {
+func (r *MCCSignalReceiver) SetEBPFMaps(globalPolicy, npmConfig, jitterConfig, emergencyCtrl, ghostMode *goebpf.Map) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.globalPolicyMap = globalPolicy
@@ -465,21 +466,7 @@ func (r *MCCSignalReceiver) syncNPMConfig(paddingDensity uint32) {
 		return
 	}
 
-	type npmConfig struct {
-		Enabled      uint32
-		Probability  uint32
-		MinPadding   uint32
-		MaxPadding   uint32
-		Distribution uint32
-	}
-
-	config := npmConfig{
-		Enabled:      1,
-		Probability:  paddingDensity,
-		MinPadding:   64,
-		MaxPadding:   256,
-		Distribution: 1, // gaussian
-	}
+	config := ebpf.NewDefaultNPMConfig(paddingDensity)
 
 	key := uint32(0)
 	if err := r.npmConfigMap.Put(&key, &config); err != nil {

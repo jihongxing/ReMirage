@@ -52,10 +52,10 @@ func (h *Handler) handleGateways(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.db.Query(`
-		SELECT id, cell_id, ip_address, status, last_heartbeat, ebpf_loaded,
+		SELECT id, cell_id, ip_address, status, last_heartbeat_at, ebpf_loaded,
 		       threat_level, active_connections, memory_usage_mb
 		FROM gateways
-		ORDER BY last_heartbeat DESC NULLS LAST
+		ORDER BY last_heartbeat_at DESC NULLS LAST
 	`)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -294,7 +294,7 @@ func (h *Handler) handleGatewayAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// 标记 Gateway 为 killed
-		_, err := h.db.Exec(`UPDATE gateways SET status = 'killed', updated_at = NOW() WHERE id = $1`, gatewayID)
+		_, err := h.db.Exec(`UPDATE gateways SET status = 'killed', updated_at = NOW() WHERE gateway_id = $1`, gatewayID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

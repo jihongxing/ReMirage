@@ -1,5 +1,6 @@
 #!/bin/bash
-# 生成由 Root CA 签发的 OS 节点证书（RSA 2048，1 年）
+# 生成由 Root CA 签发的 OS 节点证书（RSA 2048，72h 短期证书）
+# ⚠️ 仅限开发环境使用。
 set -euo pipefail
 
 CA_DIR="${1:-/etc/mirage/certs}"
@@ -26,7 +27,7 @@ openssl x509 -req \
     -CAkey "$CA_DIR/ca.key" \
     -CAcreateserial \
     -out "$CA_DIR/os.crt" \
-    -days 365 \
+    -days 3 \
     -extensions v3_req \
     -extfile "$SCRIPT_DIR/openssl.cnf"
 

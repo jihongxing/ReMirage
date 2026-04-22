@@ -7,10 +7,15 @@ import (
 )
 
 // InternalAuthMiddleware 校验 X-Internal-Secret Header，不匹配时返回 401
+// secret 为空时拒绝所有请求（Fail-Closed）
 func InternalAuthMiddleware(secret string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if secret != "" && r.Header.Get("X-Internal-Secret") != secret {
+			if secret == "" {
+				http.Error(w, "internal secret not configured", http.StatusForbidden)
+				return
+			}
+			if r.Header.Get("X-Internal-Secret") != secret {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}

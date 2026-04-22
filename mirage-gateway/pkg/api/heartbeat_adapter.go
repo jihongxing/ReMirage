@@ -10,8 +10,9 @@ import (
 
 // HeartbeatAdapter 适配 GRPCClient 为 strategy.HeartbeatSender 接口
 type HeartbeatAdapter struct {
-	client    *GRPCClient
-	gatewayID string
+	client     *GRPCClient
+	gatewayID  string
+	securityFn func() (bool, uint32) // 安全状态回调：(isUnderAttack, threatLevel)
 }
 
 // NewHeartbeatAdapter 创建适配器
@@ -32,7 +33,7 @@ func (a *HeartbeatAdapter) StartHeartbeatLoop(ctx context.Context, onSuccess fun
 		var memStats runtime.MemStats
 		runtime.ReadMemStats(&memStats)
 
-		return &pb.HeartbeatRequest{
+		req := &pb.HeartbeatRequest{
 			GatewayId:     a.gatewayID,
 			Timestamp:     time.Now().Unix(),
 			Status:        pb.GatewayStatus_ONLINE,
@@ -40,9 +41,25 @@ func (a *HeartbeatAdapter) StartHeartbeatLoop(ctx context.Context, onSuccess fun
 			ThreatLevel:   0,
 			MemoryUsageMb: int32(memStats.Alloc / 1024 / 1024),
 		}
+
+		// 如果有安全状态回调，携带受攻击标记
+		if a.securityFn != nil {
+			isUnderAttack, threatLevel := a.securityFn()
+			req.ThreatLevel = int32(threatLevel)
+			if isUnderAttack {
+				req.Status = pb.GatewayStatus_DEGRADED
+			}
+		}
+
+		return req
 	})
 
 	log.Printf("[HeartbeatAdapter] 心跳循环已启动 (gateway=%s)", a.gatewayID)
+}
+
+// SetSecurityCallback 设置安全状态回调（返回 isUnderAttack, threatLevel）
+func (a *HeartbeatAdapter) SetSecurityCallback(fn func() (bool, uint32)) {
+	a.securityFn = fn
 }
 
 // IsConnected 是否已连接到 OS

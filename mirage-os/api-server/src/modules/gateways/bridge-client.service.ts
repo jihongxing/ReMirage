@@ -14,8 +14,8 @@ export class BridgeClientService implements OnModuleInit {
     this.baseUrl = process.env.BRIDGE_URL || 'http://127.0.0.1:7000';
     this.internalSecret = process.env.BRIDGE_INTERNAL_SECRET || '';
     if (!this.internalSecret) {
-      this.logger.warn(
-        'BRIDGE_INTERNAL_SECRET 未设置，gateway-bridge 调用将不携带鉴权 Header',
+      throw new Error(
+        'BRIDGE_INTERNAL_SECRET 环境变量为空，拒绝启动。生产环境必须配置内部鉴权密钥。',
       );
     }
   }
@@ -36,6 +36,7 @@ export class BridgeClientService implements OnModuleInit {
     const res = await fetch(url, {
       method: 'GET',
       headers: this.buildHeaders(),
+      redirect: 'error',
     });
     if (!res.ok) {
       const body = await res.text();
@@ -49,6 +50,7 @@ export class BridgeClientService implements OnModuleInit {
     const res = await fetch(url, {
       method: 'POST',
       headers: this.buildHeaders(),
+      redirect: 'error',
       body: body ? JSON.stringify(body) : undefined,
     });
     if (!res.ok) {

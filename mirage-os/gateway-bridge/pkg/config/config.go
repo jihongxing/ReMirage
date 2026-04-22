@@ -119,5 +119,9 @@ func (c *Config) validate() error {
 	if c.Redis.Addr == "" {
 		return fmt.Errorf("config: redis.addr is required")
 	}
+	// 生产模式强制 TLS
+	if os.Getenv("MIRAGE_ENV") == "production" && !c.GRPC.TLSEnabled {
+		return fmt.Errorf("config: grpc.tls_enabled must be true in production mode")
+	}
 	return nil
 }

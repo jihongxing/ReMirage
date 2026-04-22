@@ -29,7 +29,9 @@ type BootstrapConfig struct {
 	PreSharedKey    []byte            `json:"psk"`
 	CertFingerprint string            `json:"cert_fp"`
 	UserID          string            `json:"user_id"`
+	OSEndpoint      string            `json:"os_endpoint,omitempty"` // OS 控制面地址（可选，provisioning 推导）
 	ExpiresAt       time.Time         `json:"expires_at"`
+	CachePath       string            `json:"cache_path,omitempty"` // 本地拓扑缓存路径
 	secureBuf       *memsafe.SecureBuffer
 }
 

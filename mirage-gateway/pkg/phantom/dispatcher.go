@@ -3,6 +3,7 @@
 package phantom
 
 import (
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
@@ -13,15 +14,18 @@ import (
 type ShadowType string
 
 const (
-	ShadowCorporateWeb   ShadowType = "corporate_web"
-	ShadowNetworkError   ShadowType = "network_error"
-	ShadowOldAdminPortal ShadowType = "old_admin_portal"
-	ShadowStandardHTTPS  ShadowType = "standard_https"
+	ShadowCorporateWeb  ShadowType = "corporate_web"
+	ShadowNetworkError  ShadowType = "network_error"
+	ShadowAPILabyrinth  ShadowType = "api_labyrinth"
+	ShadowStandardHTTPS ShadowType = "standard_https"
 )
 
 // Dispatcher 多模态调度器
 type Dispatcher struct {
 	mu sync.RWMutex
+
+	// 业务画像
+	persona Persona
 
 	// 模板处理器
 	templates map[ShadowType]http.Handler
@@ -41,17 +45,16 @@ type Dispatcher struct {
 
 // DispatchRule 分发规则
 type DispatchRule struct {
-	Name      string
-	Priority  int
-	Matcher   func(ctx *RequestContext) bool
-	Target    ShadowType
+	Name     string
+	Priority int
+	Matcher  func(ctx *RequestContext) bool
+	Target   ShadowType
 }
 
 // RequestContext 请求上下文
 type RequestContext struct {
 	UserAgent      string
 	CipherSuite    uint16
-	HeaderOrder    []string
 	Path           string
 	Method         string
 	AcceptLanguage string
@@ -62,22 +65,33 @@ type RequestContext struct {
 
 // DispatchStats 调度统计
 type DispatchStats struct {
-	TotalDispatched   int64
-	ByCorporateWeb    int64
-	ByNetworkError    int64
-	ByOldAdminPortal  int64
-	ByStandardHTTPS   int64
+	TotalDispatched  int64
+	ByCorporateWeb   int64
+	ByNetworkError   int64
+	ByOldAdminPortal int64 // Deprecated: use ByAPILabyrinth
+	ByAPILabyrinth   int64
+	ByStandardHTTPS  int64
 }
 
 // NewDispatcher 创建调度器
 func NewDispatcher() *Dispatcher {
 	d := &Dispatcher{
+		persona:   DefaultPersona,
 		templates: make(map[ShadowType]http.Handler),
 		labyrinth: NewLabyrinthEngine(),
 	}
 	d.initDefaultRules()
 	d.initDefaultTemplates()
 	return d
+}
+
+// SetPersona 设置业务画像
+func (d *Dispatcher) SetPersona(p Persona) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.persona = p
+	// 同步 persona 到迷宫引擎
+	d.labyrinth.SetPersona(p)
 }
 
 // initDefaultRules 初始化默认规则
@@ -119,7 +133,7 @@ func (d *Dispatcher) initDefaultRules() {
 				}
 				return false
 			},
-			Target: ShadowOldAdminPortal,
+			Target: ShadowAPILabyrinth,
 		},
 		// 规则 3: 空 UA 或异常 UA -> 网络错误
 		{
@@ -155,7 +169,7 @@ func (d *Dispatcher) initDefaultRules() {
 				}
 				return false
 			},
-			Target: ShadowOldAdminPortal,
+			Target: ShadowAPILabyrinth,
 		},
 		// 规则 5: 正常浏览器特征 -> 公司官网
 		{
@@ -188,7 +202,7 @@ func (d *Dispatcher) initDefaultRules() {
 func (d *Dispatcher) initDefaultTemplates() {
 	d.templates[ShadowCorporateWeb] = http.HandlerFunc(d.serveCorporateWeb)
 	d.templates[ShadowNetworkError] = http.HandlerFunc(d.serveNetworkError)
-	d.templates[ShadowOldAdminPortal] = d.labyrinth.Handler()
+	d.templates[ShadowAPILabyrinth] = d.labyrinth.Handler()
 	d.templates[ShadowStandardHTTPS] = http.HandlerFunc(d.serveStandardHTTPS)
 }
 
@@ -204,8 +218,8 @@ func (d *Dispatcher) Dispatch(w http.ResponseWriter, r *http.Request) {
 		d.stats.ByCorporateWeb++
 	case ShadowNetworkError:
 		d.stats.ByNetworkError++
-	case ShadowOldAdminPortal:
-		d.stats.ByOldAdminPortal++
+	case ShadowAPILabyrinth:
+		d.stats.ByAPILabyrinth++
 	case ShadowStandardHTTPS:
 		d.stats.ByStandardHTTPS++
 	}
@@ -234,9 +248,8 @@ func (d *Dispatcher) extractContext(r *http.Request) *RequestContext {
 		Headers:        make(map[string]string),
 	}
 
-	// 提取 Header 顺序
+	// 提取 Headers
 	for key := range r.Header {
-		ctx.HeaderOrder = append(ctx.HeaderOrder, key)
 		ctx.Headers[key] = r.Header.Get(key)
 	}
 
@@ -266,17 +279,18 @@ func (d *Dispatcher) matchRule(ctx *RequestContext) (ShadowType, string) {
 
 // serveCorporateWeb 公司官网模板
 func (d *Dispatcher) serveCorporateWeb(w http.ResponseWriter, r *http.Request) {
+	p := d.persona
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`<!DOCTYPE html>
+	w.Write([]byte(fmt.Sprintf(`<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Global Solutions Inc.</title>
+    <title>%s</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background: #f5f5f5; }
-        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 60px 20px; text-align: center; }
+        .header { background: %s; color: white; padding: 60px 20px; text-align: center; }
         .header h1 { margin: 0; font-size: 2.5em; }
         .header p { margin: 10px 0 0; opacity: 0.9; }
         .content { max-width: 1200px; margin: 40px auto; padding: 0 20px; }
@@ -286,36 +300,38 @@ func (d *Dispatcher) serveCorporateWeb(w http.ResponseWriter, r *http.Request) {
 </head>
 <body>
     <div class="header">
-        <h1>Global Solutions Inc.</h1>
-        <p>Enterprise Technology Solutions</p>
+        <h1>%s</h1>
+        <p>%s</p>
     </div>
     <div class="content">
         <div class="card">
             <h2>Welcome</h2>
-            <p>We provide cutting-edge technology solutions for businesses worldwide.</p>
+            <p>Please authenticate to continue.</p>
         </div>
     </div>
     <div class="footer">
-        <p>&copy; 2026 Global Solutions Inc. All rights reserved.</p>
+        <p>&copy; %d %s. All rights reserved.</p>
     </div>
 </body>
-</html>`))
+</html>`, p.CompanyName, p.PrimaryColor, p.CompanyName, p.TagLine, p.CopyrightYear, p.CompanyName)))
 }
 
 // serveNetworkError 网络错误模板
 func (d *Dispatcher) serveNetworkError(w http.ResponseWriter, r *http.Request) {
+	p := d.persona
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusGatewayTimeout)
-	w.Write([]byte(`<!DOCTYPE html>
+	w.Write([]byte(fmt.Sprintf(`<!DOCTYPE html>
 <html>
 <head>
     <title>504 Gateway Timeout</title>
     <style>
-        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f0f0f0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }
         .error-box { background: white; padding: 40px; border-radius: 8px; display: inline-block; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        h1 { color: #e74c3c; margin: 0 0 20px; }
+        h1 { color: %s; margin: 0 0 20px; }
         p { color: #666; margin: 10px 0; }
         .code { font-family: monospace; background: #f5f5f5; padding: 10px; border-radius: 4px; margin-top: 20px; }
+        .footer { text-align: center; padding: 40px; color: #999; font-size: 0.85em; }
     </style>
 </head>
 <body>
@@ -323,24 +339,35 @@ func (d *Dispatcher) serveNetworkError(w http.ResponseWriter, r *http.Request) {
         <h1>504 Gateway Timeout</h1>
         <p>The upstream server is taking too long to respond.</p>
         <p>Please try again later.</p>
-        <div class="code">Error Code: ETIMEDOUT_UPSTREAM_001</div>
+        <div class="code">Error Code: %s-TIMEOUT-001</div>
     </div>
+    <div class="footer">&copy; %d %s</div>
 </body>
-</html>`))
+</html>`, p.PrimaryColor, p.ErrorPrefix, p.CopyrightYear, p.CompanyName)))
 }
 
 // serveStandardHTTPS 标准 404 模板
 func (d *Dispatcher) serveStandardHTTPS(w http.ResponseWriter, r *http.Request) {
+	p := d.persona
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusNotFound)
-	w.Write([]byte(`<!DOCTYPE html>
+	w.Write([]byte(fmt.Sprintf(`<!DOCTYPE html>
 <html>
-<head><title>404 Not Found</title></head>
+<head>
+    <title>404 Not Found - %s</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }
+        h1 { color: #333; }
+        p { color: #666; }
+        .footer { padding: 40px; color: #999; font-size: 0.85em; }
+    </style>
+</head>
 <body>
-<h1>Not Found</h1>
-<p>The requested URL was not found on this server.</p>
+    <h1>404 Not Found</h1>
+    <p>The requested URL was not found on this server.</p>
+    <div class="footer">&copy; %d %s</div>
 </body>
-</html>`))
+</html>`, p.CompanyName, p.CopyrightYear, p.CompanyName)))
 }
 
 // AddRule 添加自定义规则
@@ -414,6 +441,7 @@ func MatchPathPattern(path string, pattern string) bool {
 }
 
 // IsSuspiciousHeaderOrder 检查可疑的 Header 顺序
+// Deprecated: Header 顺序依赖 Go map 迭代顺序，不可信。请勿在调度规则中使用。
 func IsSuspiciousHeaderOrder(order []string) bool {
 	// 正常浏览器通常 Host 在前
 	if len(order) == 0 {

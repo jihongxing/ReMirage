@@ -1,3 +1,9 @@
+---
+Status: derived
+Target Truth: docs/protocols/gtunnel.md
+Migration: 当前有效协议语义已迁移到 docs/protocols/gtunnel.md，本文降级为解释性输入材料
+---
+
 # G-Tunnel 多路径传输协议
 
 ## 一、协议定位

@@ -1,8 +1,12 @@
 package killswitch
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
+	"time"
 )
 
 // Platform abstracts OS-specific route operations.
@@ -22,6 +26,7 @@ type KillSwitch struct {
 	tunName       string
 	gatewayIP     string
 	activated     bool
+	activatedAt   time.Time
 	mu            sync.Mutex
 	platform      Platform
 }
@@ -70,21 +75,23 @@ func (ks *KillSwitch) Activate(gatewayIP string) error {
 
 	// Step 3: Add TUN as default route
 	if err := ks.platform.AddDefaultRoute(ks.tunName); err != nil {
-		// Rollback: restore original
+		// Rollback step 2: restore original default route
 		_ = ks.platform.RestoreDefaultRoute(origGW, origIface)
 		return fmt.Errorf("add TUN default route: %w", err)
 	}
 
 	// Step 4: Add /32 host route for gateway
 	if err := ks.platform.AddHostRoute(gatewayIP, origGW, origIface); err != nil {
-		// Rollback
+		// Rollback step 3: delete TUN default route
 		_ = ks.platform.DeleteDefaultRoute()
+		// Rollback step 2: restore original default route
 		_ = ks.platform.RestoreDefaultRoute(origGW, origIface)
 		return fmt.Errorf("add host route: %w", err)
 	}
 
 	ks.gatewayIP = gatewayIP
 	ks.activated = true
+	ks.activatedAt = time.Now()
 	return nil
 }
 
@@ -181,4 +188,136 @@ func (ks *KillSwitch) IsActivated() bool {
 	ks.mu.Lock()
 	defer ks.mu.Unlock()
 	return ks.activated
+}
+
+// RouteState captures the routing snapshot for crash recovery.
+type RouteState struct {
+	OriginalGW    string    `json:"original_gw"`
+	OriginalIface string    `json:"original_iface"`
+	CurrentGWIP   string    `json:"current_gw_ip"`
+	TUNName       string    `json:"tun_name"`
+	ActivatedAt   time.Time `json:"activated_at"`
+}
+
+// GetRouteState returns the current route state snapshot (caller must hold lock or call externally).
+func (ks *KillSwitch) GetRouteState() *RouteState {
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
+	if !ks.activated {
+		return nil
+	}
+	return &RouteState{
+		OriginalGW:    ks.originalGW,
+		OriginalIface: ks.originalIface,
+		CurrentGWIP:   ks.gatewayIP,
+		TUNName:       ks.tunName,
+		ActivatedAt:   ks.activatedAt,
+	}
+}
+
+// PersistState saves the current route state to a JSON file using atomic write.
+func (ks *KillSwitch) PersistState(path string) error {
+	state := ks.GetRouteState()
+	if state == nil {
+		return fmt.Errorf("kill switch not activated, nothing to persist")
+	}
+	return SaveRouteState(path, state)
+}
+
+// SaveRouteState writes a RouteState to the given path using atomic write (temp + rename).
+func SaveRouteState(path string, state *RouteState) error {
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("route state marshal: %w", err)
+	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("route state mkdir: %w", err)
+	}
+
+	tmp, err := os.CreateTemp(dir, ".route-state-*.tmp")
+	if err != nil {
+		return fmt.Errorf("route state temp: %w", err)
+	}
+	tmpName := tmp.Name()
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("route state write: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("route state close: %w", err)
+	}
+
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("route state rename: %w", err)
+	}
+	return nil
+}
+
+// LoadRouteState reads a RouteState from the given JSON file path.
+func LoadRouteState(path string) (*RouteState, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("route state read: %w", err)
+	}
+	var state RouteState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, fmt.Errorf("route state unmarshal: %w", err)
+	}
+	return &state, nil
+}
+
+// NewPlatform returns the platform-specific route operations implementation.
+// Exported for use by daemon mode stale route cleanup.
+func NewPlatform() Platform {
+	return newPlatform()
+}
+
+// CleanupStaleRoutes detects and cleans up residual routes from a previous crash.
+// It reads the persisted route state, checks for stale TUN device and /32 host routes,
+// and restores the original routing configuration.
+func CleanupStaleRoutes(path string, p Platform) error {
+	state, err := LoadRouteState(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // No stale state, nothing to clean
+		}
+		return fmt.Errorf("cleanup load state: %w", err)
+	}
+
+	// Attempt to clean up residual routes
+	var cleanupErrs []error
+
+	// Remove /32 host route for the gateway
+	if state.CurrentGWIP != "" {
+		if err := p.DeleteHostRoute(state.CurrentGWIP); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("delete stale host route %s: %w", state.CurrentGWIP, err))
+		}
+	}
+
+	// Remove TUN default route
+	if err := p.DeleteDefaultRoute(); err != nil {
+		// Non-fatal: TUN default may already be gone
+		cleanupErrs = append(cleanupErrs, fmt.Errorf("delete stale TUN default: %w", err))
+	}
+
+	// Restore original default route
+	if state.OriginalGW != "" {
+		if err := p.RestoreDefaultRoute(state.OriginalGW, state.OriginalIface); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("restore original route: %w", err))
+		}
+	}
+
+	// Remove the stale state file
+	os.Remove(path)
+
+	if len(cleanupErrs) > 0 {
+		return fmt.Errorf("cleanup stale routes (partial): %v", cleanupErrs)
+	}
+	return nil
 }

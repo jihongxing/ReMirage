@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"time"
 
 	"mirage-gateway/pkg/ebpf"
@@ -22,6 +23,7 @@ type CommandHandler struct {
 	blacklist     *threat.BlacklistManager
 	gswitch       *gswitch.GSwitchManager
 	motorDownlink MotorDownlinkApplier
+	v2Adapter     *V2CommandAdapter
 	auth          *CommandAuthenticator
 	audit         *CommandAuditor
 	rateLimiter   *CommandRateLimiter
@@ -69,6 +71,11 @@ func (h *CommandHandler) SetMotorDownlink(md MotorDownlinkApplier) {
 	h.motorDownlink = md
 }
 
+// SetV2Adapter 设置 V2 命令适配器
+func (h *CommandHandler) SetV2Adapter(adapter *V2CommandAdapter) {
+	h.v2Adapter = adapter
+}
+
 // SetAuth 设置签名校验器
 func (h *CommandHandler) SetAuth(auth *CommandAuthenticator) {
 	h.auth = auth
@@ -96,6 +103,15 @@ func (h *CommandHandler) SetQuotaBuckets(qb *QuotaBucketManager) {
 
 // PushStrategy 处理策略下发 → 通过 MotorDownlink 幂等写入 eBPF Map（< 100ms）
 func (h *CommandHandler) PushStrategy(ctx context.Context, req *pb.StrategyPush) (*pb.PushResponse, error) {
+	// V2 编排链路优先
+	if h.v2Adapter != nil {
+		if err := h.v2Adapter.AdaptPushStrategy(ctx, req); err != nil {
+			log.Printf("[Handler] V2 adapter 失败，降级到 legacy: %v", err)
+		} else {
+			return &pb.PushResponse{Success: true, Message: "v2_dispatched"}, nil
+		}
+	}
+
 	src := peerAddr(ctx)
 	params := fmt.Sprintf("level=%d", req.DefenseLevel)
 
@@ -119,9 +135,13 @@ func (h *CommandHandler) PushStrategy(ctx context.Context, req *pb.StrategyPush)
 		}
 	}
 
-	// 审计日志
+	// 审计日志（使用闭包捕获最终结果，避免双重结论）
+	var auditSuccess = true
+	var auditMsg = "ok"
 	if h.audit != nil {
-		defer h.audit.Log("PushStrategy", src, params, true, "ok")
+		defer func() {
+			h.audit.Log("PushStrategy", src, params, auditSuccess, auditMsg)
+		}()
 	}
 
 	if req.DefenseLevel < 0 || req.DefenseLevel > 5 {
@@ -148,6 +168,8 @@ func (h *CommandHandler) PushStrategy(ctx context.Context, req *pb.StrategyPush)
 		})
 		if err != nil {
 			log.Printf("[Handler] PushStrategy MotorDownlink 失败: %v", err)
+			auditSuccess = false
+			auditMsg = err.Error()
 			return &pb.PushResponse{Success: false, Message: err.Error()}, nil
 		}
 		if !applied {
@@ -164,6 +186,7 @@ func (h *CommandHandler) PushStrategy(ctx context.Context, req *pb.StrategyPush)
 		JitterStddevUs: req.JitterStddevUs,
 		NoiseIntensity: req.NoiseIntensity,
 		TemplateID:     req.TemplateId,
+		PaddingRate:    req.PaddingRate,
 	}
 
 	if err := h.loader.UpdateStrategy(strat); err != nil {
@@ -177,15 +200,29 @@ func (h *CommandHandler) PushStrategy(ctx context.Context, req *pb.StrategyPush)
 
 // PushBlacklist 处理黑名单下发 → 合并到 BlacklistManager
 func (h *CommandHandler) PushBlacklist(ctx context.Context, req *pb.BlacklistPush) (*pb.PushResponse, error) {
+	// V2 编排链路优先
+	if h.v2Adapter != nil {
+		if err := h.v2Adapter.AdaptPushBlacklist(ctx, req); err != nil {
+			log.Printf("[Handler] V2 adapter 失败，降级到 legacy: %v", err)
+		}
+		// 黑名单仍需走 legacy 路径确保即时生效
+	}
+
 	src := peerAddr(ctx)
 	params := fmt.Sprintf("entries=%d", len(req.Entries))
 
-	// 审计日志（黑名单下发不做签名校验，已通过 mTLS 认证）
+	// 审计日志（使用闭包捕获最终结果，避免双重结论）
+	var blAuditSuccess = true
+	var blAuditMsg = "ok"
 	if h.audit != nil {
-		defer h.audit.Log("PushBlacklist", src, params, true, "ok")
+		defer func() {
+			h.audit.Log("PushBlacklist", src, params, blAuditSuccess, blAuditMsg)
+		}()
 	}
 
 	if len(req.Entries) == 0 {
+		blAuditSuccess = false
+		blAuditMsg = "entries empty"
 		return nil, status.Errorf(codes.InvalidArgument, "entries 不能为空")
 	}
 
@@ -211,6 +248,14 @@ func (h *CommandHandler) PushBlacklist(ctx context.Context, req *pb.BlacklistPus
 
 // PushQuota 处理配额下发 → 按 user_id 更新隔离配额桶 + 写入 eBPF quota_map
 func (h *CommandHandler) PushQuota(ctx context.Context, req *pb.QuotaPush) (*pb.PushResponse, error) {
+	// V2 编排链路优先
+	if h.v2Adapter != nil {
+		if err := h.v2Adapter.AdaptPushQuota(ctx, req); err != nil {
+			log.Printf("[Handler] V2 adapter 失败，降级到 legacy: %v", err)
+		}
+		// 配额仍需走 legacy 路径确保 eBPF map 即时更新
+	}
+
 	src := peerAddr(ctx)
 	params := fmt.Sprintf("remaining=%d,user_id=%s", req.RemainingBytes, req.UserId)
 
@@ -234,9 +279,13 @@ func (h *CommandHandler) PushQuota(ctx context.Context, req *pb.QuotaPush) (*pb.
 		}
 	}
 
-	// 审计日志
+	// 审计日志（使用闭包捕获最终结果，避免双重结论）
+	var qAuditSuccess = true
+	var qAuditMsg = "ok"
 	if h.audit != nil {
-		defer h.audit.Log("PushQuota", src, params, true, "ok")
+		defer func() {
+			h.audit.Log("PushQuota", src, params, qAuditSuccess, qAuditMsg)
+		}()
 	}
 
 	// 按 user_id 更新隔离配额桶
@@ -270,6 +319,15 @@ func (h *CommandHandler) PushQuota(ctx context.Context, req *pb.QuotaPush) (*pb.
 
 // PushReincarnation 处理转生指令 → 调用 GSwitch.TriggerEscape
 func (h *CommandHandler) PushReincarnation(ctx context.Context, req *pb.ReincarnationPush) (*pb.PushResponse, error) {
+	// V2 编排链路优先
+	if h.v2Adapter != nil {
+		if err := h.v2Adapter.AdaptPushReincarnation(ctx, req); err != nil {
+			log.Printf("[Handler] V2 adapter 失败，降级到 legacy: %v", err)
+		} else {
+			return &pb.PushResponse{Success: true, Message: "v2_dispatched"}, nil
+		}
+	}
+
 	src := peerAddr(ctx)
 	params := fmt.Sprintf("domain=%s,ip=%s", req.NewDomain, req.NewIp)
 
@@ -293,15 +351,23 @@ func (h *CommandHandler) PushReincarnation(ctx context.Context, req *pb.Reincarn
 		}
 	}
 
-	// 3. 审计日志
+	// 3. 审计日志（使用闭包捕获最终结果，避免双重结论）
+	var rAuditSuccess = true
+	var rAuditMsg = "ok"
 	if h.audit != nil {
-		defer h.audit.Log("PushReincarnation", src, params, true, "ok")
+		defer func() {
+			h.audit.Log("PushReincarnation", src, params, rAuditSuccess, rAuditMsg)
+		}()
 	}
 
 	if req.NewDomain == "" {
+		rAuditSuccess = false
+		rAuditMsg = "new_domain empty"
 		return nil, status.Errorf(codes.InvalidArgument, "new_domain 不能为空")
 	}
 	if req.DeadlineSeconds <= 0 {
+		rAuditSuccess = false
+		rAuditMsg = "deadline_seconds invalid"
 		return nil, status.Errorf(codes.InvalidArgument, "deadline_seconds 必须 > 0")
 	}
 
@@ -318,11 +384,16 @@ func (h *CommandHandler) PushReincarnation(ctx context.Context, req *pb.Reincarn
 	return &pb.PushResponse{Success: true, Message: "ok"}, nil
 }
 
-// peerAddr 从 context 中提取对端地址
+// peerAddr 从 context 中提取对端地址（纯 IP，不含端口）
 func peerAddr(ctx context.Context) string {
 	p, ok := peer.FromContext(ctx)
 	if !ok || p.Addr == nil {
 		return "unknown"
 	}
-	return p.Addr.String()
+	host, _, err := net.SplitHostPort(p.Addr.String())
+	if err != nil {
+		// 可能已经是纯 IP 格式
+		return p.Addr.String()
+	}
+	return host
 }

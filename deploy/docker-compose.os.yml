@@ -29,7 +29,9 @@ services:
     restart: unless-stopped
 
   gateway-bridge:
-    build: ./gateway-bridge
+    build:
+      context: ..
+      dockerfile: mirage-os/gateway-bridge/Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
@@ -44,7 +46,7 @@ services:
     volumes:
       - ${MIRAGE_CERT_DIR:-./certs}:/etc/mirage/certs:ro
     ports:
-      - "50847:50847"
+      - "127.0.0.1:50847:50847"
     healthcheck:
       test: ["CMD-SHELL", "nc -z localhost 50847 || exit 1"]
       interval: 10s
@@ -53,7 +55,9 @@ services:
     restart: unless-stopped
 
   api-server:
-    build: ./api-server
+    build:
+      context: ..
+      dockerfile: mirage-os/api-server/Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
@@ -63,8 +67,12 @@ services:
       DATABASE_URL: postgres://${MIRAGE_DB_USER:-mirage}:${MIRAGE_DB_PASSWORD}@postgres:5432/${MIRAGE_DB_NAME:-mirage}
       REDIS_URL: redis://redis:6379
       JWT_SECRET: ${MIRAGE_JWT_SECRET}
+      CA_DIR: /etc/mirage/certs
+      QUERY_HMAC_SECRET: ${MIRAGE_QUERY_HMAC_SECRET:-}
+    volumes:
+      - ${MIRAGE_CERT_DIR:-./certs}:/etc/mirage/certs:ro
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:3000/health || exit 1"]
       interval: 10s

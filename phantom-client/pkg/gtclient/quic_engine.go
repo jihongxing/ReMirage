@@ -13,16 +13,22 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
+// NICDetector abstracts physical NIC outbound detection for QUICEngine.
+type NICDetector interface {
+	DetectOutbound(targetIP string) (net.IP, error)
+}
+
 // QUICEngine manages the real QUIC Datagram connection to a gateway.
 type QUICEngine struct {
-	conn       *quic.Conn
-	addr       string
-	tlsConf    *tls.Config
-	quicConf   *quic.Config
-	connected  atomic.Bool
-	mu         sync.Mutex
-	recvCh     chan []byte // buffered channel for incoming datagrams
-	cancelFunc context.CancelFunc
+	conn        *quic.Conn
+	addr        string
+	tlsConf     *tls.Config
+	quicConf    *quic.Config
+	connected   atomic.Bool
+	mu          sync.Mutex
+	recvCh      chan []byte // buffered channel for incoming datagrams
+	cancelFunc  context.CancelFunc
+	nicDetector NICDetector // injected physical NIC detector (nil = legacy fallback)
 }
 
 // QUICEngineConfig holds configuration for the QUIC engine.
@@ -32,6 +38,7 @@ type QUICEngineConfig struct {
 	PinnedCertHash []byte // SHA-256 of gateway's leaf certificate (nil = skip verify)
 	KeepAlive      time.Duration
 	RecvBufferSize int
+	NICDetector    NICDetector // optional: physical NIC detector (nil = legacy fallback)
 }
 
 // NewQUICEngine creates a QUIC engine with Datagram support enabled.
@@ -69,8 +76,9 @@ func NewQUICEngine(cfg *QUICEngineConfig) *QUICEngine {
 	}
 
 	return &QUICEngine{
-		addr:    cfg.GatewayAddr,
-		tlsConf: tlsConf,
+		addr:        cfg.GatewayAddr,
+		tlsConf:     tlsConf,
+		nicDetector: cfg.NICDetector,
 		quicConf: &quic.Config{
 			EnableDatagrams: true,
 			KeepAlivePeriod: keepAlive,
@@ -93,31 +101,41 @@ func equal(a, b []byte) bool {
 }
 
 // Connect establishes the QUIC connection and starts the receive pump.
-// Uses explicit physical NIC binding to avoid Wintun routing interference.
+// Uses PhysicalNICDetector to discover outbound IP, with legacy fallback.
 func (e *QUICEngine) Connect(ctx context.Context) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// 1. Discover physical outbound IP (does not send any packet)
-	probeConn, err := net.Dial("udp4", "8.8.8.8:53")
+	// 1. Resolve remote address first (needed for NIC detection target)
+	remoteAddr, err := net.ResolveUDPAddr("udp4", e.addr)
 	if err != nil {
-		return fmt.Errorf("detect physical NIC: %w", err)
+		return fmt.Errorf("resolve %s: %w", e.addr, err)
 	}
-	physicalIP := probeConn.LocalAddr().(*net.UDPAddr).IP
-	probeConn.Close()
 
-	// 2. Bind UDP socket to physical NIC IP (bypass Wintun/WFP interference)
+	// 2. Discover physical outbound IP via NICDetector or legacy fallback
+	var physicalIP net.IP
+	if e.nicDetector != nil {
+		physicalIP, err = e.nicDetector.DetectOutbound(remoteAddr.IP.String())
+		if err != nil {
+			// Fallback: legacy probe method
+			physicalIP, err = legacyDetectOutbound()
+			if err != nil {
+				return fmt.Errorf("detect physical NIC: %w", err)
+			}
+		}
+	} else {
+		// No detector injected: use legacy method
+		physicalIP, err = legacyDetectOutbound()
+		if err != nil {
+			return fmt.Errorf("detect physical NIC: %w", err)
+		}
+	}
+
+	// 3. Bind UDP socket to physical NIC IP (bypass Wintun/WFP interference)
 	localAddr := &net.UDPAddr{IP: physicalIP, Port: 0}
 	udpConn, err := net.ListenUDP("udp4", localAddr)
 	if err != nil {
 		return fmt.Errorf("bind physical NIC %s: %w", physicalIP, err)
-	}
-
-	// 3. Resolve remote address
-	remoteAddr, err := net.ResolveUDPAddr("udp4", e.addr)
-	if err != nil {
-		udpConn.Close()
-		return fmt.Errorf("resolve %s: %w", e.addr, err)
 	}
 
 	// 4. QUIC dial with explicit bound socket
@@ -144,6 +162,17 @@ func (e *QUICEngine) Connect(ctx context.Context) error {
 	go e.recvPump(pumpCtx)
 
 	return nil
+}
+
+// legacyDetectOutbound uses the old net.Dial("udp4","8.8.8.8:53") approach as fallback.
+func legacyDetectOutbound() (net.IP, error) {
+	probeConn, err := net.Dial("udp4", "8.8.8.8:53")
+	if err != nil {
+		return nil, fmt.Errorf("legacy detect: %w", err)
+	}
+	ip := probeConn.LocalAddr().(*net.UDPAddr).IP
+	probeConn.Close()
+	return ip, nil
 }
 
 // MaxShardSize returns the maximum safe payload size for a single datagram.

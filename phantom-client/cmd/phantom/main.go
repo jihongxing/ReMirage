@@ -11,18 +11,25 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
+	"phantom-client/pkg/daemon"
+	"phantom-client/pkg/entitlement"
 	"phantom-client/pkg/gtclient"
 	"phantom-client/pkg/killswitch"
 	"phantom-client/pkg/memsafe"
+	"phantom-client/pkg/nicdetect"
+	"phantom-client/pkg/persist"
+	"phantom-client/pkg/resonance"
 	"phantom-client/pkg/token"
 	"phantom-client/pkg/tun"
 )
@@ -43,9 +50,15 @@ func main() {
 		tun.SetWintunDLL(embeddedWintunDLL)
 	}
 
+	// --- Flag definitions ---
 	tokenFlag := flag.String("token", "", "Bootstrap token (base64)")
 	uriFlag := flag.String("uri", "", "Delivery URI (phantom://host/token?key=xxx)")
 	versionFlag := flag.Bool("version", false, "Show version")
+	daemonFlag := flag.Bool("daemon", false, "Run as background daemon (no stdin, log to file/journald)")
+	foregroundFlag := flag.Bool("foreground", false, "Run in foreground mode (current CLI behavior)")
+	provisionFlag := flag.Bool("provision", false, "Run provisioning flow (one-time setup)")
+	configDirFlag := flag.String("config-dir", "", "Config directory (default: ~/.phantom-client)")
+	logDirFlag := flag.String("log-dir", "", "Log directory for daemon mode")
 	flag.Parse()
 
 	if *versionFlag {
@@ -53,14 +66,297 @@ func main() {
 		os.Exit(0)
 	}
 
-	// 1. Read token from flag, URI, or stdin
-	tokenStr := *tokenFlag
+	// --- Mode dispatch ---
+	if *provisionFlag {
+		runProvisionMode(*tokenFlag, *uriFlag, *configDirFlag, *logDirFlag)
+		return
+	}
+
+	if *daemonFlag {
+		runDaemonMode(*configDirFlag, *logDirFlag)
+		return
+	}
+
+	// Default: foreground mode (original CLI behavior)
+	// If --foreground is explicitly set or no mode flag given
+	runForegroundMode(*tokenFlag, *uriFlag, *configDirFlag)
+	_ = foregroundFlag // acknowledged
+}
+
+// runProvisionMode executes the one-time provisioning flow.
+func runProvisionMode(tokenStr, uri, configDir, logDir string) {
+	if err := RunProvisioning(ProvisionConfig{
+		TokenStr:  tokenStr,
+		URI:       uri,
+		ConfigDir: configDir,
+		LogDir:    logDir,
+	}); err != nil {
+		fatal("Provisioning failed: %v", err)
+	}
+}
+
+// runDaemonMode runs the client as a background daemon.
+// No stdin dependency, logs to file/journald.
+func runDaemonMode(configDir, logDir string) {
+	if configDir == "" {
+		configDir = defaultConfigDir()
+	}
+	if logDir == "" {
+		logDir = filepath.Join(configDir, "logs")
+	}
+
+	// Setup file logging for daemon mode
+	if err := os.MkdirAll(logDir, 0700); err != nil {
+		fatal("Failed to create log dir: %v", err)
+	}
+	logFile, err := os.OpenFile(
+		filepath.Join(logDir, "phantom-client.log"),
+		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600,
+	)
+	if err != nil {
+		fatal("Failed to open log file: %v", err)
+	}
+	defer logFile.Close()
+	log.SetOutput(logFile)
+	// Redirect stderr to log file for daemon mode
+	os.Stderr = logFile
+
+	// Load persisted config (unified loading logic)
+	persistCfg, psk, authKey, err := loadRuntimeConfig(configDir)
+	if err != nil {
+		fatal("%v", err)
+	}
+
+	// Build BootstrapConfig from persisted data
+	config := &token.BootstrapConfig{
+		BootstrapPool:   persistCfg.BootstrapPool,
+		PreSharedKey:    psk,
+		AuthKey:         authKey,
+		CertFingerprint: persistCfg.CertFingerprint,
+		UserID:          persistCfg.UserID,
+		ExpiresAt:       time.Now().Add(365 * 24 * time.Hour), // managed by entitlement
+	}
+	defer config.WipeConfig()
+	defer memsafe.WipeAll()
+
+	// Cleanup stale routes from previous crash (Task 10.5)
+	routeStatePath := filepath.Join(configDir, "route-state.json")
+	if err := killswitch.CleanupStaleRoutes(routeStatePath, killswitch.NewPlatform()); err != nil {
+		log.Printf("[Daemon] WARNING: stale route cleanup: %v", err)
+	}
+
+	printStatus("Daemon starting, %d bootstrap nodes", len(config.BootstrapPool))
+
+	// Cleanup stale TUN + create TUN
+	tun.CleanupStale()
+	device, err := tun.CreateTUN("mirage0", 1400)
+	if err != nil {
+		fatal("TUN creation failed: %v", err)
+	}
+	defer device.Close()
+	printStatus("TUN %s created (MTU %d)", device.Name(), device.MTU())
+
+	// Bootstrap
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := gtclient.NewGTunnelClient(config)
+	defer client.Close()
+
+	// Task 10.3: Inject Resonance Resolver based on ServiceClass
+	// Default to standard; will be updated by EntitlementManager
+	currentPolicy := entitlement.PolicyForClass(entitlement.ClassStandard)
+	if currentPolicy.ResonanceEnabled {
+		injectResonanceResolver(client, config)
+	}
+
+	// Task 10.6: Inject PhysicalNICDetector into GTunnelClient
+	detector := nicdetect.NewDetector()
+	client.SetNICDetector(detector)
+
+	// WSS 降级配置注入（daemon mode 从 persistCfg 读取，默认端口 8443 与 Gateway 对齐）
+	injectWSSConfig(client, persistCfg)
+
+	if err := bootstrapWithRetry(ctx, client, config.BootstrapPool); err != nil {
+		fatal("Bootstrap failed: %v", err)
+	}
+	printStatus("Connected to %s", client.CurrentGateway().Region)
+
+	// Kill Switch
+	ks := killswitch.NewKillSwitch(device.Name())
+	if err := ks.Activate(client.CurrentGateway().IP); err != nil {
+		fatal("Kill Switch activation failed: %v", err)
+	}
+	// Persist route state for crash recovery
+	_ = ks.PersistState(routeStatePath)
+
+	// defer + signal handler dual protection for Deactivate (Task 10.5)
+	defer func() {
+		if err := ks.Deactivate(); err != nil {
+			log.Printf("WARNING: Route restoration failed: %v", err)
+		}
+		os.Remove(routeStatePath)
+	}()
+	printStatus("Kill Switch activated")
+
+	// Pull route table
+	_ = client.PullRouteTable(ctx)
+
+	// Bidirectional forwarding
+	var txBytes, rxBytes atomic.Int64
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go forwardTUNToTunnel(ctx, device, client, &txBytes, &wg)
+	go forwardTunnelToTUN(ctx, client, device, &rxBytes, &wg)
+
+	// Transactional gateway switch callbacks
+	client.SetSwitchPreAdd(func(newIP string) error {
+		return ks.PreAddHostRoute(newIP)
+	})
+	client.SetSwitchCommit(func(oldIP, newIP string) {
+		_ = ks.CommitSwitch(oldIP, newIP)
+		_ = ks.PersistState(routeStatePath)
+		printStatus("Gateway switched, route updated")
+	})
+	client.SetSwitchRollback(func(newIP string) {
+		_ = ks.RollbackPreAdd(newIP)
+	})
+
+	// Task 10.4: Start TopoRefresher
+	topoVerifier := gtclient.NewTopoVerifier(config.PreSharedKey)
+	topoRefresher := gtclient.NewTopoRefresher(gtclient.TopoRefresherConfig{
+		Fetcher:  createTopoFetcher(persistCfg.OSEndpoint, config.AuthKey, config.UserID),
+		Verifier: topoVerifier,
+		Topo:     client.RuntimeTopo(),
+		Interval: currentPolicy.TopoRefreshInterval,
+		OnAlert: func(msg string) {
+			log.Printf("[TopoRefresher] ALERT: %s", msg)
+		},
+	})
+	// Task 11.1: Wire TopoRefresher into GTunnelClient for immediate pull after Resonance discovery
+	client.SetTopoRefresher(topoRefresher)
+	go topoRefresher.Start(ctx)
+	defer topoRefresher.Stop()
+
+	// Task 10.4: Start EntitlementManager
+	kr := persist.NewKeyring()
+	graceWindow := entitlement.NewGraceWindow(24 * time.Hour)
+	entMgr := entitlement.NewEntitlementManager(entitlement.EntitlementConfig{
+		Fetcher: createEntitlementFetcher(persistCfg.OSEndpoint, config.AuthKey, config.UserID),
+		Grace:   graceWindow,
+		OnChange: func(old, new_ *entitlement.Entitlement) {
+			if new_ == nil {
+				return
+			}
+			log.Printf("[Entitlement] State changed: class=%s, expires=%s", new_.ServiceClass, new_.ExpiresAt)
+			// Task 10.4: ServiceClass change callback — adjust runtime behavior
+			newPolicy := entitlement.PolicyForClass(new_.ServiceClass)
+			if newPolicy.ResonanceEnabled {
+				injectResonanceResolver(client, config)
+			} else {
+				client.SetResonanceResolver(nil)
+			}
+		},
+		OnBanned: func() {
+			log.Printf("[Entitlement] BANNED — initiating controlled disconnect")
+			// Task 11.2: Controlled disconnect + clear sensitive materials
+			client.ControlledDisconnect("account banned")
+			// Clear PSK and AuthKey from keyring
+			if err := kr.Delete(keyringService, keyringPSK); err != nil {
+				log.Printf("[Entitlement] WARNING: failed to delete PSK from keyring: %v", err)
+			}
+			if err := kr.Delete(keyringService, keyringAuthKey); err != nil {
+				log.Printf("[Entitlement] WARNING: failed to delete AuthKey from keyring: %v", err)
+			}
+			log.Printf("[Entitlement] Sensitive materials cleared from keyring")
+			cancel()
+		},
+		// Task 11.3: Grace window expired → read-only mode (disable topo refresh)
+		OnReadOnly: func() {
+			log.Printf("[Entitlement] Grace window expired — entering read-only mode")
+			topoRefresher.Stop()
+		},
+		// Task 11.3: Control plane recovered → resume normal operation
+		OnRecovered: func() {
+			log.Printf("[Entitlement] Control plane recovered — resuming normal operation")
+			go topoRefresher.Start(ctx)
+		},
+	})
+	go entMgr.Start(ctx)
+	defer entMgr.Stop()
+
+	// Task 10.5: Start HealthGuardian
+	hg := daemon.NewHealthGuardian(30 * time.Second)
+	hg.Register("tun", func(hctx context.Context) daemon.HealthCheck {
+		// Check TUN device exists
+		if device == nil {
+			return daemon.HealthCheck{Name: "tun", Healthy: false, Detail: "TUN device is nil"}
+		}
+		return daemon.HealthCheck{Name: "tun", Healthy: true, Detail: "TUN device OK"}
+	})
+	hg.Register("quic", func(hctx context.Context) daemon.HealthCheck {
+		if client.IsConnected() {
+			return daemon.HealthCheck{Name: "quic", Healthy: true, Detail: "QUIC connected"}
+		}
+		return daemon.HealthCheck{Name: "quic", Healthy: false, Detail: "QUIC disconnected"}
+	})
+	hg.Register("killswitch", func(hctx context.Context) daemon.HealthCheck {
+		if ks.IsActivated() {
+			return daemon.HealthCheck{Name: "killswitch", Healthy: true, Detail: "KillSwitch active"}
+		}
+		return daemon.HealthCheck{Name: "killswitch", Healthy: false, Detail: "KillSwitch inactive"}
+	})
+	hg.Register("entitlement", func(hctx context.Context) daemon.HealthCheck {
+		ent := entMgr.Current()
+		if ent == nil {
+			return daemon.HealthCheck{Name: "entitlement", Healthy: true, Detail: "no entitlement data yet"}
+		}
+		if ent.Banned {
+			return daemon.HealthCheck{Name: "entitlement", Healthy: false, Detail: "account banned"}
+		}
+		if !ent.ExpiresAt.IsZero() && time.Now().After(ent.ExpiresAt) {
+			return daemon.HealthCheck{Name: "entitlement", Healthy: false, Detail: "subscription expired"}
+		}
+		return daemon.HealthCheck{Name: "entitlement", Healthy: true, Detail: "entitlement valid"}
+	})
+	go hg.Start(ctx)
+	defer hg.Stop()
+
+	// Signal handling with dual protection (Task 10.5)
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	<-sigCh
+
+	printStatus("Daemon shutting down...")
+	cancel()
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-shutdownCtx.Done():
+		log.Printf("Shutdown timeout, forcing exit")
+	}
+
+	// Deferred cleanup runs: ks.Deactivate → client.Close → device.Close → WipeAll
+	printStatus("Daemon stopped")
+}
+
+// runForegroundMode preserves the original CLI behavior.
+func runForegroundMode(tokenStr, uri, configDir string) {
+	// 1. Read token from flag, URI, stdin, or persisted config
 	var demoKey []byte
 
-	if tokenStr == "" && *uriFlag != "" {
-		// 从阅后即焚 URI 获取 token
+	if tokenStr == "" && uri != "" {
 		var err error
-		tokenStr, demoKey, err = redeemFromURI(*uriFlag)
+		tokenStr, demoKey, err = redeemFromURI(uri)
 		if err != nil {
 			fatal("URI redeem failed: %v", err)
 		}
@@ -70,11 +366,20 @@ func main() {
 	if tokenStr == "" {
 		tokenStr = readTokenFromStdin()
 	}
+
+	// If still no token, check for persisted config
 	if tokenStr == "" {
-		fatal("Usage: %s -token <base64> OR -uri <phantom://...>", os.Args[0])
+		if configDir == "" {
+			configDir = defaultConfigDir()
+		}
+		persistCfg, psk, authKey, err := loadRuntimeConfig(configDir)
+		if err == nil {
+			runForegroundWithConfig(persistCfg, psk, authKey, configDir)
+			return
+		}
+		fatal("Usage: %s -token <base64> OR -uri <phantom://...> OR run --provision first", os.Args[0])
 	}
 
-	// Fallback key for direct token mode
 	if demoKey == nil {
 		demoKey = make([]byte, 32)
 	}
@@ -87,14 +392,34 @@ func main() {
 	defer config.WipeConfig()
 	defer memsafe.WipeAll()
 
-	// Check expiry
 	if config.ExpiresAt.Before(time.Now()) {
 		fatal("Token expired")
 	}
 
 	printStatus("Token parsed, %d bootstrap nodes", len(config.BootstrapPool))
+	runWithConfig(config)
+}
 
-	// 3. Cleanup stale resources + create TUN
+// runForegroundWithConfig runs foreground mode using persisted config.
+func runForegroundWithConfig(persistCfg *persist.PersistConfig, psk, authKey []byte, configDir string) {
+	config := &token.BootstrapConfig{
+		BootstrapPool:   persistCfg.BootstrapPool,
+		PreSharedKey:    psk,
+		AuthKey:         authKey,
+		CertFingerprint: persistCfg.CertFingerprint,
+		UserID:          persistCfg.UserID,
+		ExpiresAt:       time.Now().Add(365 * 24 * time.Hour),
+	}
+	defer config.WipeConfig()
+	defer memsafe.WipeAll()
+
+	printStatus("Loaded persisted config, %d bootstrap nodes", len(config.BootstrapPool))
+	runWithConfig(config)
+}
+
+// runWithConfig is the core foreground run loop (original CLI behavior preserved).
+func runWithConfig(config *token.BootstrapConfig) {
+	// Cleanup stale resources + create TUN
 	tun.CleanupStale()
 	device, err := tun.CreateTUN("mirage0", 1400)
 	if err != nil {
@@ -103,19 +428,22 @@ func main() {
 	defer device.Close()
 	printStatus("TUN %s created (MTU %d)", device.Name(), device.MTU())
 
-	// 4. Bootstrap probe + G-Tunnel
+	// Bootstrap probe + G-Tunnel
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	client := gtclient.NewGTunnelClient(config)
 	defer client.Close()
 
+	// WSS 降级配置：端口 8443 与 Gateway chameleon.listen_addr 默认值对齐
+	injectWSSConfig(client, nil)
+
 	if err := bootstrapWithRetry(ctx, client, config.BootstrapPool); err != nil {
 		fatal("Bootstrap failed: %v", err)
 	}
 	printStatus("Connected to %s", client.CurrentGateway().Region)
 
-	// 5. Kill Switch activate
+	// Kill Switch activate
 	ks := killswitch.NewKillSwitch(device.Name())
 	if err := ks.Activate(client.CurrentGateway().IP); err != nil {
 		fatal("Kill Switch activation failed: %v", err)
@@ -128,10 +456,10 @@ func main() {
 	}()
 	printStatus("Kill Switch activated")
 
-	// 6. Pull route table
+	// Pull route table
 	_ = client.PullRouteTable(ctx)
 
-	// 7. Bidirectional forwarding
+	// Bidirectional forwarding
 	var txBytes, rxBytes atomic.Int64
 	var wg sync.WaitGroup
 
@@ -139,7 +467,7 @@ func main() {
 	go forwardTUNToTunnel(ctx, device, client, &txBytes, &wg)
 	go forwardTunnelToTUN(ctx, client, device, &rxBytes, &wg)
 
-	// 8. Transactional gateway switch callbacks
+	// Transactional gateway switch callbacks
 	client.SetSwitchPreAdd(func(newIP string) error {
 		return ks.PreAddHostRoute(newIP)
 	})
@@ -151,7 +479,7 @@ func main() {
 		_ = ks.RollbackPreAdd(newIP)
 	})
 
-	// 9. Status display + signal handling
+	// Status display + signal handling
 	startTime := time.Now()
 	go statusLoop(startTime, &txBytes, &rxBytes, client)
 
@@ -162,11 +490,10 @@ func main() {
 
 	printStatus("Shutting down...")
 
-	// 10. Graceful shutdown with 30s timeout
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
-	cancel() // cancel main context to stop forwarding
+	cancel()
 
 	done := make(chan struct{})
 	go func() {
@@ -180,8 +507,121 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Shutdown timeout, forcing exit\n")
 	}
 
-	// Deferred cleanup runs: ks.Deactivate → client.Close → device.Close → WipeAll
 	printStatus("Disconnected")
+}
+
+// injectWSSConfig 注入 WSS 降级配置。
+// 如果 persistCfg 非 nil 且包含 WSS 字段，使用持久化配置；否则使用默认值。
+// 默认端口 8443 与 Gateway chameleon.listen_addr 对齐。
+func injectWSSConfig(client *gtclient.GTunnelClient, persistCfg *persist.PersistConfig) {
+	cfg := &gtclient.WSSOverrideConfig{
+		WSSPort: 8443,
+		WSSPath: "/api/v2/stream",
+		WSSSNI:  "cdn.cloudflare.com",
+	}
+	if persistCfg != nil {
+		if persistCfg.WSSPort != 0 {
+			cfg.WSSPort = persistCfg.WSSPort
+		}
+		if persistCfg.WSSPath != "" {
+			cfg.WSSPath = persistCfg.WSSPath
+		}
+		if persistCfg.WSSSNI != "" {
+			cfg.WSSSNI = persistCfg.WSSSNI
+		}
+		cfg.WSSCertFile = persistCfg.WSSCertFile
+		cfg.WSSKeyFile = persistCfg.WSSKeyFile
+		cfg.WSSCAFile = persistCfg.WSSCAFile
+	}
+	client.SetWSSConfig(cfg)
+}
+
+// injectResonanceResolver creates and injects a Resonance Resolver into the GTunnelClient.
+func injectResonanceResolver(client *gtclient.GTunnelClient, config *token.BootstrapConfig) {
+	resolver := resonance.NewResolver(
+		&resonance.ResolverConfig{
+			ChannelTimeout: 10 * time.Second,
+		},
+		func(sealed []byte) ([]resonance.GatewayInfo, []string, error) {
+			// Placeholder open function — real implementation depends on SignalCrypto
+			return nil, nil, fmt.Errorf("signal crypto not configured")
+		},
+	)
+	client.SetResonanceResolver(resolver)
+}
+
+// createTopoFetcher creates a TopoFetcher function for the given OS endpoint.
+func createTopoFetcher(osEndpoint string, authKey []byte, userID string) gtclient.TopoFetcher {
+	return func(ctx context.Context) (*gtclient.RouteTableResponse, error) {
+		if osEndpoint == "" {
+			return nil, fmt.Errorf("OS endpoint not configured")
+		}
+		url := fmt.Sprintf("%s/api/v2/topology", osEndpoint)
+		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		if err != nil {
+			return nil, err
+		}
+		if len(authKey) > 0 {
+			req.Header.Set("Authorization", "Bearer "+encoding_base64.StdEncoding.EncodeToString(authKey))
+		}
+		req.Header.Set("X-Client-ID", userID)
+
+		httpClient := &http.Client{Timeout: 30 * time.Second}
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode == http.StatusNotModified {
+			return nil, fmt.Errorf("not modified")
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("server returned %d", resp.StatusCode)
+		}
+
+		var result gtclient.RouteTableResponse
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return nil, fmt.Errorf("decode response: %w", err)
+		}
+		return &result, nil
+	}
+}
+
+// createEntitlementFetcher creates an EntitlementFetcher for the given OS endpoint.
+func createEntitlementFetcher(osEndpoint string, authKey []byte, userID string) entitlement.EntitlementFetcher {
+	return func(ctx context.Context) (*entitlement.Entitlement, error) {
+		if osEndpoint == "" {
+			return nil, fmt.Errorf("OS endpoint not configured")
+		}
+		url := fmt.Sprintf("%s/api/v2/entitlement", osEndpoint)
+		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		if err != nil {
+			return nil, err
+		}
+		if len(authKey) > 0 {
+			req.Header.Set("Authorization", "Bearer "+encoding_base64.StdEncoding.EncodeToString(authKey))
+		}
+		req.Header.Set("X-Client-ID", userID)
+
+		httpClient := &http.Client{Timeout: 30 * time.Second}
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("server returned %d", resp.StatusCode)
+		}
+
+		var ent entitlement.Entitlement
+		if err := json.NewDecoder(resp.Body).Decode(&ent); err != nil {
+			return nil, fmt.Errorf("decode entitlement: %w", err)
+		}
+		ent.FetchedAt = time.Now()
+		return &ent, nil
+	}
 }
 
 func readTokenFromStdin() string {
@@ -197,10 +637,7 @@ func readTokenFromStdin() string {
 }
 
 // redeemFromURI 从阅后即焚 URI 兑换配置
-// URI 格式: phantom://host:port/delivery/TOKEN?key=BASE64KEY
-// 或 HTTPS: https://host:port/api/delivery/TOKEN?key=BASE64KEY
 func redeemFromURI(uri string) (tokenB64 string, decryptKey []byte, err error) {
-	// 将 phantom:// 转换为 https://
 	fetchURL := uri
 	if len(uri) > 10 && uri[:10] == "phantom://" {
 		fetchURL = "https://" + uri[10:]
@@ -211,7 +648,7 @@ func redeemFromURI(uri string) (tokenB64 string, decryptKey []byte, err error) {
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // 首次连接允许自签名
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
 	}
 
@@ -231,7 +668,6 @@ func redeemFromURI(uri string) (tokenB64 string, decryptKey []byte, err error) {
 		return "", nil, fmt.Errorf("server returned %d", resp.StatusCode)
 	}
 
-	// 解析返回的 JSON 配置
 	var config struct {
 		Endpoints []struct {
 			Address  string `json:"address"`
@@ -239,10 +675,10 @@ func redeemFromURI(uri string) (tokenB64 string, decryptKey []byte, err error) {
 			Protocol string `json:"protocol"`
 			Priority int    `json:"priority"`
 		} `json:"endpoints"`
-		PSK             string `json:"psk"` // base64
+		PSK             string `json:"psk"`
 		CertFingerprint string `json:"cert_fingerprint"`
 		UserID          string `json:"user_id"`
-		AuthKey         string `json:"auth_key"` // base64
+		AuthKey         string `json:"auth_key"`
 		ExpiresAt       string `json:"expires_at"`
 		SNI             string `json:"sni"`
 		CACert          string `json:"ca_cert"`
@@ -259,7 +695,6 @@ func redeemFromURI(uri string) (tokenB64 string, decryptKey []byte, err error) {
 		return "", nil, fmt.Errorf("parse config failed: %w", err)
 	}
 
-	// 校验必填字段
 	if config.UserID == "" {
 		return "", nil, fmt.Errorf("服务端响应缺少 user_id")
 	}
@@ -270,13 +705,11 @@ func redeemFromURI(uri string) (tokenB64 string, decryptKey []byte, err error) {
 		return "", nil, fmt.Errorf("服务端响应缺少 endpoints")
 	}
 
-	// 解码 PSK
 	pskBytes, err := encoding_base64.StdEncoding.DecodeString(config.PSK)
 	if err != nil {
 		return "", nil, fmt.Errorf("无效的 psk: %w", err)
 	}
 
-	// 解码 AuthKey
 	var authKeyBytes []byte
 	if config.AuthKey != "" {
 		authKeyBytes, err = encoding_base64.StdEncoding.DecodeString(config.AuthKey)
@@ -285,13 +718,11 @@ func redeemFromURI(uri string) (tokenB64 string, decryptKey []byte, err error) {
 		}
 	}
 
-	// 使用服务端真实 ExpiresAt
 	expiresAt, err := time.Parse(time.RFC3339, config.ExpiresAt)
 	if err != nil {
 		return "", nil, fmt.Errorf("无效的 expires_at: %w", err)
 	}
 
-	// 将配置转换为 BootstrapConfig token
 	bootstrapPool := make([]token.GatewayEndpoint, 0, len(config.Endpoints))
 	for _, ep := range config.Endpoints {
 		bootstrapPool = append(bootstrapPool, token.GatewayEndpoint{
@@ -310,13 +741,11 @@ func redeemFromURI(uri string) (tokenB64 string, decryptKey []byte, err error) {
 		ExpiresAt:       expiresAt,
 	}
 
-	// 生成临时加密密钥
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
 		return "", nil, fmt.Errorf("generate key failed: %w", err)
 	}
 
-	// 编码为 base64 token
 	tokenB64, err = token.TokenToBase64(bootstrapConfig, key)
 	if err != nil {
 		return "", nil, fmt.Errorf("encode token failed: %w", err)
@@ -366,7 +795,6 @@ func forwardTUNToTunnel(ctx context.Context, device tun.TUNDevice, client *gtcli
 			if ctx.Err() != nil {
 				return
 			}
-			// Trigger reconnect on error
 			_ = client.Reconnect(ctx)
 			continue
 		}
@@ -439,11 +867,11 @@ func formatBytes(b int64) string {
 	}
 }
 
-func printStatus(format string, args ...interface{}) {
+func printStatus(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "[%s] %s\n", DisguiseName, fmt.Sprintf(format, args...))
 }
 
-func fatal(format string, args ...interface{}) {
+func fatal(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "[%s] FATAL: %s\n", DisguiseName, fmt.Sprintf(format, args...))
 	memsafe.WipeAll()
 	os.Exit(1)

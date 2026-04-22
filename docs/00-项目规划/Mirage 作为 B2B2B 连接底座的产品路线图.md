@@ -1,3 +1,9 @@
+---
+Status: archived
+Target Truth: docs/governance/boundaries/product-scope.md
+Migration: B2B2B 方向已在"方向确认纪要"中被明确否决，结论已迁移到 product-scope.md 的排除项
+---
+
 # Mirage 作为 B2B2B 连接底座的产品路线图
 
 ## 一、文档目标

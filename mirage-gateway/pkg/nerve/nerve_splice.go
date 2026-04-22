@@ -22,8 +22,8 @@ import (
 	"time"
 
 	"mirage-gateway/pkg/api"
-	pb "mirage-proto/gen"
 	"mirage-gateway/pkg/ebpf"
+	pb "mirage-proto/gen"
 )
 
 // ============================================================
@@ -370,13 +370,10 @@ func (md *MotorDownlink) ApplyDesiredState(cfg *DesiredStateConfig) (applied boo
 
 	// 写入 NPM 配置到 nextSlot
 	if npmMap := md.loader.GetMap("npm_config_map"); npmMap != nil {
-		npmCfg := struct {
-			Enabled     uint32
-			PaddingRate uint32
-		}{1, cfg.PaddingRate}
-		key := nextSlot
+		npmCfg := ebpf.NewDefaultNPMConfig(cfg.PaddingRate)
+		key := uint32(0)
 		if err := npmMap.Put(&key, &npmCfg); err != nil {
-			return false, fmt.Errorf("写入 npm_config_map[%d] 失败: %w", nextSlot, err)
+			return false, fmt.Errorf("写入 npm_config_map[%d] 失败: %w", key, err)
 		}
 	}
 

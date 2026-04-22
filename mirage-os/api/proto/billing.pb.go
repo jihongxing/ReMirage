@@ -82,11 +82,14 @@ func (PackageType) EnumDescriptor() ([]byte, []int) {
 type LogType int32
 
 const (
-	LogType_LOG_UNKNOWN  LogType = 0
-	LogType_LOG_TRAFFIC  LogType = 1 // 流量消费
-	LogType_LOG_DEPOSIT  LogType = 2 // 充值
-	LogType_LOG_PURCHASE LogType = 3 // 购买流量包
-	LogType_LOG_REFUND   LogType = 4 // 退款
+	LogType_LOG_UNKNOWN      LogType = 0
+	LogType_LOG_TRAFFIC      LogType = 1 // 流量消费
+	LogType_LOG_DEPOSIT      LogType = 2 // 充值
+	LogType_LOG_PURCHASE     LogType = 3 // 购买流量包
+	LogType_LOG_REFUND       LogType = 4 // 退款
+	LogType_LOG_SUBSCRIPTION LogType = 5 // 等级订阅
+	LogType_LOG_FUSE         LogType = 6 // 配额熔断
+	LogType_LOG_DOWNGRADE    LogType = 7 // 等级降级
 )
 
 // Enum value maps for LogType.
@@ -97,13 +100,19 @@ var (
 		2: "LOG_DEPOSIT",
 		3: "LOG_PURCHASE",
 		4: "LOG_REFUND",
+		5: "LOG_SUBSCRIPTION",
+		6: "LOG_FUSE",
+		7: "LOG_DOWNGRADE",
 	}
 	LogType_value = map[string]int32{
-		"LOG_UNKNOWN":  0,
-		"LOG_TRAFFIC":  1,
-		"LOG_DEPOSIT":  2,
-		"LOG_PURCHASE": 3,
-		"LOG_REFUND":   4,
+		"LOG_UNKNOWN":      0,
+		"LOG_TRAFFIC":      1,
+		"LOG_DEPOSIT":      2,
+		"LOG_PURCHASE":     3,
+		"LOG_REFUND":       4,
+		"LOG_SUBSCRIPTION": 5,
+		"LOG_FUSE":         6,
+		"LOG_DOWNGRADE":    7,
 	}
 )
 
@@ -1058,6 +1067,142 @@ func (x *BillingLog) GetLogType() LogType {
 	return LogType_LOG_UNKNOWN
 }
 
+type TierSubscriptionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AccountId     string                 `protobuf:"bytes,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"` // 账户 ID
+	PlanType      string                 `protobuf:"bytes,2,opt,name=plan_type,json=planType,proto3" json:"plan_type,omitempty"`    // 月费产品类型: plan_standard_monthly / plan_platinum_monthly / plan_diamond_monthly
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TierSubscriptionRequest) Reset() {
+	*x = TierSubscriptionRequest{}
+	mi := &file_api_proto_billing_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TierSubscriptionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TierSubscriptionRequest) ProtoMessage() {}
+
+func (x *TierSubscriptionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_billing_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TierSubscriptionRequest.ProtoReflect.Descriptor instead.
+func (*TierSubscriptionRequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_billing_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *TierSubscriptionRequest) GetAccountId() string {
+	if x != nil {
+		return x.AccountId
+	}
+	return ""
+}
+
+func (x *TierSubscriptionRequest) GetPlanType() string {
+	if x != nil {
+		return x.PlanType
+	}
+	return ""
+}
+
+type TierSubscriptionResponse struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Success          bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Message          string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	CostUsd          uint64                 `protobuf:"varint,3,opt,name=cost_usd,json=costUsd,proto3" json:"cost_usd,omitempty"`                            // 费用（美分）
+	RemainingBalance uint64                 `protobuf:"varint,4,opt,name=remaining_balance,json=remainingBalance,proto3" json:"remaining_balance,omitempty"` // 剩余余额（美分）
+	NewCellLevel     int32                  `protobuf:"varint,5,opt,name=new_cell_level,json=newCellLevel,proto3" json:"new_cell_level,omitempty"`           // 新等级
+	ExpiresAt        int64                  `protobuf:"varint,6,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`                      // 订阅到期时间
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *TierSubscriptionResponse) Reset() {
+	*x = TierSubscriptionResponse{}
+	mi := &file_api_proto_billing_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TierSubscriptionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TierSubscriptionResponse) ProtoMessage() {}
+
+func (x *TierSubscriptionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_billing_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TierSubscriptionResponse.ProtoReflect.Descriptor instead.
+func (*TierSubscriptionResponse) Descriptor() ([]byte, []int) {
+	return file_api_proto_billing_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *TierSubscriptionResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *TierSubscriptionResponse) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *TierSubscriptionResponse) GetCostUsd() uint64 {
+	if x != nil {
+		return x.CostUsd
+	}
+	return 0
+}
+
+func (x *TierSubscriptionResponse) GetRemainingBalance() uint64 {
+	if x != nil {
+		return x.RemainingBalance
+	}
+	return 0
+}
+
+func (x *TierSubscriptionResponse) GetNewCellLevel() int32 {
+	if x != nil {
+		return x.NewCellLevel
+	}
+	return 0
+}
+
+func (x *TierSubscriptionResponse) GetExpiresAt() int64 {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return 0
+}
+
 var File_api_proto_billing_proto protoreflect.FileDescriptor
 
 const file_api_proto_billing_proto_rawDesc = "" +
@@ -1154,28 +1299,44 @@ const file_api_proto_billing_proto_rawDesc = "" +
 	"\bcost_usd\x18\x06 \x01(\x04R\acostUsd\x12\x17\n" +
 	"\acell_id\x18\a \x01(\tR\x06cellId\x12'\n" +
 	"\x0fcost_multiplier\x18\b \x01(\x02R\x0ecostMultiplier\x125\n" +
-	"\blog_type\x18\t \x01(\x0e2\x1a.mirage.billing.v1.LogTypeR\alogType*}\n" +
+	"\blog_type\x18\t \x01(\x0e2\x1a.mirage.billing.v1.LogTypeR\alogType\"U\n" +
+	"\x17TierSubscriptionRequest\x12\x1d\n" +
+	"\n" +
+	"account_id\x18\x01 \x01(\tR\taccountId\x12\x1b\n" +
+	"\tplan_type\x18\x02 \x01(\tR\bplanType\"\xdb\x01\n" +
+	"\x18TierSubscriptionResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\x12\x19\n" +
+	"\bcost_usd\x18\x03 \x01(\x04R\acostUsd\x12+\n" +
+	"\x11remaining_balance\x18\x04 \x01(\x04R\x10remainingBalance\x12$\n" +
+	"\x0enew_cell_level\x18\x05 \x01(\x05R\fnewCellLevel\x12\x1d\n" +
+	"\n" +
+	"expires_at\x18\x06 \x01(\x03R\texpiresAt*}\n" +
 	"\vPackageType\x12\x13\n" +
 	"\x0fPACKAGE_UNKNOWN\x10\x00\x12\x10\n" +
 	"\fPACKAGE_10GB\x10\x01\x12\x10\n" +
 	"\fPACKAGE_50GB\x10\x02\x12\x11\n" +
 	"\rPACKAGE_100GB\x10\x03\x12\x11\n" +
 	"\rPACKAGE_500GB\x10\x04\x12\x0f\n" +
-	"\vPACKAGE_1TB\x10\x05*^\n" +
+	"\vPACKAGE_1TB\x10\x05*\x95\x01\n" +
 	"\aLogType\x12\x0f\n" +
 	"\vLOG_UNKNOWN\x10\x00\x12\x0f\n" +
 	"\vLOG_TRAFFIC\x10\x01\x12\x0f\n" +
 	"\vLOG_DEPOSIT\x10\x02\x12\x10\n" +
 	"\fLOG_PURCHASE\x10\x03\x12\x0e\n" +
 	"\n" +
-	"LOG_REFUND\x10\x042\xd6\x03\n" +
+	"LOG_REFUND\x10\x04\x12\x14\n" +
+	"\x10LOG_SUBSCRIPTION\x10\x05\x12\f\n" +
+	"\bLOG_FUSE\x10\x06\x12\x11\n" +
+	"\rLOG_DOWNGRADE\x10\a2\xcb\x04\n" +
 	"\x0eBillingService\x12b\n" +
 	"\rCreateAccount\x12'.mirage.billing.v1.CreateAccountRequest\x1a(.mirage.billing.v1.CreateAccountResponse\x12P\n" +
 	"\aDeposit\x12!.mirage.billing.v1.DepositRequest\x1a\".mirage.billing.v1.DepositResponse\x12S\n" +
 	"\n" +
 	"GetBalance\x12!.mirage.billing.v1.BalanceRequest\x1a\".mirage.billing.v1.BalanceResponse\x12X\n" +
 	"\rPurchaseQuota\x12\".mirage.billing.v1.PurchaseRequest\x1a#.mirage.billing.v1.PurchaseResponse\x12_\n" +
-	"\x0eGetBillingLogs\x12%.mirage.billing.v1.BillingLogsRequest\x1a&.mirage.billing.v1.BillingLogsResponseB\x18Z\x16mirage-os/api/proto;pbb\x06proto3"
+	"\x0eGetBillingLogs\x12%.mirage.billing.v1.BillingLogsRequest\x1a&.mirage.billing.v1.BillingLogsResponse\x12s\n" +
+	"\x18PurchaseTierSubscription\x12*.mirage.billing.v1.TierSubscriptionRequest\x1a+.mirage.billing.v1.TierSubscriptionResponseB\x18Z\x16mirage-os/api/proto;pbb\x06proto3"
 
 var (
 	file_api_proto_billing_proto_rawDescOnce sync.Once
@@ -1190,23 +1351,25 @@ func file_api_proto_billing_proto_rawDescGZIP() []byte {
 }
 
 var file_api_proto_billing_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_api_proto_billing_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_api_proto_billing_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_api_proto_billing_proto_goTypes = []any{
-	(PackageType)(0),              // 0: mirage.billing.v1.PackageType
-	(LogType)(0),                  // 1: mirage.billing.v1.LogType
-	(*CreateAccountRequest)(nil),  // 2: mirage.billing.v1.CreateAccountRequest
-	(*CreateAccountResponse)(nil), // 3: mirage.billing.v1.CreateAccountResponse
-	(*DepositRequest)(nil),        // 4: mirage.billing.v1.DepositRequest
-	(*DepositResponse)(nil),       // 5: mirage.billing.v1.DepositResponse
-	(*BalanceRequest)(nil),        // 6: mirage.billing.v1.BalanceRequest
-	(*BalanceResponse)(nil),       // 7: mirage.billing.v1.BalanceResponse
-	(*QuotaInfo)(nil),             // 8: mirage.billing.v1.QuotaInfo
-	(*CellAllocation)(nil),        // 9: mirage.billing.v1.CellAllocation
-	(*PurchaseRequest)(nil),       // 10: mirage.billing.v1.PurchaseRequest
-	(*PurchaseResponse)(nil),      // 11: mirage.billing.v1.PurchaseResponse
-	(*BillingLogsRequest)(nil),    // 12: mirage.billing.v1.BillingLogsRequest
-	(*BillingLogsResponse)(nil),   // 13: mirage.billing.v1.BillingLogsResponse
-	(*BillingLog)(nil),            // 14: mirage.billing.v1.BillingLog
+	(PackageType)(0),                 // 0: mirage.billing.v1.PackageType
+	(LogType)(0),                     // 1: mirage.billing.v1.LogType
+	(*CreateAccountRequest)(nil),     // 2: mirage.billing.v1.CreateAccountRequest
+	(*CreateAccountResponse)(nil),    // 3: mirage.billing.v1.CreateAccountResponse
+	(*DepositRequest)(nil),           // 4: mirage.billing.v1.DepositRequest
+	(*DepositResponse)(nil),          // 5: mirage.billing.v1.DepositResponse
+	(*BalanceRequest)(nil),           // 6: mirage.billing.v1.BalanceRequest
+	(*BalanceResponse)(nil),          // 7: mirage.billing.v1.BalanceResponse
+	(*QuotaInfo)(nil),                // 8: mirage.billing.v1.QuotaInfo
+	(*CellAllocation)(nil),           // 9: mirage.billing.v1.CellAllocation
+	(*PurchaseRequest)(nil),          // 10: mirage.billing.v1.PurchaseRequest
+	(*PurchaseResponse)(nil),         // 11: mirage.billing.v1.PurchaseResponse
+	(*BillingLogsRequest)(nil),       // 12: mirage.billing.v1.BillingLogsRequest
+	(*BillingLogsResponse)(nil),      // 13: mirage.billing.v1.BillingLogsResponse
+	(*BillingLog)(nil),               // 14: mirage.billing.v1.BillingLog
+	(*TierSubscriptionRequest)(nil),  // 15: mirage.billing.v1.TierSubscriptionRequest
+	(*TierSubscriptionResponse)(nil), // 16: mirage.billing.v1.TierSubscriptionResponse
 }
 var file_api_proto_billing_proto_depIdxs = []int32{
 	8,  // 0: mirage.billing.v1.BalanceResponse.quota:type_name -> mirage.billing.v1.QuotaInfo
@@ -1219,13 +1382,15 @@ var file_api_proto_billing_proto_depIdxs = []int32{
 	6,  // 7: mirage.billing.v1.BillingService.GetBalance:input_type -> mirage.billing.v1.BalanceRequest
 	10, // 8: mirage.billing.v1.BillingService.PurchaseQuota:input_type -> mirage.billing.v1.PurchaseRequest
 	12, // 9: mirage.billing.v1.BillingService.GetBillingLogs:input_type -> mirage.billing.v1.BillingLogsRequest
-	3,  // 10: mirage.billing.v1.BillingService.CreateAccount:output_type -> mirage.billing.v1.CreateAccountResponse
-	5,  // 11: mirage.billing.v1.BillingService.Deposit:output_type -> mirage.billing.v1.DepositResponse
-	7,  // 12: mirage.billing.v1.BillingService.GetBalance:output_type -> mirage.billing.v1.BalanceResponse
-	11, // 13: mirage.billing.v1.BillingService.PurchaseQuota:output_type -> mirage.billing.v1.PurchaseResponse
-	13, // 14: mirage.billing.v1.BillingService.GetBillingLogs:output_type -> mirage.billing.v1.BillingLogsResponse
-	10, // [10:15] is the sub-list for method output_type
-	5,  // [5:10] is the sub-list for method input_type
+	15, // 10: mirage.billing.v1.BillingService.PurchaseTierSubscription:input_type -> mirage.billing.v1.TierSubscriptionRequest
+	3,  // 11: mirage.billing.v1.BillingService.CreateAccount:output_type -> mirage.billing.v1.CreateAccountResponse
+	5,  // 12: mirage.billing.v1.BillingService.Deposit:output_type -> mirage.billing.v1.DepositResponse
+	7,  // 13: mirage.billing.v1.BillingService.GetBalance:output_type -> mirage.billing.v1.BalanceResponse
+	11, // 14: mirage.billing.v1.BillingService.PurchaseQuota:output_type -> mirage.billing.v1.PurchaseResponse
+	13, // 15: mirage.billing.v1.BillingService.GetBillingLogs:output_type -> mirage.billing.v1.BillingLogsResponse
+	16, // 16: mirage.billing.v1.BillingService.PurchaseTierSubscription:output_type -> mirage.billing.v1.TierSubscriptionResponse
+	11, // [11:17] is the sub-list for method output_type
+	5,  // [5:11] is the sub-list for method input_type
 	5,  // [5:5] is the sub-list for extension type_name
 	5,  // [5:5] is the sub-list for extension extendee
 	0,  // [0:5] is the sub-list for field type_name
@@ -1242,7 +1407,7 @@ func file_api_proto_billing_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_billing_proto_rawDesc), len(file_api_proto_billing_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   13,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
