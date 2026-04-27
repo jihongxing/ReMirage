@@ -76,3 +76,7 @@ scan-results/
 .terraform/
 *.tfstate
 *.tfstate.backup
+
+# CI/Spec tooling
+.jispec-ci/
+.spec/
