@@ -32,11 +32,13 @@
     - _需求: 1.1, 1.2_
 
   - [ ] 1.2 创建 `artifacts/dpi-audit/baseline/extract-baseline-stats.py`
-    - 从真实 pcapng 提取统计数据：
+    - 从真实 pcapng 提取统计数据，按画像族独立输出：
       - 握手指纹：tcp_window / tcp_mss / tcp_wscale / tcp_sack / tcp_timestamps / tls_ext_count / tls_ext_order / JA4
       - 包长分布：前 10 包长度+方向、整体直方图（256 bin）、均值/标准差/熵值/上下行比例
       - IAT 分布：均值/标准差/P50/P95/P99/burst 结构
-    - 输出：`artifacts/dpi-audit/baseline/baseline-stats.csv` + `baseline-distribution.json`（包长 CDF）
+    - 按画像族独立输出：`artifacts/dpi-audit/baseline/{chrome-win,chrome-macos,firefox-linux}/baseline-stats.csv` + `baseline-distribution.json`（包长 CDF）
+    - 同时输出全局混合版本：`artifacts/dpi-audit/baseline/baseline-stats-merged.csv` + `baseline-distribution-merged.json`（三族合并，供 NPM/Jitter 全局校准使用）
+    - 每族 stats 文件必须包含 `profile_family` 字段和连接数量，Capability-Upgrade Gate 按族检查连接数 ≥ 100
     - _需求: 1.1, 1.3_
 
   - [ ] 1.3 校验画像库一致性
@@ -103,7 +105,7 @@
 
   - [ ] 3.6 NPM MIMIC 分布模式 — Go 侧
     - 在 `npm_verifier.go` 或新建 `npm_distribution.go` 中实现 `LoadTargetDistribution(baselinePath string) error`
-    - 从 `baseline-distribution.json` 读取包长直方图，生成 256-bin CDF，写入 `npm_target_distribution_map`
+    - 从 `baseline-distribution-merged.json`（全局混合 CDF）读取包长直方图，生成 256-bin CDF，写入 `npm_target_distribution_map`
     - 在 Gateway 启动时调用，配合 `npm_config_map` 的 `padding_mode=3`
     - _需求: 3.3_
 
@@ -120,7 +122,7 @@
 
   - [ ] 3.8 Jitter IAT 校准 — Go 侧
     - 在 `dna_updater.go` 中新增 `CalibrateFromBaseline(baselineStatsPath string) error`
-    - 从 `baseline-stats.csv` 读取真实 IAT 统计（iat_mean_us / iat_std_us），写入 `dna_template_map`
+    - 从 `baseline-stats-merged.csv`（全局混合 IAT 统计）读取真实 IAT 统计（iat_mean_us / iat_std_us），写入 `dna_template_map`
     - 在 Gateway 启动时调用（在 `LoadAndSyncFingerprints` 之后）
     - _需求: 4.1, 4.2_
 

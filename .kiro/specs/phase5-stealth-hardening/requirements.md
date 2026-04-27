@@ -39,14 +39,14 @@ Phase 2 M6 分类器实验结果显示四个检测面全部 AUC=1.0 / F1=1.0 / A
 
 - 3.1 在 `npm.c` 的 `calculate_padding` 中新增第四种模式 `NPM_MODE_MIMIC`（mode=3）
 - 3.2 MIMIC 模式从 `npm_target_distribution_map`（BPF_MAP_TYPE_ARRAY，256 个 bin）中采样目标包长，每个 bin 存储该包长区间的累积概率
-- 3.3 Go 控制面从真实对照基线的包长直方图生成 CDF，写入 `npm_target_distribution_map`
+- 3.3 Go 控制面从真实对照基线的包长直方图生成 CDF，写入 `npm_target_distribution_map`。本期使用全局混合分布（三个画像族合并），不按 profile_family 分别加载。因此本期不宣称"包长分布与选定画像族跨层一致"，仅宣称"包长分布接近真实 HTTPS 流量混合基线"。若需 per-family 包长 CDF，留作后续任务
 - 3.4 MIMIC 模式保留小包不填充（< min_packet_size）、大包不截断（> target_mtu）的现有行为
 - 3.5 MIMIC 模式的填充效果由 M15 真实实验观测全局 JS 散度，达不到则记录实际 JS/AUC 值；代码级验收只覆盖采样器拟合（JS < 0.10）、单调不截断、受控等式（current_size=0 时 output == sampled_target_len）
 
 ### 4. Jitter IAT 拟态校准
 
 - 4.1 `dna_template_map` 中的 `TargetIATMu` / `TargetIATSigma` 必须从真实对照基线的 IAT 统计值校准，不能使用任意配置值
-- 4.2 Go 控制面在启动时从对照基线数据加载 IAT 参数，写入 `dna_template_map`
+- 4.2 Go 控制面在启动时从对照基线数据加载 IAT 参数，写入 `dna_template_map`。本期使用全局混合 IAT 统计（三个画像族合并），不按 profile_family 分别加载。因此本期不宣称"IAT 分布与选定画像族跨层一致"，仅宣称"IAT 分布接近真实 HTTPS 流量混合基线"。若需 per-family IAT 参数，留作后续任务
 - 4.3 Jitter 扰动后的 IAT 分布验收指标分两层：**代码校准验收**（PBT 断言）：均值偏差 < 20%、标准差偏差 < 30%。**实验观测指标**（M15 记录但不作为 PBT 断言）：P95 偏差、KS 检验 p-value。原因：当前 `dna_template_map` 只有 `TargetIATMu` / `TargetIATSigma` 两个字段，仅靠 mean/std 无法精确控制 P95；若需代码级 P95 控制，需后续在 `dna_template_map` 增加分位数字段或引入经验 CDF 模型
 - 4.4 `jitter.c` 的 `jitter_lite_egress` 在无 `dna_template` 时的回退行为保持不变（使用 `jitter_config` 的 gaussian_sample）
 
