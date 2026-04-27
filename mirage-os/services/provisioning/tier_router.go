@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"mirage-os/pkg/models"
+	"mirage-os/pkg/redact"
 	"sort"
 	"sync"
 
@@ -126,7 +127,7 @@ func (r *TierRouter) AllocateGateway(userID string) (*GatewayRoute, error) {
 			allocatedTier = level
 			if level < tier {
 				log.Printf("⚠️ [TierRouter] 用户等级 %s(%d) 资源池无可用节点，降级到 %s(%d) 资源池: user=%s",
-					TierLabel(tier), tier, TierLabel(level), level, userID)
+					TierLabel(tier), tier, TierLabel(level), level, redact.Token(userID))
 			}
 			break
 		}
@@ -165,7 +166,7 @@ func (r *TierRouter) AllocateGateway(userID string) (*GatewayRoute, error) {
 	}
 
 	log.Printf("✅ [TierRouter] 分配 %s 节点: user=%s, gw=%s, ip=%s",
-		TierLabel(allocatedTier), userID, best.GatewayID, best.IPAddress)
+		TierLabel(allocatedTier), redact.Token(userID), best.GatewayID, redact.IP(best.IPAddress))
 
 	return best, nil
 }

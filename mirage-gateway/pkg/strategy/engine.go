@@ -3,6 +3,8 @@
 package strategy
 
 import (
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"log"
 	"sync"
@@ -13,11 +15,11 @@ import (
 type DefenseLevel int
 
 const (
-	LevelLow    DefenseLevel = 1  // 低威胁
-	LevelMedium DefenseLevel = 2  // 中威胁
-	LevelHigh   DefenseLevel = 3  // 高威胁
-	LevelCrit   DefenseLevel = 4  // 严重威胁
-	LevelMax    DefenseLevel = 5  // 极限防御
+	LevelLow    DefenseLevel = 1 // 低威胁
+	LevelMedium DefenseLevel = 2 // 中威胁
+	LevelHigh   DefenseLevel = 3 // 高威胁
+	LevelCrit   DefenseLevel = 4 // 严重威胁
+	LevelMax    DefenseLevel = 5 // 极限防御
 )
 
 // StrategyEngine 策略引擎
@@ -25,6 +27,8 @@ type StrategyEngine struct {
 	currentLevel   DefenseLevel
 	threatCount    uint64
 	lastAdjustTime time.Time
+	cachedParams   *DefenseParams
+	adjustInterval time.Duration
 	mu             sync.RWMutex
 	callback       func(level DefenseLevel) error
 }
@@ -40,11 +44,14 @@ type DefenseParams struct {
 
 // NewStrategyEngine 创建策略引擎
 func NewStrategyEngine(callback func(level DefenseLevel) error) *StrategyEngine {
-	return &StrategyEngine{
+	se := &StrategyEngine{
 		currentLevel:   LevelLow,
 		lastAdjustTime: time.Now(),
 		callback:       callback,
 	}
+	se.cachedParams = se.regenerateParams()
+	se.adjustInterval = randomAdjustInterval()
+	return se
 }
 
 // UpdateByThreat 根据威胁更新策略
@@ -57,11 +64,13 @@ func (se *StrategyEngine) UpdateByThreat(threatType uint8, severity uint32) {
 	// 计算新的防御等级
 	newLevel := se.calculateLevel(threatType, severity)
 
-	// 如果等级变化，且距离上次调整超过 10 秒
-	if newLevel != se.currentLevel && time.Since(se.lastAdjustTime) > 10*time.Second {
+	// 如果等级变化，且距离上次调整超过随机间隔
+	if newLevel != se.currentLevel && time.Since(se.lastAdjustTime) > se.adjustInterval {
 		oldLevel := se.currentLevel
 		se.currentLevel = newLevel
 		se.lastAdjustTime = time.Now()
+		se.cachedParams = se.regenerateParams()
+		se.adjustInterval = randomAdjustInterval()
 
 		log.Printf("🔄 [策略引擎] 威胁等级变化: %s → %s (威胁计数: %d)",
 			levelName(oldLevel), levelName(newLevel), se.threatCount)
@@ -71,7 +80,7 @@ func (se *StrategyEngine) UpdateByThreat(threatType uint8, severity uint32) {
 			if err := se.callback(newLevel); err != nil {
 				log.Printf("❌ [策略引擎] 更新防御参数失败: %v", err)
 			} else {
-				log.Printf("✅ [策略引擎] 防御参数已更新: %s", se.GetParams().String())
+				log.Printf("✅ [策略引擎] 防御参数已更新: %s", se.cachedParams.String())
 			}
 		}
 	}
@@ -116,12 +125,12 @@ func (se *StrategyEngine) calculateLevel(threatType uint8, severity uint32) Defe
 	return baseLevel
 }
 
-// GetParams 获取当前防御参数
+// GetParams 获取当前防御参数（返回缓存的带偏移参数）
 func (se *StrategyEngine) GetParams() *DefenseParams {
 	se.mu.RLock()
 	defer se.mu.RUnlock()
 
-	return levelToParams(se.currentLevel)
+	return se.cachedParams
 }
 
 // GetLevel 获取当前防御等级
@@ -139,40 +148,88 @@ func (se *StrategyEngine) ResetThreatCount() {
 	log.Println("🔄 [策略引擎] 威胁计数已重置")
 }
 
+// applyRandomOffset 对单个 uint32 参数应用 ±ratio 随机偏移（使用 crypto/rand）
+func applyRandomOffset(base uint32, ratio float64) uint32 {
+	var buf [4]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return base // 降级：返回原值
+	}
+	r := binary.LittleEndian.Uint32(buf[:])
+	// 将 r 映射到 [-ratio, +ratio]
+	normalized := (float64(r)/float64(^uint32(0)))*2*ratio - ratio
+	result := float64(base) * (1.0 + normalized)
+	if result < 0 {
+		return 0
+	}
+	return uint32(result)
+}
+
+// regenerateParams 生成带 ±20% 随机偏移的防御参数并返回
+func (se *StrategyEngine) regenerateParams() *DefenseParams {
+	base := levelToParams(se.currentLevel)
+	const ratio = 0.20
+	return &DefenseParams{
+		Level:          base.Level,
+		JitterMeanUs:   applyRandomOffset(base.JitterMeanUs, ratio),
+		JitterStddevUs: applyRandomOffset(base.JitterStddevUs, ratio),
+		NoiseIntensity: applyRandomOffset(base.NoiseIntensity, ratio),
+		PaddingRate:    applyRandomOffset(base.PaddingRate, ratio),
+	}
+}
+
+// randomAdjustInterval 返回 [8s, 15s] 范围内的随机间隔（使用 crypto/rand）
+func randomAdjustInterval() time.Duration {
+	var buf [4]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return 10 * time.Second // 降级：返回固定值
+	}
+	r := binary.LittleEndian.Uint32(buf[:])
+	// 映射到 [8000, 15000] 毫秒
+	ms := 8000 + (r % 7001)
+	return time.Duration(ms) * time.Millisecond
+}
+
+// GetAdjustInterval 获取当前调整间隔（用于测试）
+func (se *StrategyEngine) GetAdjustInterval() time.Duration {
+	se.mu.RLock()
+	defer se.mu.RUnlock()
+	return se.adjustInterval
+}
+
 // levelToParams 将防御等级转换为具体参数
 func levelToParams(level DefenseLevel) *DefenseParams {
 	switch level {
 	case LevelLow:
 		return &DefenseParams{
 			Level:          LevelLow,
-			JitterMeanUs:   10000,  // 10ms
-			JitterStddevUs: 3000,   // 3ms
-			NoiseIntensity: 5,      // 5%
-			PaddingRate:    10,     // 10%
+			JitterMeanUs:   10000, // 10ms
+			JitterStddevUs: 3000,  // 3ms
+			NoiseIntensity: 5,     // 5%
+			PaddingRate:    10,    // 10%
 		}
 	case LevelMedium:
 		return &DefenseParams{
 			Level:          LevelMedium,
-			JitterMeanUs:   30000,  // 30ms
-			JitterStddevUs: 10000,  // 10ms
-			NoiseIntensity: 15,     // 15%
-			PaddingRate:    20,     // 20%
+			JitterMeanUs:   30000, // 30ms
+			JitterStddevUs: 10000, // 10ms
+			NoiseIntensity: 15,    // 15%
+			PaddingRate:    20,    // 20%
 		}
 	case LevelHigh:
 		return &DefenseParams{
 			Level:          LevelHigh,
-			JitterMeanUs:   50000,  // 50ms
-			JitterStddevUs: 15000,  // 15ms
-			NoiseIntensity: 20,     // 20%
-			PaddingRate:    25,     // 25%
+			JitterMeanUs:   50000, // 50ms
+			JitterStddevUs: 15000, // 15ms
+			NoiseIntensity: 20,    // 20%
+			PaddingRate:    25,    // 25%
 		}
 	case LevelCrit:
 		return &DefenseParams{
 			Level:          LevelCrit,
-			JitterMeanUs:   80000,  // 80ms
-			JitterStddevUs: 25000,  // 25ms
-			NoiseIntensity: 25,     // 25%
-			PaddingRate:    30,     // 30%
+			JitterMeanUs:   80000, // 80ms
+			JitterStddevUs: 25000, // 25ms
+			NoiseIntensity: 25,    // 25%
+			PaddingRate:    30,    // 30%
 		}
 	case LevelMax:
 		return &DefenseParams{

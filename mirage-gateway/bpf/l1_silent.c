@@ -7,7 +7,17 @@
  */
 
 #include "common.h"
-#include <linux/icmp.h>
+
+/* 内联 ICMP 头定义，避免 <linux/icmp.h> 拉入 <sys/socket.h> 导致 BPF 编译失败 */
+struct icmphdr {
+    __u8  type;
+    __u8  code;
+    __sum16 checksum;
+    union {
+        struct { __be16 id; __be16 sequence; } echo;
+        __be32 gateway;
+    } un;
+};
 
 SEC("tc")
 int l1_silent_egress(struct __sk_buff *skb)

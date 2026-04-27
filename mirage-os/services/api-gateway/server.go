@@ -11,6 +11,7 @@ import (
 	pb "mirage-os/api/proto"
 	"mirage-os/pkg/geo"
 	"mirage-os/pkg/models"
+	"mirage-os/pkg/redact"
 
 	"github.com/go-redis/redis/v8"
 	"gorm.io/gorm"
@@ -189,7 +190,7 @@ func (s *Server) SyncHeartbeat(ctx context.Context, req *pb.HeartbeatRequest) (*
 	if remainingQuota == 0 {
 		resp.RemainingQuota = 0
 		resp.Message = "配额已耗尽，服务已熔断"
-		log.Printf("🚨 [熔断] Gateway=%s, 用户=%s, 配额耗尽", req.GatewayId, gateway.UserID)
+		log.Printf("🚨 [熔断] Gateway=%s, 用户=%s, 配额耗尽", req.GatewayId, redact.Token(gateway.UserID))
 		resp.DefenseConfig = &pb.DefenseConfig{
 			DefenseLevel:   5,
 			JitterMeanUs:   100000,
@@ -394,7 +395,7 @@ func (s *Server) ReportTraffic(ctx context.Context, req *pb.TrafficReport) (*pb.
 // ReportThreat 威胁上报（实时）
 func (s *Server) ReportThreat(ctx context.Context, req *pb.ThreatReport) (*pb.ThreatResponse, error) {
 	log.Printf("🚨 [威胁] Gateway=%s, 类型=%s, 源IP=%s, 严重程度=%d",
-		req.GatewayId, req.ThreatType.String(), req.SourceIp, req.Severity)
+		req.GatewayId, req.ThreatType.String(), redact.IP(req.SourceIp), req.Severity)
 
 	resp := &pb.ThreatResponse{
 		Success: true,
@@ -436,8 +437,8 @@ func (s *Server) ReportThreat(ctx context.Context, req *pb.ThreatReport) (*pb.Th
 	if threat.HitCount >= s.ThreatThreshold {
 		resp.Action = pb.ThreatAction_ACTION_BLOCK_IP
 		resp.NewDefenseLevel = 5
-		resp.Message = fmt.Sprintf("IP %s 已触发全局封禁（命中 %d 次）", req.SourceIp, threat.HitCount)
-		log.Printf("🚫 [全局封禁] IP=%s, 命中次数=%d", req.SourceIp, threat.HitCount)
+		resp.Message = fmt.Sprintf("IP %s 已触发全局封禁（命中 %d 次）", redact.IP(req.SourceIp), threat.HitCount)
+		log.Printf("🚫 [全局封禁] IP=%s, 命中次数=%d", redact.IP(req.SourceIp), threat.HitCount)
 	} else if req.Severity >= 8 {
 		resp.Action = pb.ThreatAction_ACTION_EMERGENCY_SHUTDOWN
 		resp.NewDefenseLevel = 5

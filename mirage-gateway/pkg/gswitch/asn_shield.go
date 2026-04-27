@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"mirage-gateway/pkg/redact"
 	"sync"
 	"time"
 )
@@ -105,7 +106,7 @@ func (as *ASNShield) ValidateASN(ip string, asn uint32) bool {
 	cb := as.onASNRejected
 	as.mu.RUnlock()
 
-	log.Printf("🚨 [ASNShield] 拒绝连接: IP=%s, ASN=%d (不在可信白名单)", ip, asn)
+	log.Printf("🚨 [ASNShield] 拒绝连接: IP=%s, ASN=%d (不在可信白名单)", redact.RedactIP(ip), asn)
 	if cb != nil {
 		go cb(ip, asn)
 	}

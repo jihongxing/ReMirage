@@ -125,17 +125,17 @@ func DefaultOrchestratorConfig() OrchestratorConfig {
 
 // Orchestrator 多路径自适应调度器
 type Orchestrator struct {
-	mu         sync.RWMutex
-	activePath *ManagedPath
-	paths      map[TransportType]*ManagedPath
-	auditor    *LinkAuditor
-	fec        *FECProcessor
-	mpBuffer   *MultiPathBuffer
-	config     OrchestratorConfig
-	state      OrchestratorState
-	epoch      uint32
-	wssConn    TransportConn // WSS 连接引用，用于 WebRTC Phase 2 信令
-	dialFuncs  map[TransportType]func(ctx context.Context) (TransportConn, error)
+	mu           sync.RWMutex
+	activePath   *ManagedPath
+	paths        map[TransportType]*ManagedPath
+	auditor      *LinkAuditor
+	fec          *FECProcessor
+	switchBuffer *SwitchBuffer
+	config       OrchestratorConfig
+	state        OrchestratorState
+	epoch        uint32
+	wssConn      TransportConn // WSS 连接引用，用于 WebRTC Phase 2 信令
+	dialFuncs    map[TransportType]func(ctx context.Context) (TransportConn, error)
 
 	onPacketRecv  func(data []byte)
 	onStateChange func(old, new OrchestratorState)
@@ -153,14 +153,15 @@ func NewOrchestrator(config OrchestratorConfig) *Orchestrator {
 		WindowSize:     config.ProbeCycle,
 	}
 	return &Orchestrator{
-		paths:   make(map[TransportType]*ManagedPath),
-		auditor: NewLinkAuditor(thresholds),
-		fec:     NewFECProcessor(),
-		config:  config,
-		state:   StateOrcProbing,
-		stopCh:  make(chan struct{}),
-		ctx:     ctx,
-		cancel:  cancel,
+		paths:        make(map[TransportType]*ManagedPath),
+		auditor:      NewLinkAuditor(thresholds),
+		fec:          NewFECProcessor(),
+		switchBuffer: NewSwitchBuffer(),
+		config:       config,
+		state:        StateOrcProbing,
+		stopCh:       make(chan struct{}),
+		ctx:          ctx,
+		cancel:       cancel,
 	}
 }
 
@@ -647,15 +648,14 @@ func typeToPriority(t TransportType) PriorityLevel {
 // demote 降格到下一可用优先级路径
 func (o *Orchestrator) demote() error {
 	o.mu.Lock()
-	defer o.mu.Unlock()
 
 	if o.activePath == nil {
+		o.mu.Unlock()
 		return fmt.Errorf("无活跃路径")
 	}
 
 	o.setState(StateOrcDegrading)
 	currentPriority := o.activePath.Priority
-	newEpoch := o.nextEpoch()
 
 	// 查找下一可用路径（优先级更低）
 	var bestPath *ManagedPath
@@ -669,45 +669,86 @@ func (o *Orchestrator) demote() error {
 
 	if bestPath == nil {
 		o.setState(StateOrcActive)
+		o.mu.Unlock()
 		return fmt.Errorf("无可用降格路径")
 	}
 
-	log.Printf("⬇️  [Orchestrator] 降格: %d → %d (epoch=%d)", o.activePath.Type, bestPath.Type, newEpoch)
+	oldPath := o.activePath
+	o.mu.Unlock()
 
-	// 标记旧路径不可用
-	o.activePath.Available = false
-	o.activePath = bestPath
-	o.notifyFECMTU(bestPath.Conn)
-	o.setState(StateOrcActive)
-
-	_ = newEpoch // Epoch 已通过 nextEpoch() 递增，序列化时自动使用
-	return nil
+	return o.executeSwitchTransaction(oldPath, bestPath)
 }
 
 // promote 升格到指定高优先级路径
 func (o *Orchestrator) promote(target TransportType) error {
 	o.mu.Lock()
-	defer o.mu.Unlock()
 
 	targetPath, ok := o.paths[target]
 	if !ok || !targetPath.Available || !targetPath.Enabled {
+		o.mu.Unlock()
 		return fmt.Errorf("目标路径 %d 不可用", target)
 	}
 
 	if o.activePath != nil && targetPath.Priority >= o.activePath.Priority {
+		o.mu.Unlock()
 		return fmt.Errorf("目标路径优先级不高于当前路径")
 	}
 
 	o.setState(StateOrcPromoting)
+	oldPath := o.activePath
+	o.mu.Unlock()
+
+	return o.executeSwitchTransaction(oldPath, targetPath)
+}
+
+// executeSwitchTransaction 执行原子切换事务：
+// EnableDualSend → 双发窗口 → epoch barrier → notifyFECMTU → 收敛 activePath
+// 回滚条件：新路径连续 N 次发送失败 → 回滚到旧路径，epoch 不变。
+// CID rotation 降级为技术债务（quic-go 公开 API 不支持）。
+func (o *Orchestrator) executeSwitchTransaction(oldPath, newPath *ManagedPath) error {
+	// 1. 启动双发选收（duration <= 0 触发随机 [80ms, 200ms]）
+	if err := o.switchBuffer.EnableDualSend(oldPath.Conn, newPath.Conn, 0); err != nil {
+		o.mu.Lock()
+		o.setState(StateOrcActive)
+		o.mu.Unlock()
+		return fmt.Errorf("enable dual-send: %w", err)
+	}
+
+	duration := o.switchBuffer.Duration()
+	log.Printf("🔀 [Orchestrator] 双发选收启动: %d → %d (duration=%v)",
+		oldPath.Type, newPath.Type, duration)
+
+	// 2. 等待双发窗口结束
+	time.Sleep(duration)
+
+	// 3. 关闭双发模式
+	o.switchBuffer.DisableDualSend()
+
+	// 4. 检查是否需要回滚
+	if o.switchBuffer.ShouldRollback() {
+		log.Printf("⚠️  [Orchestrator] 新路径不可用，回滚到旧路径 (type=%d)", oldPath.Type)
+		o.mu.Lock()
+		o.activePath = oldPath
+		o.setState(StateOrcActive)
+		o.mu.Unlock()
+		// 回滚：epoch 不变
+		return nil
+	}
+
+	// 5. epoch barrier 递增
 	newEpoch := o.nextEpoch()
 
-	log.Printf("⬆️  [Orchestrator] 升格: %d → %d (epoch=%d)",
-		o.activePath.Type, target, newEpoch)
+	// 6. 通知 FEC 调整 MTU
+	o.notifyFECMTU(newPath.Conn)
 
-	o.activePath = targetPath
-	o.notifyFECMTU(targetPath.Conn)
+	// 7. 收敛到新 activePath
+	o.mu.Lock()
+	oldPath.Available = false
+	o.activePath = newPath
 	o.setState(StateOrcActive)
+	o.mu.Unlock()
 
+	log.Printf("✅ [Orchestrator] 切换完成: → %d (epoch=%d)", newPath.Type, newEpoch)
 	return nil
 }
 

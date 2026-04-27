@@ -1,3 +1,13 @@
+# ============================================================================
+# 密钥注入方式说明
+# ----------------------------------------------------------------------------
+# 本 Compose 文件通过宿主机环境变量注入密钥（如 MIRAGE_DB_PASSWORD、
+# MIRAGE_JWT_SECRET、MIRAGE_REDIS_PASSWORD 等），属于受控网络内的过渡方案。
+#
+# 生产 Kubernetes 部署必须使用 K8s Secret / Vault Volume Mount。
+# 详见 Runbook: deploy/runbooks/secret-injection.md "过渡方案" 章节。
+# ============================================================================
+
 version: '3.8'
 
 services:
@@ -18,11 +28,11 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --requirepass ${MIRAGE_REDIS_PASSWORD}
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a ${MIRAGE_REDIS_PASSWORD} ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -39,7 +49,7 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgres://${MIRAGE_DB_USER:-mirage}:${MIRAGE_DB_PASSWORD}@postgres:5432/${MIRAGE_DB_NAME:-mirage}
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${MIRAGE_REDIS_PASSWORD}@redis:6379
       TLS_CERT: /etc/mirage/certs/os.crt
       TLS_KEY: /etc/mirage/certs/os.key
       TLS_CA: /etc/mirage/certs/ca.crt
@@ -65,7 +75,7 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgres://${MIRAGE_DB_USER:-mirage}:${MIRAGE_DB_PASSWORD}@postgres:5432/${MIRAGE_DB_NAME:-mirage}
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${MIRAGE_REDIS_PASSWORD}@redis:6379
       JWT_SECRET: ${MIRAGE_JWT_SECRET}
       CA_DIR: /etc/mirage/certs
       QUERY_HMAC_SECRET: ${MIRAGE_QUERY_HMAC_SECRET:-}

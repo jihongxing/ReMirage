@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"mirage-os/pkg/redact"
 	"sync"
 	"time"
 
@@ -99,7 +100,7 @@ func (p *Provisioner) SetOnProvisioned(fn func(string, *ClientConfig)) {
 // OnXMRConfirmed XMR 到账确认回调 — 全自动流水线入口
 // 由 XMRProcessor.onConfirmed 触发
 func (p *Provisioner) OnXMRConfirmed(uid string, amountPiconero uint64) error {
-	log.Printf("[Provisioner] 💰 XMR 到账: uid=%s, amount=%d piconero", uid, amountPiconero)
+	log.Printf("[Provisioner] 💰 XMR 到账: uid=%s, amount=%d piconero", redact.Token(uid), amountPiconero)
 
 	// 1. 生成 Ed25519 密钥对
 	pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
@@ -155,7 +156,7 @@ func (p *Provisioner) OnXMRConfirmed(uid string, amountPiconero uint64) error {
 		return fmt.Errorf("生成交付链接失败: %w", err)
 	}
 
-	log.Printf("[Provisioner] ✅ 配置完成: uid=%s, cell=%s, link=%s", uid, cellID, link.Token)
+	log.Printf("[Provisioner] ✅ 配置完成: uid=%s, cell=%s, link=%s", redact.Token(uid), cellID, redact.Token(link.Token))
 
 	// 9. 触发回调
 	if p.onProvisioned != nil {
@@ -380,7 +381,7 @@ func (p *Provisioner) RedeemBurnLink(token, decryptKey string) ([]byte, error) {
 	link.AccessCount++
 	delete(p.burnLinks, token)
 
-	log.Printf("[Provisioner] 🔥 链接已兑换并销毁: uid=%s", link.UID)
+	log.Printf("[Provisioner] 🔥 链接已兑换并销毁: uid=%s", redact.Token(link.UID))
 
 	return plaintext, nil
 }

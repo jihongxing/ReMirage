@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"log"
+	"mirage-gateway/pkg/redact"
 	"mirage-gateway/pkg/security"
 	pb "mirage-proto/gen"
 	"sync"
@@ -374,7 +375,7 @@ func (c *GRPCClient) StartTrafficReportByUser(ctx context.Context, flushFn func(
 					_, err := c.uplinkClient.ReportTraffic(callCtx, req)
 					cancel()
 					if err != nil {
-						log.Printf("[gRPC Client] 用户流量上报失败 (user=%s): %v", s.UserID, err)
+						log.Printf("[gRPC Client] 用户流量上报失败 (user=%s): %v", redact.RedactToken(s.UserID), err)
 					}
 				}
 			}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"mirage-os/pkg/redact"
 	"net/http"
 	"sync"
 	"time"
@@ -96,7 +97,7 @@ func (s *Server) onHoneypotAccess(record *AccessRecord) {
 	event := PhantomEvent{
 		Type: "phantom_event",
 		Payload: map[string]interface{}{
-			"srcIP":        record.RemoteAddr,
+			"srcIP":        redact.IP(record.RemoteAddr),
 			"path":         record.Path,
 			"userAgent":    record.UserAgent,
 			"responseMs":   record.ResponseMS,
@@ -114,14 +115,14 @@ func (s *Server) onCanaryTrigger(token *CanaryToken, ip string) {
 	s.stats.CanaryTriggered++
 	s.mu.Unlock()
 
-	log.Printf("[Phantom] 金丝雀触发! Token: %s, IP: %s", token.ID, ip)
+	log.Printf("[Phantom] 金丝雀触发! Token: %s, IP: %s", token.ID, redact.IP(ip))
 
 	event := PhantomEvent{
 		Type: "canary_triggered",
 		Payload: map[string]interface{}{
 			"tokenId":   token.ID,
 			"tokenType": token.Type,
-			"triggerIP": ip,
+			"triggerIP": redact.IP(ip),
 			"timestamp": time.Now().Unix(),
 		},
 	}

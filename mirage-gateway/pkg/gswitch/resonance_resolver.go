@@ -11,6 +11,7 @@ package gswitch
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -21,6 +22,35 @@ import (
 	"sync"
 	"time"
 )
+
+// browserUAPool 真实浏览器 UA 池（Chrome/Firefox/Safari/Edge 多平台）
+var browserUAPool = []string{
+	// Chrome (Windows/Mac/Linux)
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+	// Firefox (Windows/Mac/Linux)
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:133.0) Gecko/20100101 Firefox/133.0",
+	"Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0",
+	// Safari (Mac/iOS)
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15",
+	"Mozilla/5.0 (iPhone; CPU iPhone OS 18_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Mobile/15E148 Safari/604.1",
+	// Edge (Windows/Mac)
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
+	// Chrome Android
+	"Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+}
+
+// randomUA 使用 crypto/rand 从 UA 池中随机选择一个
+func randomUA() string {
+	var buf [1]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return browserUAPool[0]
+	}
+	return browserUAPool[int(buf[0])%len(browserUAPool)]
+}
 
 // ResolverConfig 解析器配置
 type ResolverConfig struct {
@@ -182,6 +212,7 @@ func (rr *ResonanceResolver) resolveDoH(ctx context.Context) (*SignalPayload, er
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/dns-json")
+	req.Header.Set("User-Agent", randomUA())
 
 	resp, err := rr.httpClient.Do(req)
 	if err != nil {
@@ -223,7 +254,7 @@ func (rr *ResonanceResolver) resolveCFWorker(ctx context.Context) (*SignalPayloa
 	}
 	// 看起来像普通的 CDN 健康检查
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; HealthCheck/1.0)")
+	req.Header.Set("User-Agent", randomUA())
 
 	resp, err := rr.httpClient.Do(req)
 	if err != nil {
@@ -268,6 +299,7 @@ func (rr *ResonanceResolver) resolveMastodon(ctx context.Context) (*SignalPayloa
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", randomUA())
 
 	resp, err := rr.httpClient.Do(req)
 	if err != nil {

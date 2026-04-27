@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"mirage-os/pkg/models"
+	"mirage-os/pkg/redact"
 
 	"gorm.io/gorm"
 )
@@ -411,7 +412,7 @@ func (s *CellScheduler) RecoverUsers(failedGatewayID string) error {
 		if target != nil {
 			s.migrateSession(session.UserID, session.GatewayID, target.GatewayID)
 		} else {
-			log.Printf("[CellScheduler] 无法为用户 %s (等级 %d) 找到恢复目标", session.UserID, session.CellLevel)
+			log.Printf("[CellScheduler] 无法为用户 %s (等级 %d) 找到恢复目标", redact.Token(session.UserID), session.CellLevel)
 		}
 	}
 	return nil
@@ -470,7 +471,7 @@ func (s *CellScheduler) migrateSession(userID, fromGatewayID, toGatewayID string
 			"active_connections": gorm.Expr("active_connections + 1"),
 		})
 
-	log.Printf("[CellScheduler] 迁移用户 %s: %s → %s", userID, fromGatewayID, toGatewayID)
+	log.Printf("[CellScheduler] 迁移用户 %s: %s → %s", redact.Token(userID), fromGatewayID, toGatewayID)
 }
 
 // ActivateStandby 从温备池激活替补节点

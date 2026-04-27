@@ -19,6 +19,7 @@
 | 协议域边界 | `boundaries/protocol-domain.md` | 治理文档 | authoritative |
 | 运行时真相归属规则 | `boundaries/runtime-truth-boundaries.md` | 治理文档 | authoritative |
 | 抗 DDoS 架构分层 | `boundaries/anti-ddos-architecture.md` | 治理文档 | authoritative |
+| 能力北极星、验收标准与当前真实能力 | `docs/governance/capability-truth-source.md` | 治理文档 | authoritative |
 | 协议域目录与分层 | `docs/protocols/README.md` + `stack.md` | 协议文档 | authoritative |
 | 单协议主权归属 | `docs/protocols/source-of-truth.md` | 协议文档 | authoritative |
 | G-Tunnel 协议语义 | `docs/protocols/gtunnel.md` | 协议文档 | authoritative |
@@ -38,7 +39,7 @@
 | 节点失陷替换 runbook | `deploy/runbooks/compromised-node-replacement.md` | 运维资产 | authoritative |
 | Gateway 配置字段语义 | `mirage-gateway/cmd/gateway/main.go` 中 `GatewayConfig` | 运行时代码 | authoritative |
 | 部署执行资产 | `deploy/` 目录 | 可执行资产 | authoritative |
-| 多协议编排运行时 | `mirage-gateway/pkg/gtunnel/orchestrator.go` | 运行时代码 | 待收敛（S-01） |
+| 多协议编排运行时 | `mirage-gateway/pkg/gtunnel/orchestrator.go` | 运行时代码 | authoritative（S-01 已收敛） |
 | Client 数据面运行时 | `phantom-client/pkg/gtclient/client.go` | 运行时代码 | 待接入 Orchestrator |
 | 隐蔽控制面 | `mirage-gateway/pkg/gtunnel/stealth/` | 运行时代码 | 部分落地 |
 
@@ -59,7 +60,7 @@
 
 | 问题域 | 当前状态 | 收敛方向 |
 |--------|----------|----------|
-| 多协议编排运行时 | Orchestrator vs TransportManager 并存 | Orchestrator 为唯一主链（见审计 spec S-01） |
+| 多协议编排运行时 | Orchestrator 为唯一主链，TransportManager 已收敛为兼容适配层 | ✅ 已收敛（S-01） |
 | Client 数据面 | 单一 QUICEngine，未接入 Orchestrator | 接入 Orchestrator 调度（见审计 spec A-01） |
 | 隐蔽控制面 | StealthCP 创建后丢弃 | 绑定到 bearer 并启动（见审计 spec B-01a） |
 
@@ -71,9 +72,20 @@
 
 | 文件 | 有效范围 |
 |------|----------|
+| `docs/governance/capability-gap-remediation-roadmap.md` | 当前北极星升级周期（已归档，2026-04-25 完成） |
+| `docs/governance/dpi-risk-audit-checklist.md` | 当前 DPI 风险审计周期；验证清单，非真相源 |
 | `docs/release-readiness-traceability-index.md` | 当前发布周期 |
 | `docs/Mirage 运营前高频攻击面检查清单.md` | 首批客户接入前 |
 | `docs/05-实施指南/` 中 7 份整改/Spec 清单 | 对应整改任务完成前 |
+
+## 已登记的派生材料
+
+以下材料已登记为派生材料，可用于叙事、定位、导读或专项包装，但不能单独作为当前能力结论：
+
+| 文件 | 来源 | 用途 |
+|------|------|------|
+| `docs/governance/market-positioning-scenarios.md` | `boundaries/product-scope.md` + `capability-truth-source.md` | 商业场景、交付形态与北极星叙事 |
+| `docs/暗网基础设施防御力评价矩阵.md` | `capability-truth-source.md` | 商业定位与销售矩阵 |
 
 ## 重点规则
 

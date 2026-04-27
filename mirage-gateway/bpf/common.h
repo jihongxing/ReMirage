@@ -197,12 +197,13 @@ struct {
     __type(value, __u64);       // 字节数
 } traffic_stats SEC(".maps");
 
-// 配额状态 Map（欠费熔断）
+// 配额状态 Map（欠费熔断 — 渐进式降级）
+// key=0: 剩余流量 (字节), key=1: 总配额 (字节)
 struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 1);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 2);
     __type(key, __u32);
-    __type(value, __u64);       // 剩余流量 (字节)
+    __type(value, __u64);
 } quota_map SEC(".maps");
 
 // 蜂窝生命周期 Map（影子蜂窝）
@@ -276,15 +277,28 @@ struct {
  * 辅助函数
  * ============================================ */
 
-// 高斯分布采样（Box-Muller 变换简化版）
+// 高斯分布采样（Irwin-Hall 近似：4 个均匀分布求和）
+// 4 个 U[0,1] 求和 ≈ N(2, 1/3)，缩放到 N(mean, stddev²)
 static __always_inline __u64 gaussian_sample(__u32 mean, __u32 stddev) {
     __u32 u1 = bpf_get_prandom_u32();
-    
-    // 简化版本：使用线性近似
-    // 真实实现需要更复杂的数学运算
-    __u64 z = mean + (u1 % (stddev * 2)) - stddev;
-    
-    return z;
+    __u32 u2 = bpf_get_prandom_u32();
+    __u32 u3 = bpf_get_prandom_u32();
+    __u32 u4 = bpf_get_prandom_u32();
+
+    // 取高 16 位归一化到 [0, 65535]，求和 ∈ [0, 4*65535]
+    // 均值 = 2*65535 = 131070, 标准差 = 65535/√3 ≈ 37837
+    __u64 sum = (__u64)(u1 >> 16) + (u2 >> 16) + (u3 >> 16) + (u4 >> 16);
+    __s64 centered = (__s64)sum - 2 * 65535;
+    // 缩放: centered * stddev / (65535 / √3)
+    // √3 ≈ 1732/1000, 所以 65535/√3 ≈ 65535*1000/1732 ≈ 37837
+    // BPF 不支持有符号除法，手动处理符号后用无符号除法
+    __s64 numerator = centered * (__s64)stddev;
+    __u64 abs_num = numerator < 0 ? (__u64)(-numerator) : (__u64)numerator;
+    __u64 abs_scaled = abs_num / (__u64)37837;
+    __s64 scaled = numerator < 0 ? -(__s64)abs_scaled : (__s64)abs_scaled;
+    __s64 result = (__s64)mean + scaled;
+
+    return result > 0 ? (__u64)result : 0;
 }
 
 // B-DNA 拟态延迟采样（V2 生产版）

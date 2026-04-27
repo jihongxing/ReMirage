@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"log"
+	"mirage-os/pkg/redact"
 )
 
 // QuotaDownlink 配额下行推送接口
@@ -45,7 +46,7 @@ func (d *QuotaDispatcher) PushQuotaToGateway(ctx context.Context, gatewayID stri
 		// 转换 GB → bytes
 		quotaBytes := uint64(quota * 1e9)
 		if err := d.downlink.PushQuotaToGatewayForUser(gatewayID, userID, quotaBytes); err != nil {
-			log.Printf("[WARN] push quota to gateway %s for user %s: %v", gatewayID, userID, err)
+			log.Printf("[WARN] push quota to gateway %s for user %s: %v", gatewayID, redact.Token(userID), err)
 		}
 	}
 	return rows.Err()
@@ -79,7 +80,7 @@ func (d *QuotaDispatcher) PushQuotaForUser(ctx context.Context, userID string) e
 			continue
 		}
 		if err := d.downlink.PushQuotaToGatewayForUser(gatewayID, userID, quotaBytes); err != nil {
-			log.Printf("[WARN] push quota to gateway %s for user %s: %v", gatewayID, userID, err)
+			log.Printf("[WARN] push quota to gateway %s for user %s: %v", gatewayID, redact.Token(userID), err)
 		}
 	}
 	return rows.Err()

@@ -26,22 +26,33 @@ int jitter_lite_egress(struct __sk_buff *skb) {
     void *data = (void *)(long)skb->data;
     void *data_end = (void *)(long)skb->data_end;
     
-    // 0. 配额熔断检查（最高优先级 - 生死裁决硬对齐）
+    // 0. 配额熔断检查（渐进式降级 — 概率丢弃替代硬截断）
     __u32 quota_key = 0;
     __u64 *remaining = bpf_map_lookup_elem(&quota_map, &quota_key);
     if (remaining) {
-        if (*remaining == 0) {
-            // 配额耗尽，立即熔断，一滴流量都不放
-            return TC_ACT_STOLEN;
+        __u32 total_key = 1;
+        __u64 *total = bpf_map_lookup_elem(&quota_map, &total_key);
+        if (total && *total > 0) {
+            __u64 ratio = (*remaining * 100) / *total;
+            __u32 rand = bpf_get_prandom_u32() % 100;
+
+            if (ratio < 1) {
+                // 剩余 < 1%：10% 通过率
+                if (rand >= 10)
+                    return TC_ACT_STOLEN;
+            } else if (ratio < 10) {
+                // 剩余 < 10%：50% 通过率
+                if (rand >= 50)
+                    return TC_ACT_STOLEN;
+            }
+            // 正常扣减（按包大小扣减字节数）
+            __u64 pkt_len = (__u64)skb->len;
+            if (*remaining >= pkt_len) {
+                __sync_fetch_and_sub(remaining, pkt_len);
+            } else {
+                __sync_fetch_and_and(remaining, 0);
+            }
         }
-        // 原子扣减（按包大小扣减字节数）
-        __u64 pkt_len = (__u64)skb->len;
-        if (*remaining < pkt_len) {
-            // 剩余不足以覆盖本包，熔断
-            __sync_fetch_and_and(remaining, 0);
-            return TC_ACT_STOLEN;
-        }
-        __sync_fetch_and_sub(remaining, pkt_len);
     }
     
     // 1. 解析以太网头
@@ -302,20 +313,30 @@ struct {
     __type(value, struct vpc_noise_stats);
 } vpc_noise_stats SEC(".maps");
 
-// 模拟光缆抖动（泊松分布近似）
+// 模拟光缆抖动（分段线性近似指数分布）
 static __always_inline __u64 simulate_fiber_jitter_v2(struct vpc_noise_profile *profile) {
     if (!profile)
         return 0;
     
     __u32 random = bpf_get_prandom_u32();
     
-    // 泊松分布近似：使用指数分布
-    // λ = 1 / mean, P(X > x) = e^(-λx)
-    // 简化：base + random % variance
-    __u64 jitter = profile->fiber_base_us;
-    jitter += (random % (profile->fiber_variance_us * 2));
-    
-    return jitter;
+    // 分段线性近似 -ln(U) * variance
+    // U ∈ [1, 65536]，近似 -ln(U/65536) * 1000
+    __u64 u = (random >> 16) + 1;  // [1, 65536]
+    __u64 neg_ln;  // 近似 -ln(u/65536) * 1000
+
+    if (u > 32768) {
+        // u/65536 ∈ (0.5, 1.0], -ln ∈ [0, 0.693)
+        neg_ln = (65536 - u) * 1000 / 32768;
+    } else if (u > 8192) {
+        // u/65536 ∈ (0.125, 0.5], -ln ∈ [0.693, 2.079)
+        neg_ln = 693 + (32768 - u) * 1000 / 24576;
+    } else {
+        // u/65536 ∈ (0, 0.125], -ln ∈ [2.079, ~11)
+        neg_ln = 2079 + (8192 - u) * 2000 / 8192;
+    }
+
+    return profile->fiber_base_us + (neg_ln * profile->fiber_variance_us) / 1000;
 }
 
 // 模拟路由器队列延迟（多跳累积）
@@ -340,26 +361,19 @@ static __always_inline __u64 simulate_router_queue_v2(struct vpc_noise_profile *
     return total_delay;
 }
 
-// 模拟跨洋光缆特征（周期性抖动）
+// 模拟跨洋光缆特征（3 频率叠加伪随机波形）
 static __always_inline __u64 simulate_submarine_cable(__u64 timestamp) {
-    // 海底光缆有周期性的信号放大器，产生规律性抖动
-    // 周期约 50-80km，传播延迟约 5μs/km
-    
-    __u64 cycle = timestamp / 1000000;  // 毫秒级周期
-    __u32 phase = cycle % 100;
-    
-    // 正弦波近似
-    __u64 jitter = 0;
-    if (phase < 25)
-        jitter = phase * 4;
-    else if (phase < 50)
-        jitter = (50 - phase) * 4;
-    else if (phase < 75)
-        jitter = (phase - 50) * 4;
-    else
-        jitter = (100 - phase) * 4;
-    
-    return jitter;  // 0-100 微秒
+    // 多频率叠加：3 个不同周期的伪随机分量
+    // 打破原三角波的固定周期性，使自相关函数无显著峰值
+    __u32 r1 = bpf_get_prandom_u32();
+    __u32 r2 = bpf_get_prandom_u32();
+    __u64 t_ms = timestamp / 1000000;  // 毫秒级
+
+    __u64 comp1 = ((t_ms * 7 + r1) % 200);        // 慢周期 + 随机扰动
+    __u64 comp2 = ((t_ms * 31 + r2) % 100);       // 中周期 + 随机扰动
+    __u64 comp3 = (bpf_get_prandom_u32() % 50);   // 纯随机分量
+
+    return (comp1 + comp2 + comp3) / 3;            // 0-116 微秒
 }
 
 // 模拟数据中心内部网络抖动
@@ -483,6 +497,7 @@ struct social_clock_config {
     __u32 peak_hour_end;        // 高峰结束
     __u32 peak_multiplier;      // 高峰期噪音倍数 (100 = 1x)
     __u32 night_multiplier;     // 夜间噪音倍数
+    __u32 transition_window;    // 过渡窗口（分钟），默认 30
 };
 
 struct {
@@ -492,27 +507,105 @@ struct {
     __type(value, struct social_clock_config);
 } social_clock_map SEC(".maps");
 
-// 获取社交时钟调整因子
+// 整数 sigmoid 近似：sigmoid(x) ≈ x / (1 + |x|)
+// 输入 x 缩放到 [-1000, 1000]，输出 [0, 1000] 表示 [0.0, 1.0]
+static __always_inline __u32 int_sigmoid(__s32 x) {
+    __s32 abs_x = x < 0 ? -x : x;
+    // sigmoid(x) = 0.5 + 0.5 * x / (1 + |x|)
+    // 缩放：500 + 500 * x / (1000 + |x|)
+    // BPF 不支持有符号除法，手动处理符号
+    __s64 numerator = (__s64)x * 500;
+    __u64 denominator = (__u64)(1000 + (__s64)abs_x);
+    __u64 abs_num = numerator < 0 ? (__u64)(-numerator) : (__u64)numerator;
+    __u64 abs_quot = abs_num / denominator;
+    __s64 quot = numerator < 0 ? -(__s64)abs_quot : (__s64)abs_quot;
+    return (__u32)(500 + quot);
+}
+
+// 获取社交时钟调整因子（sigmoid 渐变过渡）
 static __always_inline __u32 get_social_clock_factor() {
     __u32 key = 0;
     struct social_clock_config *cfg = bpf_map_lookup_elem(&social_clock_map, &key);
     if (!cfg || !cfg->enabled)
         return 100;  // 默认 1x
-    
-    // 获取当前小时（简化：使用纳秒时间戳）
+
+    // 过渡窗口（分钟），默认 30
+    __u32 tw = cfg->transition_window;
+    if (tw == 0)
+        tw = 30;
+    __s32 half_tw = (__s32)(tw / 2);
+    if (half_tw == 0)
+        half_tw = 1;
+
+    // 获取当前分钟（使用纳秒时间戳）
     __u64 now = bpf_ktime_get_ns();
-    __u32 hour = (now / 3600000000000ULL) % 24;
-    
-    // 判断时段
-    if (hour >= cfg->peak_hour_start && hour < cfg->peak_hour_end) {
+    __u32 minute_of_day = (__u32)((now / 60000000000ULL) % 1440);
+
+    __u32 peak_start_min = cfg->peak_hour_start * 60;
+    __u32 peak_end_min = cfg->peak_hour_end * 60;
+    __u32 night_start_min = 22 * 60;  // 1320
+    __u32 night_end_min = 6 * 60;     // 360
+
+    // 计算到各边界的有符号距离（分钟）
+    __s32 dist_peak_start = (__s32)minute_of_day - (__s32)peak_start_min;
+    __s32 dist_peak_end = (__s32)minute_of_day - (__s32)peak_end_min;
+    __s32 dist_night_start = (__s32)minute_of_day - (__s32)night_start_min;
+    // 夜间结束需要处理跨午夜
+    __s32 dist_night_end = (__s32)minute_of_day - (__s32)night_end_min;
+
+    // 进入高峰期过渡窗口
+    if (dist_peak_start > -half_tw && dist_peak_start < half_tw) {
+        __s64 num = (__s64)dist_peak_start * 1000;
+        __u64 abs_num = num < 0 ? (__u64)(-num) : (__u64)num;
+        __u64 abs_q = abs_num / (__u64)half_tw;
+        __s32 x = num < 0 ? -(__s32)abs_q : (__s32)abs_q;
+        __u32 sig = int_sigmoid(x); // [0, 1000]
+        return 100 + (cfg->peak_multiplier - 100) * sig / 1000;
+    }
+
+    // 离开高峰期过渡窗口
+    if (dist_peak_end > -half_tw && dist_peak_end < half_tw) {
+        __s64 num = (__s64)dist_peak_end * 1000;
+        __u64 abs_num = num < 0 ? (__u64)(-num) : (__u64)num;
+        __u64 abs_q = abs_num / (__u64)half_tw;
+        __s32 x = num < 0 ? -(__s32)abs_q : (__s32)abs_q;
+        __u32 sig = int_sigmoid(x); // [0, 1000]
+        // 从 peak_multiplier 渐变回 100
+        return cfg->peak_multiplier - (cfg->peak_multiplier - 100) * sig / 1000;
+    }
+
+    // 高峰期内部
+    if (minute_of_day >= peak_start_min && minute_of_day < peak_end_min) {
         return cfg->peak_multiplier;
     }
-    
-    // 夜间（22:00 - 06:00）
-    if (hour >= 22 || hour < 6) {
+
+    // 进入夜间过渡窗口
+    if (dist_night_start > -half_tw && dist_night_start < half_tw) {
+        __s64 num = (__s64)dist_night_start * 1000;
+        __u64 abs_num = num < 0 ? (__u64)(-num) : (__u64)num;
+        __u64 abs_q = abs_num / (__u64)half_tw;
+        __s32 x = num < 0 ? -(__s32)abs_q : (__s32)abs_q;
+        __u32 sig = int_sigmoid(x);
+        return 100 + (cfg->night_multiplier - 100) * sig / 1000;
+    }
+
+    // 离开夜间过渡窗口（跨午夜处理）
+    if (minute_of_day < night_end_min) {
+        if (dist_night_end > -half_tw && dist_night_end < half_tw) {
+            __s64 num = (__s64)dist_night_end * 1000;
+            __u64 abs_num = num < 0 ? (__u64)(-num) : (__u64)num;
+            __u64 abs_q = abs_num / (__u64)half_tw;
+            __s32 x = num < 0 ? -(__s32)abs_q : (__s32)abs_q;
+            __u32 sig = int_sigmoid(x);
+            return cfg->night_multiplier - (cfg->night_multiplier - 100) * sig / 1000;
+        }
+    }
+
+    // 夜间内部（22:00 - 06:00）
+    if (minute_of_day >= night_start_min || minute_of_day < night_end_min) {
         return cfg->night_multiplier;
     }
-    
+
     return 100;
 }
 

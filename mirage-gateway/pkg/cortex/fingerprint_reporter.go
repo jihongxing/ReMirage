@@ -2,6 +2,7 @@ package cortex
 
 import (
 	"log"
+	"mirage-gateway/pkg/redact"
 	"time"
 )
 
@@ -38,7 +39,7 @@ func (r *FingerprintReporter) ReportHighRisk(fp *IdentityFingerprint) {
 
 	r.bus.EmitHighSeverityEvent(event)
 	log.Printf("[FingerprintReporter] 高危指纹上报: hash=%s IP=%s score=%d",
-		fp.Hash, sourceIP, fp.ThreatScore)
+		fp.Hash, redact.RedactIP(sourceIP), fp.ThreatScore)
 }
 
 // BindToAnalyzer 将上报器绑定到 Analyzer 的 OnHighRisk 回调

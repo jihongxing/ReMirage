@@ -5,6 +5,7 @@ package tproxy
 import (
 	"context"
 	"log"
+	"mirage-gateway/pkg/redact"
 	"net"
 	"sync"
 	"time"
@@ -123,7 +124,7 @@ func (tb *TPROXYBridge) handleConnection(clientConn net.Conn) {
 		return
 	}
 
-	log.Printf("🔗 新连接: %s → %s", clientConn.RemoteAddr(), origDst)
+	log.Printf("🔗 新连接: %s → %s", redact.RedactIP(clientConn.RemoteAddr().String()), origDst)
 
 	serverConn, err := net.DialTimeout("tcp", origDst.String(), 10*time.Second)
 	if err != nil {

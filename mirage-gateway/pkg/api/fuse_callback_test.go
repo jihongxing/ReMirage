@@ -1,8 +1,12 @@
 package api
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 	"time"
+
+	"pgregory.net/rapid"
 )
 
 // TestFuseCallback_ExhaustedTriggersDisconnect 验证配额耗尽时仅断开该用户连接
@@ -96,4 +100,68 @@ func TestDisconnectUser(t *testing.T) {
 	if sessions := sm.GetActiveSessionsByUser("bob"); len(sessions) != 1 {
 		t.Errorf("bob 应有 1 个会话，实际 %d", len(sessions))
 	}
+}
+
+// =============================================================================
+// Feature: phase3-operational-baseline, Property 2: FuseCallback 精确定向
+// 验证: 需求 6.2
+// =============================================================================
+
+func TestProperty_FuseCallbackTargeting(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		userCount := rapid.IntRange(2, 10).Draw(t, "userCount")
+		exhaustedIdx := rapid.IntRange(0, userCount-1).Draw(t, "exhaustedUserIndex")
+
+		sessMgr := NewSessionManager()
+		qbm := NewQuotaBucketManager()
+
+		var mu sync.Mutex
+		callbackUIDs := []string{}
+		qbm.SetOnExhausted(func(userID string) {
+			mu.Lock()
+			callbackUIDs = append(callbackUIDs, userID)
+			mu.Unlock()
+		})
+
+		// 注册用户并分配配额
+		userIDs := make([]string, userCount)
+		for i := 0; i < userCount; i++ {
+			uid := fmt.Sprintf("user-%d", i)
+			userIDs[i] = uid
+			sessID := fmt.Sprintf("sess-%d", i)
+			sessMgr.Register(sessID, uid, fmt.Sprintf("client-%d", i))
+
+			quota := rapid.Uint64Range(100, 10000).Draw(t, fmt.Sprintf("quota_%d", i))
+			qbm.UpdateQuota(uid, quota)
+		}
+
+		// 耗尽指定用户配额
+		targetUID := userIDs[exhaustedIdx]
+		remaining, _ := qbm.GetRemaining(targetUID)
+		qbm.Consume(targetUID, remaining)
+		qbm.Consume(targetUID, 1) // 触发耗尽
+
+		// 等待异步回调
+		time.Sleep(50 * time.Millisecond)
+
+		// 验证回调仅以目标用户 UID 触发
+		mu.Lock()
+		defer mu.Unlock()
+
+		for _, uid := range callbackUIDs {
+			if uid != targetUID {
+				t.Fatalf("onQuotaExhausted 不应触发非目标用户: got %s, want %s", uid, targetUID)
+			}
+		}
+
+		// 验证其他用户未耗尽
+		for i, uid := range userIDs {
+			if i == exhaustedIdx {
+				continue
+			}
+			if qbm.IsExhausted(uid) {
+				t.Fatalf("用户 %s 不应被标记为耗尽", uid)
+			}
+		}
+	})
 }

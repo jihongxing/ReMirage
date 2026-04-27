@@ -448,10 +448,18 @@ func (l *Loader) initQuotaMap() error {
 		return fmt.Errorf("quota_map 不存在")
 	}
 
-	key := uint32(0)
-	value := uint64(^uint64(0)) // 最大值 = 无限配额（等待 OS 下发真实值）
-	if err := quotaMap.Put(&key, &value); err != nil {
-		return fmt.Errorf("初始化 quota_map 失败: %w", err)
+	// key=0: 剩余配额（初始化为最大值 = 无限配额）
+	key0 := uint32(0)
+	value0 := uint64(^uint64(0))
+	if err := quotaMap.Put(&key0, &value0); err != nil {
+		return fmt.Errorf("初始化 quota_map[0] 失败: %w", err)
+	}
+
+	// key=1: 总配额（初始化为最大值，等待 OS 下发真实值）
+	key1 := uint32(1)
+	value1 := uint64(^uint64(0))
+	if err := quotaMap.Put(&key1, &value1); err != nil {
+		return fmt.Errorf("初始化 quota_map[1] 失败: %w", err)
 	}
 
 	log.Println("  ✅ quota_map 已初始化（无限配额，等待 OS 下发）")

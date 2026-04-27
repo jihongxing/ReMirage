@@ -59,7 +59,7 @@ func main() {
 		if err != nil {
 			break
 		}
-		log.Printf("🔗 客户端: %s", conn.RemoteAddr())
+		log.Printf("🔗 客户端: %s", "***")
 		go serve(ctx, conn)
 	}
 }

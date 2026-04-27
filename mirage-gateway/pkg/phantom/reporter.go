@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"mirage-gateway/pkg/cortex"
+	"mirage-gateway/pkg/redact"
 	"mirage-gateway/pkg/threat"
 )
 
@@ -37,7 +38,7 @@ func (r *HoneypotReporter) ReportAccess(record *AccessRecord) {
 	}
 
 	r.bus.EmitHighSeverityEvent(event)
-	log.Printf("[HoneypotReporter] 蜜罐命中上报: IP=%s Path=%s", record.RemoteAddr, record.Path)
+	log.Printf("[HoneypotReporter] 蜜罐命中上报: IP=%s Path=%s", redact.RedactIP(record.RemoteAddr), record.Path)
 }
 
 // SyncEBPFStats 将 eBPF 数据面 STAT_REDIRECTED 同步到 Prometheus 指标
@@ -71,5 +72,5 @@ func (r *HoneypotReporter) ReportCanaryTrigger(token *CanaryToken, ip string) {
 	}
 
 	r.bus.EmitHighSeverityEvent(event)
-	log.Printf("[HoneypotReporter] 金丝雀触发上报: IP=%s TokenID=%s", ip, token.ID)
+	log.Printf("[HoneypotReporter] 金丝雀触发上报: IP=%s TokenID=%s", redact.RedactIP(ip), token.ID)
 }

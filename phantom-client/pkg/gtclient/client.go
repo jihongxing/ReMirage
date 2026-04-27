@@ -136,6 +136,9 @@ type GTunnelClient struct {
 
 	// NIC 检测器（注入后用于 probe() 传递给 QUICEngine）
 	nicDetector NICDetector
+
+	// Send-path shim：加密后、SendDatagram 前的 Padding + IAT 控制层
+	sendShim *SendPathShim
 }
 
 // NewGTunnelClient creates a new G-Tunnel client.
@@ -247,9 +250,13 @@ func (c *GTunnelClient) adoptConnection(result *probeResult) {
 		if old != nil && old != newTransport {
 			old.Close()
 		}
+		// 重建 sendShim 指向 Orchestrator 的 SendDatagram
+		c.rebuildSendShim(orch.SendDatagram)
 	} else {
 		// 没有 Orchestrator，直接设置 transport
 		c.transport = NewQUICTransportAdapter(result.engine)
+		// 重建 sendShim 指向新 transport 的 SendDatagram
+		c.rebuildSendShim(c.transport.SendDatagram)
 	}
 
 	c.transition(StateConnected, fmt.Sprintf("adopted %s", result.gw.IP))
@@ -355,6 +362,8 @@ func (c *GTunnelClient) ProbeAndConnect(ctx context.Context, pool []token.Gatewa
 	// 注入 Orchestrator 作为统一传输层
 	c.mu.Lock()
 	c.transport = orch
+	// 初始化 sendShim 指向 Orchestrator 的 SendDatagram
+	c.rebuildSendShim(orch.SendDatagram)
 	c.mu.Unlock()
 
 	c.transition(StateConnected, fmt.Sprintf("orchestrator→%s via %s", c.currentGW.IP, orch.ActiveType()))
@@ -439,9 +448,11 @@ func (c *GTunnelClient) Send(packet []byte) error {
 				continue // skip this shard on encrypt failure
 			}
 
-			// 4. Fire via Transport or legacy QUICEngine
+			// 4. Fire via SendPathShim (Padding + IAT) → actual transport
 			var sendErr error
-			if transport != nil {
+			if c.sendShim != nil {
+				sendErr = c.sendShim.Send(encrypted)
+			} else if transport != nil {
 				sendErr = transport.SendDatagram(encrypted)
 			} else {
 				sendErr = quicEngine.SendDatagram(encrypted)
@@ -718,6 +729,39 @@ func (c *GTunnelClient) SetNICDetector(detector NICDetector) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.nicDetector = detector
+}
+
+// rebuildSendShim creates or replaces the sendShim with the given sendFn.
+// Must be called with c.mu held.
+func (c *GTunnelClient) rebuildSendShim(sendFn func([]byte) error) {
+	if c.sendShim != nil {
+		// Preserve existing config, just swap sendFn
+		c.sendShim.mu.Lock()
+		c.sendShim.sendFn = sendFn
+		c.sendShim.mu.Unlock()
+	} else {
+		// Default config: no padding, no IAT (passthrough)
+		c.sendShim = NewSendPathShim(SendPathShimConfig{
+			MaxMTU: 1200,
+		}, sendFn)
+	}
+}
+
+// SetSendPathShimConfig 配置 send-path shim 的 Padding 和 IAT 参数。
+// 必须在 Connect 之后调用（需要 transport 已就绪）。
+func (c *GTunnelClient) SetSendPathShimConfig(cfg SendPathShimConfig) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sendShim != nil {
+		c.sendShim.mu.Lock()
+		c.sendShim.paddingMean = cfg.PaddingMean
+		c.sendShim.paddingStddev = cfg.PaddingStddev
+		c.sendShim.maxMTU = cfg.MaxMTU
+		c.sendShim.iatMode = cfg.IATMode
+		c.sendShim.iatMeanUs = cfg.IATMeanUs
+		c.sendShim.iatStddevUs = cfg.IATStddevUs
+		c.sendShim.mu.Unlock()
+	}
 }
 
 // WSSOverrideConfig 可选的 WSS 降级参数覆盖。

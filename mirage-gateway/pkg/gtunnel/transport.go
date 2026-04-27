@@ -42,12 +42,16 @@ type TransportConn interface {
 //
 // Deprecated: TransportManager 已被 Orchestrator 替代为唯一编排主链。
 // 新代码不应使用 TransportManager，应使用 Orchestrator。
+// 所有方法已改为委托到内部 Orchestrator 实例的兼容适配层。
 // 保留此类型仅为向后兼容，后续版本将移除。
 // 参见 docs/外部零特征消除审计与整改清单.md S-01。
 type TransportManager struct {
 	mu sync.RWMutex
 
-	// 当前活跃连接
+	// orchestrator 内部 Orchestrator 实例，所有操作委托到此
+	orchestrator *Orchestrator
+
+	// 当前活跃连接（兼容层保留，实际由 orchestrator 管理）
 	active TransportConn
 
 	// 降级通道（备用）
@@ -113,22 +117,39 @@ func DefaultTransportConfig() TransportConfig {
 }
 
 // NewTransportManager 创建传输管理器
+//
+// Deprecated: 请使用 NewOrchestrator 代替。
+// 此构造函数内部创建 Orchestrator 实例，所有操作委托到 Orchestrator。
 func NewTransportManager(config TransportConfig) *TransportManager {
+	// 将 TransportConfig 映射到 OrchestratorConfig
+	orchCfg := DefaultOrchestratorConfig()
+	orchCfg.QUICConfig = config
+	orchCfg.ProbeCycle = config.ProbeInterval
+	orchCfg.PromoteThreshold = config.PromoteThreshold
+
 	return &TransportManager{
-		config:   config,
-		state:    StateDisconnected,
-		stopChan: make(chan struct{}),
+		orchestrator: NewOrchestrator(orchCfg),
+		config:       config,
+		state:        StateDisconnected,
+		stopChan:     make(chan struct{}),
 	}
 }
 
 // SetPacketCallback 设置收包回调
+//
+// Deprecated: 请使用 Orchestrator.SetPacketCallback 代替。
 func (tm *TransportManager) SetPacketCallback(cb func(data []byte)) {
+	if tm.orchestrator != nil {
+		tm.orchestrator.SetPacketCallback(cb)
+	}
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	tm.onPacketRecv = cb
 }
 
 // SetStateCallback 设置状态变更回调
+//
+// Deprecated: 请使用 Orchestrator.SetStateCallback 代替。
 func (tm *TransportManager) SetStateCallback(cb func(old, new TransportState)) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
@@ -136,6 +157,8 @@ func (tm *TransportManager) SetStateCallback(cb func(old, new TransportState)) {
 }
 
 // GetState 获取当前状态
+//
+// Deprecated: 请使用 Orchestrator.GetState 代替。
 func (tm *TransportManager) GetState() TransportState {
 	tm.mu.RLock()
 	defer tm.mu.RUnlock()
@@ -143,6 +166,8 @@ func (tm *TransportManager) GetState() TransportState {
 }
 
 // GetActiveConn 获取当前活跃连接
+//
+// Deprecated: 请使用 Orchestrator 的 Send/Recv 方法代替直接获取连接。
 func (tm *TransportManager) GetActiveConn() TransportConn {
 	tm.mu.RLock()
 	defer tm.mu.RUnlock()
@@ -150,7 +175,14 @@ func (tm *TransportManager) GetActiveConn() TransportConn {
 }
 
 // Send 通过当前活跃通道发送数据
+//
+// Deprecated: 请使用 Orchestrator.Send 代替。
+// 此方法委托到内部 Orchestrator 实例。
 func (tm *TransportManager) Send(data []byte) error {
+	if tm.orchestrator != nil {
+		return tm.orchestrator.Send(data)
+	}
+	// 兼容回退：orchestrator 未初始化时使用旧逻辑
 	tm.mu.RLock()
 	conn := tm.active
 	tm.mu.RUnlock()
@@ -162,9 +194,18 @@ func (tm *TransportManager) Send(data []byte) error {
 }
 
 // Close 关闭所有连接
+//
+// Deprecated: 请使用 Orchestrator.Close 代替。
+// 此方法委托到内部 Orchestrator 实例。
 func (tm *TransportManager) Close() error {
 	close(tm.stopChan)
 
+	// 委托到 Orchestrator
+	if tm.orchestrator != nil {
+		return tm.orchestrator.Close()
+	}
+
+	// 兼容回退
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
@@ -185,4 +226,12 @@ func (tm *TransportManager) setState(newState TransportState) {
 	if tm.onStateChange != nil && old != newState {
 		go tm.onStateChange(old, newState)
 	}
+}
+
+// GetOrchestrator 返回内部 Orchestrator 实例。
+// 用于迁移期间需要直接访问 Orchestrator 的场景。
+//
+// Deprecated: 新代码应直接使用 NewOrchestrator 创建实例。
+func (tm *TransportManager) GetOrchestrator() *Orchestrator {
+	return tm.orchestrator
 }

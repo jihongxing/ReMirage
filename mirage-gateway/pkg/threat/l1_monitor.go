@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"mirage-gateway/pkg/ebpf"
+	"mirage-gateway/pkg/redact"
 
 	"github.com/cilium/ebpf/ringbuf"
 )
@@ -96,17 +97,17 @@ func (m *L1Monitor) handleRateEvent(data []byte) {
 	// LookupASN/IsCloudIP 运行时调用点
 	if m.intelProvider != nil {
 		if asnInfo := m.intelProvider.LookupASN(ip); asnInfo != nil {
-			log.Printf("[L1Monitor] 速率限制触发: IP=%s, ASN=%d (%s)", ip, asnInfo.ASN, asnInfo.Org)
+			log.Printf("[L1Monitor] 速率限制触发: IP=%s, ASN=%d (%s)", redact.RedactIP(ip), asnInfo.ASN, asnInfo.Org)
 			m.riskScorer.AddScore(ip, 10, "asn_datacenter")
 		}
 		if isCloud, provider := m.intelProvider.IsCloudIP(ip); isCloud {
-			log.Printf("[L1Monitor] 云厂商 IP 检测: IP=%s, Provider=%s", ip, provider)
+			log.Printf("[L1Monitor] 云厂商 IP 检测: IP=%s, Provider=%s", redact.RedactIP(ip), provider)
 			m.riskScorer.AddScore(ip, 15, "cloud_ip")
 		}
 	}
 
 	log.Printf("[L1Monitor] 速率限制触发: IP=%s, Type=%d, Rate=%d",
-		ip, event.TriggerType, event.CurrentRate)
+		redact.RedactIP(ip), event.TriggerType, event.CurrentRate)
 }
 
 // updateStats 定期从 l1_stats_map 读取统计并更新 Prometheus 指标

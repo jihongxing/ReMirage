@@ -78,6 +78,11 @@ message HeartbeatRequest {
     int32 active_sessions = 11;
     string state_hash = 12;
     string version = 13;
+    // 新增：黑名单统计
+    int64 blacklist_count = 14;
+    int64 blacklist_updated_at = 15;
+    // 新增：安全状态
+    int32 security_state = 16;
 }
 
 message UserQuotaSummary {
@@ -146,6 +151,8 @@ message StrategyPush {
     uint32 noise_intensity = 4;
     uint32 padding_rate = 5;
     uint32 template_id = 6;
+    // 新增：安全状态
+    int32 security_state = 7;
 }
 
 message QuotaPush {

@@ -13,6 +13,7 @@ package api
 import (
 	"context"
 	"log"
+	"mirage-gateway/pkg/redact"
 	pb "mirage-proto/gen"
 	"time"
 )
@@ -43,12 +44,12 @@ func (fc *FuseCallback) Register(qbm *QuotaBucketManager) {
 // 1. 断开该用户所有连接
 // 2. 上报 FUSE_TRIGGERED 事件到 OS
 func (fc *FuseCallback) onUserExhausted(userID string) {
-	log.Printf("[FuseCallback] 用户 %s 配额耗尽，执行熔断", userID)
+	log.Printf("[FuseCallback] 用户 %s 配额耗尽，执行熔断", redact.RedactToken(userID))
 
 	// 1. 断开该用户的所有会话（仅影响该用户，不影响其他用户）
 	if fc.sessMgr != nil {
 		disconnected := fc.sessMgr.DisconnectUser(userID)
-		log.Printf("[FuseCallback] 已断开用户 %s 的 %d 个会话", userID, disconnected)
+		log.Printf("[FuseCallback] 已断开用户 %s 的 %d 个会话", redact.RedactToken(userID), disconnected)
 	}
 
 	// 2. 上报熔断事件到 OS
@@ -61,9 +62,9 @@ func (fc *FuseCallback) onUserExhausted(userID string) {
 			Timestamp: time.Now().Unix(),
 		}
 		if err := fc.grpcClient.ReportSessionEvent(context.Background(), req); err != nil {
-			log.Printf("[FuseCallback] 熔断事件上报失败 (user=%s): %v", userID, err)
+			log.Printf("[FuseCallback] 熔断事件上报失败 (user=%s): %v", redact.RedactToken(userID), err)
 		} else {
-			log.Printf("[FuseCallback] 熔断事件已上报 OS (user=%s)", userID)
+			log.Printf("[FuseCallback] 熔断事件已上报 OS (user=%s)", redact.RedactToken(userID))
 		}
 	}
 }

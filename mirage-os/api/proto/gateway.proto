@@ -30,6 +30,11 @@ message HeartbeatRequest {
   GatewayStatus status = 4;           // Gateway 状态
   ResourceUsage resource = 5;         // 资源使用情况
   int64 timestamp = 6;                // 时间戳（Unix 秒）
+  // 新增：黑名单统计
+  int64 blacklist_count = 7;          // 黑名单条目数
+  int64 blacklist_updated_at = 8;     // 黑名单最后更新时间
+  // 新增：安全状态
+  int32 security_state = 9;           // 安全状态机当前状态
 }
 
 message GatewayStatus {

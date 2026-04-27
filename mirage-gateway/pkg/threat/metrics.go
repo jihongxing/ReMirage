@@ -144,6 +144,8 @@ func RegisterMetrics() {
 			ThreatIntelLookupTotal,
 			admissionScoreHistogram,
 			admissionActionTotal,
+			QUICPreFilterDropTotal,
+			QUICPostAcceptRejectTotal,
 		)
 	})
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"mirage-os/pkg/models"
+	"mirage-os/pkg/redact"
 	"sync"
 	"time"
 
@@ -73,7 +74,7 @@ func (m *SubscriptionManager) processExpiredSubscriptions() {
 	for _, user := range users {
 		if user.AutoRenew {
 			if err := m.tryAutoRenew(user); err == nil {
-				log.Printf("[SubscriptionManager] 用户 %s 自动续费成功", user.UserID)
+				log.Printf("[SubscriptionManager] 用户 %s 自动续费成功", redact.Token(user.UserID))
 				continue
 			}
 		}
@@ -148,7 +149,7 @@ func (m *SubscriptionManager) downgradeToStandard(user models.User) {
 		"subscription_package_type": "",
 		"subscription_expires_at":   nil,
 	}).Error; err != nil {
-		log.Printf("[SubscriptionManager] 用户 %s 降级失败: %v", user.UserID, err)
+		log.Printf("[SubscriptionManager] 用户 %s 降级失败: %v", redact.Token(user.UserID), err)
 		return
 	}
 
@@ -156,10 +157,10 @@ func (m *SubscriptionManager) downgradeToStandard(user models.User) {
 		UserID:  user.UserID,
 		LogType: "downgrade",
 	}).Error; err != nil {
-		log.Printf("[SubscriptionManager] 用户 %s 降级日志写入失败: %v", user.UserID, err)
+		log.Printf("[SubscriptionManager] 用户 %s 降级日志写入失败: %v", redact.Token(user.UserID), err)
 	}
 
-	log.Printf("[SubscriptionManager] 用户 %s 等级订阅到期，降级为 Standard", user.UserID)
+	log.Printf("[SubscriptionManager] 用户 %s 等级订阅到期，降级为 Standard", redact.Token(user.UserID))
 }
 
 // ProcessExpiredPure 纯函数版本，用于属性测试

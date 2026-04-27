@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"mirage-os/pkg/redact"
 	"strconv"
 	"time"
 
@@ -100,14 +101,14 @@ func (b *QuotaBridge) SyncAfterPurchase(ctx context.Context, userID string, adde
 	).Int64()
 
 	if err != nil {
-		log.Printf("⚠️ [QuotaBridge] Redis 同步失败 (user=%s, tx=%s): %v，入队重试", userID, txID, err)
+		log.Printf("⚠️ [QuotaBridge] Redis 同步失败 (user=%s, tx=%s): %v，入队重试", redact.Token(userID), txID, err)
 		select {
 		case b.retryCh <- retryTask{UserID: userID, AddBytes: addedBytes, ExpiresAt: expiresAt, TxID: txID}:
 		default:
-			log.Printf("🚨 [QuotaBridge] CRITICAL: 重试队列已满，user=%s 配额可能不一致", userID)
+			log.Printf("🚨 [QuotaBridge] CRITICAL: 重试队列已满，user=%s 配额可能不一致", redact.Token(userID))
 		}
 	} else if result == 0 {
-		log.Printf("⚠️ [QuotaBridge] 重复事务跳过 (user=%s, tx=%s)", userID, txID)
+		log.Printf("⚠️ [QuotaBridge] 重复事务跳过 (user=%s, tx=%s)", redact.Token(userID), txID)
 	}
 
 	// 2. 内存态 QuotaManager 追加配额
@@ -128,7 +129,7 @@ func (b *QuotaBridge) SyncAfterDeposit(ctx context.Context, userID string, amoun
 
 	// Redis INCRBYFLOAT 原子增加余额
 	if err := b.rdb.IncrByFloat(ctx, key, amountUSD).Err(); err != nil {
-		log.Printf("⚠️ [QuotaBridge] Redis 余额同步失败 (user=%s): %v", userID, err)
+		log.Printf("⚠️ [QuotaBridge] Redis 余额同步失败 (user=%s): %v", redact.Token(userID), err)
 	}
 
 	return nil
@@ -198,7 +199,7 @@ func (b *QuotaBridge) ReconcileFromDB(ctx context.Context) error {
 		).Int64()
 
 		if err != nil {
-			log.Printf("⚠️ [QuotaBridge] 对账用户 %s 失败: %v", u.UserID, err)
+			log.Printf("⚠️ [QuotaBridge] 对账用户 %s 失败: %v", redact.Token(u.UserID), err)
 			continue
 		}
 		if result == 1 {
@@ -234,7 +235,7 @@ func (b *QuotaBridge) retryLoop() {
 	for task := range b.retryCh {
 		task.Attempts++
 		if task.Attempts > 5 {
-			log.Printf("🚨 [QuotaBridge] CRITICAL: 重试 5 次仍失败，user=%s，等待对账修复", task.UserID)
+			log.Printf("🚨 [QuotaBridge] CRITICAL: 重试 5 次仍失败，user=%s，等待对账修复", redact.Token(task.UserID))
 			continue
 		}
 
@@ -272,7 +273,7 @@ func (b *QuotaBridge) retryLoop() {
 			default:
 			}
 		} else {
-			log.Printf("✅ [QuotaBridge] 重试成功: user=%s, tx=%s, attempt=%d", task.UserID, task.TxID, task.Attempts)
+			log.Printf("✅ [QuotaBridge] 重试成功: user=%s, tx=%s, attempt=%d", redact.Token(task.UserID), task.TxID, task.Attempts)
 		}
 	}
 }
@@ -322,7 +323,7 @@ func (b *QuotaBridge) ConsumeWithOverdraft(ctx context.Context, userID string, b
 	newVal, err := b.rdb.DecrBy(ctx, key, bytes).Result()
 	if err != nil {
 		// Redis 不可用 → 允许透支缓冲，异步对齐
-		log.Printf("⚠️ [QuotaBridge] Redis 扣减失败 (user=%s): %v，允许透支", userID, err)
+		log.Printf("⚠️ [QuotaBridge] Redis 扣减失败 (user=%s): %v，允许透支", redact.Token(userID), err)
 		go b.forceReconcileUser(userID)
 		return true, nil
 	}
@@ -334,7 +335,7 @@ func (b *QuotaBridge) ConsumeWithOverdraft(ctx context.Context, userID string, b
 
 	// 进入透支区间：-5MB 以内仍放行
 	if newVal >= -OverdraftAllowance {
-		log.Printf("⚠️ [QuotaBridge] 用户 %s 进入透支缓冲 (剩余: %d bytes)，触发 DB 对齐", userID, newVal)
+		log.Printf("⚠️ [QuotaBridge] 用户 %s 进入透支缓冲 (剩余: %d bytes)，触发 DB 对齐", redact.Token(userID), newVal)
 		go b.forceReconcileUser(userID)
 		return true, nil
 	}
@@ -342,7 +343,7 @@ func (b *QuotaBridge) ConsumeWithOverdraft(ctx context.Context, userID string, b
 	// 超出透支上限 → 拒绝
 	// 回滚扣减（恢复到透支上限边界），失败时入队异步修复
 	if _, rollbackErr := b.rdb.IncrBy(ctx, key, bytes).Result(); rollbackErr != nil {
-		log.Printf("🚨 [QuotaBridge] 回滚扣减失败 (user=%s): %v，入队异步修复", userID, rollbackErr)
+		log.Printf("🚨 [QuotaBridge] 回滚扣减失败 (user=%s): %v，入队异步修复", redact.Token(userID), rollbackErr)
 		select {
 		case b.retryCh <- retryTask{
 			UserID:   userID,
@@ -350,7 +351,7 @@ func (b *QuotaBridge) ConsumeWithOverdraft(ctx context.Context, userID string, b
 			TxID:     generateTxID(),
 		}:
 		default:
-			log.Printf("🚨 [QuotaBridge] CRITICAL: 回滚重试队列已满，user=%s 配额可能不一致", userID)
+			log.Printf("🚨 [QuotaBridge] CRITICAL: 回滚重试队列已满，user=%s 配额可能不一致", redact.Token(userID))
 		}
 	}
 	return false, nil
@@ -369,7 +370,7 @@ func (b *QuotaBridge) forceReconcileUser(userID string) {
 		Select("remaining_quota, total_quota, balance_usd").
 		Where("user_id = ?", userID).
 		First(&user).Error; err != nil {
-		log.Printf("⚠️ [QuotaBridge] 强制对齐失败 (user=%s): %v", userID, err)
+		log.Printf("⚠️ [QuotaBridge] 强制对齐失败 (user=%s): %v", redact.Token(userID), err)
 		return
 	}
 
@@ -380,5 +381,5 @@ func (b *QuotaBridge) forceReconcileUser(userID string) {
 	pipe.Set(ctx, key+":balance_usd", fmt.Sprintf("%.2f", user.BalanceUSD), quotaRedisTTL)
 	pipe.Exec(ctx)
 
-	log.Printf("✅ [QuotaBridge] 强制对齐完成: user=%s, remaining=%d", userID, user.RemainingQuota)
+	log.Printf("✅ [QuotaBridge] 强制对齐完成: user=%s, remaining=%d", redact.Token(userID), user.RemainingQuota)
 }

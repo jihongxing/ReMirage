@@ -63,6 +63,9 @@ coverage/
 *.prof
 __debug_bin*
 
+# Security scan results
+scan-results/
+
 # eBPF compiled (keep tracked ones)
 # mirage-gateway/bpf/*.o is tracked intentionally
 

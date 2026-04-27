@@ -56,7 +56,7 @@ struct stack_fingerprint {
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 16);
+    __uint(max_entries, 64);
     __type(key, __u32);
     __type(value, struct stack_fingerprint);
 } fingerprint_map SEC(".maps");
@@ -68,6 +68,32 @@ struct {
     __type(key, __u32);
     __type(value, __u32);
 } active_profile_map SEC(".maps");
+
+/* ============================================
+ * B-DNA per-connection 状态（非 SYN 包一致性）
+ * ============================================ */
+
+struct conn_key {
+    __u32 src_ip;
+    __u32 dst_ip;
+    __u16 src_port;
+    __u16 dst_port;
+};
+
+struct conn_state {
+    __u32 target_window;  // SYN 声明的 Window Size
+    __u32 pkt_count;      // 已处理包数（必须 ≥32bit，BPF 不支持 16-bit atomic）
+    __u32 max_pkt;        // 最大维护包数（默认 10）
+    __u32 _pad;
+};
+
+// LRU Hash，自动淘汰过期连接
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 65536);
+    __type(key, struct conn_key);
+    __type(value, struct conn_state);
+} bdna_conn_map SEC(".maps");
 
 // B-DNA 统计
 struct bdna_stats {
@@ -135,11 +161,44 @@ int bdna_tcp_rewrite(struct __sk_buff *skb)
     if ((void *)(tcp + 1) > data_end)
         return TC_ACT_OK;
     
-    // 4. 只处理 SYN 包（握手阶段）
-    if (!tcp->syn)
+    // 4. 构建连接 key（SYN 和非 SYN 都需要）
+    struct conn_key ckey = {
+        .src_ip = ip->saddr,
+        .dst_ip = ip->daddr,
+        .src_port = tcp->source,
+        .dst_port = tcp->dest,
+    };
+
+    // 5. 非 SYN 包：前 N 个包维护 Window Size 一致性
+    if (!tcp->syn) {
+        struct conn_state *state = bpf_map_lookup_elem(&bdna_conn_map, &ckey);
+        if (!state || state->pkt_count >= state->max_pkt)
+            return TC_ACT_OK;
+
+        // 重写 Window Size 并修正校验和
+        __u16 old_window = tcp->window;
+        __u16 new_window = bpf_htons(state->target_window);
+
+        if (old_window != new_window) {
+            __u32 csum_offset = ETH_HLEN + sizeof(struct iphdr)
+                              + __builtin_offsetof(struct tcphdr, check);
+            tcp->window = new_window;
+            bpf_l4_csum_replace(skb, csum_offset,
+                                old_window, new_window, sizeof(__u16));
+        }
+
+        // 递增包计数
+        __sync_fetch_and_add(&state->pkt_count, 1);
+
+        __u32 skey = 0;
+        struct bdna_stats *stats = bpf_map_lookup_elem(&bdna_stats_map, &skey);
+        if (stats)
+            __sync_fetch_and_add(&stats->tcp_rewritten, 1);
+
         return TC_ACT_OK;
-    
-    // 5. 获取当前激活的指纹
+    }
+
+    // 6. SYN 包处理：获取当前激活的指纹
     __u32 key = 0;
     __u32 *profile_id = bpf_map_lookup_elem(&active_profile_map, &key);
     if (!profile_id)
@@ -248,7 +307,16 @@ phase_b:
                             old_window, new_window, sizeof(__u16));
     }
     
-    // 9. 更新统计
+    // 7. SYN 包重写后将 target_window 存入 bdna_conn_map
+    struct conn_state new_state = {
+        .target_window = fp->tcp_window,
+        .pkt_count = 0,
+        .max_pkt = 10,  // 默认维护前 10 个非 SYN 包
+        ._pad = 0,
+    };
+    bpf_map_update_elem(&bdna_conn_map, &ckey, &new_state, BPF_ANY);
+    
+    // 8. 更新统计
     struct bdna_stats *stats = bpf_map_lookup_elem(&bdna_stats_map, &key);
     if (stats)
         __sync_fetch_and_add(&stats->tcp_rewritten, 1);

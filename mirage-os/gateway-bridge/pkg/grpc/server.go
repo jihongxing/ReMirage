@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"mirage-os/pkg/redact"
 	"net"
 	"os"
 	"time"
@@ -188,10 +189,8 @@ func (s *Server) SyncHeartbeat(ctx context.Context, req *pb.HeartbeatRequest) (*
 	// 重试待推送策略
 	_ = s.dispatcher.RetryPending(req.GatewayId)
 
-	// 黑名单一致性校验：比对 Gateway 上报的黑名单条目数与 OS 侧记录
-	// TODO: 待 proto 增加 blacklist_count / blacklist_updated_at 字段后，
-	//       使用专用字段替代 ActiveConnections 临时承载
-	go s.checkBlacklistConsistency(req.GatewayId, int(req.ActiveConnections))
+	// 黑名单一致性校验：使用专用字段
+	go s.checkBlacklistConsistency(req.GatewayId, int(req.BlacklistCount))
 
 	// 检查心跳超时的 Gateway，批量标记其会话为 disconnected
 	go s.markStaleGatewaySessions()
@@ -271,9 +270,9 @@ func (s *Server) ReportThreat(ctx context.Context, req *pb.ThreatRequest) (*pb.T
 			log.Printf("[ERROR] evaluate multi-gateway ban: %v", err)
 		}
 		if banned {
-			log.Printf("[INFO] global ban triggered for %s, syncing blacklist", event.SourceIp)
+			log.Printf("[INFO] global ban triggered for %s, syncing blacklist", redact.IP(event.SourceIp))
 			if syncErr := s.blacklistSyncer.SyncSingleIP(event.SourceIp); syncErr != nil {
-				log.Printf("[ERROR] blacklist sync for %s: %v", event.SourceIp, syncErr)
+				log.Printf("[ERROR] blacklist sync for %s: %v", redact.IP(event.SourceIp), syncErr)
 			}
 		}
 	}
@@ -420,9 +419,9 @@ func (s *Server) ReportSessionEvent(ctx context.Context, req *pb.SessionEventReq
 				VALUES ($1, $2, 'fuse', NOW())
 			`, req.GatewayId, req.UserId)
 			if err != nil {
-				log.Printf("[ERROR] write fuse billing_log (user=%s): %v", req.UserId, err)
+				log.Printf("[ERROR] write fuse billing_log (user=%s): %v", redact.Token(req.UserId), err)
 			} else {
-				log.Printf("[INFO] 用户 %s 配额熔断已记录 (gateway=%s)", req.UserId, req.GatewayId)
+				log.Printf("[INFO] 用户 %s 配额熔断已记录 (gateway=%s)", redact.Token(req.UserId), req.GatewayId)
 			}
 		}
 	}

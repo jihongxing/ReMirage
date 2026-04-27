@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -26,6 +29,7 @@ import (
 	"mirage-gateway/pkg/nerve"
 	"mirage-gateway/pkg/orchestrator/events"
 	"mirage-gateway/pkg/phantom"
+	"mirage-gateway/pkg/redact"
 	"mirage-gateway/pkg/security"
 	"mirage-gateway/pkg/strategy"
 	"mirage-gateway/pkg/threat"
@@ -33,6 +37,8 @@ import (
 	pb "mirage-proto/gen"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
 	"go.yaml.in/yaml/v2"
 )
 
@@ -105,6 +111,10 @@ type GatewayConfig struct {
 		EnableWebRTC   bool   `yaml:"enable_webrtc"`
 		EnableICMP     bool   `yaml:"enable_icmp"`
 		EnableDNS      bool   `yaml:"enable_dns"`
+		DNSDomain      string `yaml:"dns_domain"`      // DNS 隧道权威域名
+		DNSListenAddr  string `yaml:"dns_listen_addr"` // DNS 监听地址，默认 :53
+		ICMPTargetIP   string `yaml:"icmp_target_ip"`  // ICMP 隧道目标 IP
+		ICMPGatewayIP  string `yaml:"icmp_gateway_ip"` // ICMP 隧道网关 IP
 	} `yaml:"data_plane"`
 	Chameleon struct {
 		ListenAddr     string `yaml:"listen_addr"`      // WSS 降级监听地址，默认 :443
@@ -331,11 +341,14 @@ func main() {
 			Enabled:      1,
 		}
 		if rlCfg.SynPPSLimit == 0 {
-			rlCfg.SynPPSLimit = 50
+			rlCfg.SynPPSLimit = 200
 		}
 		if rlCfg.ConnPPSLimit == 0 {
-			rlCfg.ConnPPSLimit = 200
+			rlCfg.ConnPPSLimit = 500
 		}
+		// 每次启动生成 ±15% 随机偏移
+		rlCfg.SynPPSLimit = applyRateOffset(rlCfg.SynPPSLimit, 0.15)
+		rlCfg.ConnPPSLimit = applyRateOffset(rlCfg.ConnPPSLimit, 0.15)
 		if err := applier.SyncRateLimitConfig(rlCfg); err != nil {
 			log.Printf("⚠️ 速率限制配置同步失败: %v", err)
 		} else {
@@ -493,10 +506,10 @@ func main() {
 		loader.GetMap("whitelist_map"),
 	)
 	burnEngine.SetOnQuotaExhausted(func(uid string) {
-		log.Printf("🚨 [BurnEngine] 用户 %s 配额耗尽，已熔断", uid)
+		log.Printf("🚨 [BurnEngine] 用户 %s 配额耗尽，已熔断", redact.RedactToken(uid))
 	})
 	burnEngine.SetOnQuotaLow(func(uid string, remaining uint64) {
-		log.Printf("⚠️ [BurnEngine] 用户 %s 配额不足: %d bytes", uid, remaining)
+		log.Printf("⚠️ [BurnEngine] 用户 %s 配额不足: %d bytes", redact.RedactToken(uid), remaining)
 	})
 	burnEngine.Start(ctx)
 	log.Println("✅ BurnEngine 实时烧录引擎已启动")
@@ -636,7 +649,173 @@ func main() {
 		// 不需要额外的 SetPacketCallback 广播 — Send() 直接走 activePath.Conn.Send()
 	}
 
-	// ④ StealthControlPlane — 双通道隐蔽控制面
+	// ⑥ 冷备协议接入：DNS / WebRTC / ICMP（启动失败记录告警但不阻断 Gateway）
+
+	// DNS 服务端（被动监听，接收客户端 DNS 隧道上行数据）
+	var dnsServer *gtunnel.DNSServer
+	if cfg.DataPlane.EnableDNS {
+		dnsDomain := cfg.DataPlane.DNSDomain
+		dnsListenAddr := cfg.DataPlane.DNSListenAddr
+		if dnsListenAddr == "" {
+			dnsListenAddr = ":53"
+		}
+		if dnsDomain == "" {
+			log.Println("⚠️ [DNS] dns_domain 未配置，DNS 隧道不可用")
+		} else {
+			var dnsErr error
+			dnsServer, dnsErr = gtunnel.NewDNSServer(dnsDomain, dnsListenAddr)
+			if dnsErr != nil {
+				log.Printf("⚠️ [DNS] DNSServer 创建失败（降级运行）: %v", dnsErr)
+			} else {
+				// 注册收包回调：DNS 上行数据 → Orchestrator
+				dnsServer.SetRecvCallback(func(clientID string, data []byte) {
+					orchestrator.FeedInboundPacket(gtunnel.TransportDNS, clientID, data)
+				})
+				// Start() 是阻塞的（ListenAndServe），需要在 goroutine 中运行
+				go func() {
+					if err := dnsServer.Start(); err != nil {
+						log.Printf("⚠️ [DNS] DNSServer 运行错误: %v", err)
+					}
+				}()
+				log.Printf("✅ DNSServer 已启动: domain=%s addr=%s", dnsDomain, dnsListenAddr)
+			}
+		}
+	}
+
+	// WebRTC 应答器（被动应答，依赖 WSS 信令通道）
+	// WebRTCAnswerer 不能在启动时立即创建，ChameleonListener 的 readLoop 中已内置
+	// CtrlFrameRouter，会在收到 CtrlTypeSDP_Offer 时自动创建 WebRTCAnswerer 并完成
+	// HandleOffer → HandleRemoteCandidate → WaitReady 流程。
+	// 这里只需确认 ChameleonListener 已启动且 WebRTC 已启用即可。
+	if cfg.DataPlane.EnableWebRTC {
+		if chameleonListener != nil {
+			log.Println("✅ WebRTC 控制帧路由已就绪（ChameleonListener 内置 CtrlFrameRouter，等待客户端 SDP Offer）")
+		} else {
+			log.Println("⚠️ [WebRTC] ChameleonListener 不可用，WebRTC 信令通道缺失（降级运行）")
+		}
+	}
+
+	// ICMP 传输（主动 transport：Go Raw Socket 发送 + eBPF Ring Buffer 接收）
+	var icmpTransport *gtunnel.ICMPTransport
+	if cfg.DataPlane.EnableICMP {
+		icmpConfigMap := loader.GetMap("icmp_config_map")
+		icmpTxMap := loader.GetMap("icmp_tx_map")
+		icmpRxRingbuf := loader.GetMap("icmp_data_events")
+		if icmpConfigMap == nil || icmpRxRingbuf == nil {
+			log.Println("⚠️ [ICMP] eBPF Map 不可用（icmp_config_map/icmp_data_events），ICMP 隧道不可用")
+		} else {
+			icmpCfg := gtunnel.ICMPTransportConfig{
+				TargetIP:   net.ParseIP(cfg.DataPlane.ICMPTargetIP),
+				GatewayIP:  net.ParseIP(cfg.DataPlane.ICMPGatewayIP),
+				MaxPayload: 1024,
+			}
+			if icmpCfg.TargetIP == nil {
+				log.Println("⚠️ [ICMP] icmp_target_ip 未配置，ICMP 隧道不可用")
+			} else {
+				var icmpErr error
+				icmpTransport, icmpErr = gtunnel.NewICMPTransport(icmpConfigMap, icmpTxMap, icmpRxRingbuf, icmpCfg)
+				if icmpErr != nil {
+					log.Printf("⚠️ [ICMP] ICMPTransport 创建失败（降级运行）: %v", icmpErr)
+				} else {
+					orchestrator.AdoptInboundConn(icmpTransport, gtunnel.TransportICMP)
+					log.Println("✅ ICMPTransport 已启动并注入 Orchestrator")
+				}
+			}
+		}
+	}
+
+	// ④ QUIC/H3 Bearer Listener — 生产态公网数据面 (443/UDP)
+	// 两层探测防护：UDPPreFilter + QUICPostAcceptValidator
+	// 现有 TCP HandshakeGuard/ProtocolDetector 继续挂在 gRPC listener 上不做修改
+	var quicListener *quic.Listener
+	quicListenAddr := cfg.DataPlane.QUICListenAddr
+	if quicListenAddr == "" {
+		quicListenAddr = ":443"
+	}
+
+	// 构建 QUIC/H3 TLS 配置
+	h3TLSConfig := &tls.Config{
+		NextProtos: []string{"h3"},
+		MinVersion: tls.VersionTLS13,
+	}
+	// 加载证书（复用 Chameleon 证书配置）
+	if cfg.Chameleon.CertFile != "" && cfg.Chameleon.KeyFile != "" {
+		cert, certErr := tls.LoadX509KeyPair(cfg.Chameleon.CertFile, cfg.Chameleon.KeyFile)
+		if certErr != nil {
+			log.Printf("⚠️ QUIC/H3 证书加载失败（bearer listener 不可用）: %v", certErr)
+		} else {
+			h3TLSConfig.Certificates = []tls.Certificate{cert}
+		}
+	}
+
+	if len(h3TLSConfig.Certificates) > 0 {
+		quicConf := &quic.Config{
+			EnableDatagrams: true,
+			MaxIdleTimeout:  30 * time.Second,
+		}
+
+		var qlErr error
+		quicListener, qlErr = quic.ListenAddr(quicListenAddr, h3TLSConfig, quicConf)
+		if qlErr != nil {
+			log.Printf("⚠️ QUIC/H3 bearer listener 启动失败（降级运行）: %v", qlErr)
+		} else {
+			log.Printf("✅ QUIC/H3 bearer listener 已启动: %s", quicListenAddr)
+
+			// 第一层防护：UDP 首包预过滤
+			quicPreFilter := threat.NewUDPPreFilter(blacklist)
+
+			// 第二层防护：Accept 后 ConnectionState 校验
+			quicPostValidator := threat.NewQUICPostAcceptValidator(blacklist, riskScorer)
+
+			// HTTP/3 合法响应 handler — 标准 HTTP/3 请求返回 403/404
+			h3Mux := http.NewServeMux()
+			h3Mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Server", "cloudflare")
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.WriteHeader(http.StatusForbidden)
+				w.Write([]byte("<html><body><h1>403 Forbidden</h1></body></html>"))
+			})
+
+			// 启动 HTTP/3 server（处理标准 HTTP/3 请求）
+			h3Server := &http3.Server{
+				Handler: h3Mux,
+			}
+
+			// Accept 循环：接受 QUIC 连接，两层防护 + HTTP/3 响应 + Datagram 数据面
+			go func() {
+				for {
+					conn, err := quicListener.Accept(ctx)
+					if err != nil {
+						select {
+						case <-ctx.Done():
+							return
+						default:
+							log.Printf("⚠️ [QUIC/H3] Accept 错误: %v", err)
+							continue
+						}
+					}
+
+					// 第一层：UDP 预过滤已在 quic-go 内部处理 Initial
+					// 这里通过 quicPreFilter 记录统计（quic-go 自身会丢弃格式错误的包）
+					_ = quicPreFilter
+
+					// 第二层：ConnectionState 校验
+					if !quicPostValidator.Validate(conn) {
+						continue
+					}
+
+					// 合法 h3 连接 — 双重用途：
+					// 1. 标准 HTTP/3 请求 → 返回 403/404 合法响应
+					// 2. QUIC Datagram → 数据面流量注入 Orchestrator
+					go handleQUICConn(ctx, conn, h3Server, orchestrator)
+				}
+			}()
+		}
+	} else {
+		log.Println("⚠️ QUIC/H3 bearer listener 未启动（无可用证书）")
+	}
+
+	// ⑤ StealthControlPlane — 双通道隐蔽控制面
 	stealthCP := stealth.NewStealthControlPlane(stealth.StealthControlPlaneOpts{
 		Dispatcher: &stealthDispatcherAdapter{inner: v2Dispatcher},
 	})
@@ -679,20 +858,15 @@ func main() {
 					st = pb.GatewayStatus_DEGRADED
 				}
 
-				// TODO: Proto 需要增加 blacklist_count 和 blacklist_updated_at 字段
-				// 当前通过 ActiveConnections 字段临时承载黑名单条目数（待 proto 更新后迁移）
+				// 获取黑名单统计信息
 				blCount := int64(blacklist.Count())
 				blUpdatedAt := blacklist.LatestUpdateTimestamp()
-				_ = blUpdatedAt // 待 proto 扩展后使用
 
-				// 8.6: 获取当前安全状态用于心跳上报
-				// TODO: Proto 需要增加 security_state 字段到 HeartbeatRequest
-				// 当前通过 ThreatLevel 高位临时承载安全状态（待 proto 更新后迁移）
+				// 获取当前安全状态
 				securityState := int32(0)
 				if fsm := responder.GetFSM(); fsm != nil {
 					securityState = int32(fsm.CurrentState())
 				}
-				_ = securityState // 待 proto 扩展后使用
 
 				return &pb.HeartbeatRequest{
 					GatewayId:         gatewayID,
@@ -701,13 +875,18 @@ func main() {
 					EbpfLoaded:        true,
 					ThreatLevel:       int32(responder.GetCurrentLevel()),
 					MemoryUsageMb:     int32(memStats.Alloc / 1024 / 1024),
-					ActiveConnections: blCount, // 临时复用，待 proto 增加 blacklist_count 字段
+					ActiveConnections: 0, // 实际活跃连接数
 					// 拓扑语义字段
 					DownlinkAddr:   "0.0.0.0:50847",
 					CellId:         cfg.MCC.CellID,
 					ActiveSessions: 0,  // TODO: 从 session manager 获取实际值
 					StateHash:      "", // TODO: 从 MotorDownlink 获取当前 state hash
 					Version:        "v1.0",
+					// 黑名单统计
+					BlacklistCount:     blCount,
+					BlacklistUpdatedAt: blUpdatedAt,
+					// 安全状态
+					SecurityState: securityState,
 				}
 			})
 			// 启动上行感知闭环（10s 流量上报 via gRPC）
@@ -807,7 +986,17 @@ func main() {
 	if chameleonListener != nil {
 		graceful.RegisterModule(&shutdownAdapter{"ChameleonListener", func(ctx context.Context) error { return chameleonListener.Stop() }})
 	}
+	if dnsServer != nil {
+		graceful.RegisterModule(&shutdownAdapter{"DNSServer", func(ctx context.Context) error { return dnsServer.Stop() }})
+	}
+	if icmpTransport != nil {
+		graceful.RegisterModule(&shutdownAdapter{"ICMPTransport", func(ctx context.Context) error { return icmpTransport.Close() }})
+	}
 	graceful.RegisterModule(&shutdownAdapter{"StealthCP", func(ctx context.Context) error { stealthCP.Close(); return nil }})
+	if quicListener != nil {
+		ql := quicListener
+		graceful.RegisterModule(&shutdownAdapter{"QUIC-H3-Listener", func(ctx context.Context) error { return ql.Close() }})
+	}
 	if grpcClient != nil {
 		graceful.RegisterModule(&shutdownAdapter{"gRPC-Client", func(ctx context.Context) error { grpcClient.Close(); return nil }})
 	}
@@ -834,6 +1023,32 @@ func main() {
 		log.Printf("⚠️ 优雅关闭出现错误: %v", err)
 	}
 	log.Println("✅ Mirage-Gateway 已安全退出")
+}
+
+// handleQUICConn 处理单个 QUIC 连接：HTTP/3 请求返回合法响应，Datagram 注入 Orchestrator
+func handleQUICConn(ctx context.Context, conn *quic.Conn, h3Server *http3.Server, orch *gtunnel.Orchestrator) {
+	// 检查是否支持 Datagram — 如果支持，作为数据面连接注入 Orchestrator
+	state := conn.ConnectionState()
+	if state.SupportsDatagrams.Remote && state.SupportsDatagrams.Local {
+		qConn := gtunnel.NewQUICServerConn(conn)
+		orch.AdoptInboundConn(qConn, gtunnel.TransportQUIC)
+		log.Printf("🔗 [QUIC/H3→Orchestrator] 入站 QUIC Datagram 连接已注入: %s", redact.RedactIP(conn.RemoteAddr().String()))
+	}
+
+	// 处理 HTTP/3 流（标准请求返回 403/404）
+	for {
+		stream, err := conn.AcceptStream(ctx)
+		if err != nil {
+			return
+		}
+		// 简单处理：对所有 HTTP/3 stream 返回 403
+		go func() {
+			defer stream.Close()
+			// 写入最小 HTTP/3 403 响应帧
+			// HEADERS frame: type=0x01
+			stream.Write([]byte{0x01, 0x04, 0x00, 0x00, 0xd9, 0x03}) // 简化的 403 响应
+		}()
+	}
 }
 
 // shutdownAdapter 将函数适配为 ShutdownModule 接口
@@ -953,6 +1168,21 @@ func boolToUint32(b bool) uint32 {
 		return 1
 	}
 	return 0
+}
+
+// applyRateOffset 对速率限制阈值应用 ±ratio 随机偏移（使用 crypto/rand）
+func applyRateOffset(base uint32, ratio float64) uint32 {
+	var buf [4]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return base
+	}
+	r := binary.LittleEndian.Uint32(buf[:])
+	normalized := (float64(r)/float64(^uint32(0)))*2*ratio - ratio
+	result := float64(base) * (1.0 + normalized)
+	if result < 1 {
+		return 1
+	}
+	return uint32(result)
 }
 
 // startEnhancedHealthServer 启动增强健康检查

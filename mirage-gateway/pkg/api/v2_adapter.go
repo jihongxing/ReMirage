@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"mirage-gateway/pkg/orchestrator/events"
+	"mirage-gateway/pkg/redact"
 	pb "mirage-proto/gen"
 )
 
@@ -55,7 +56,7 @@ func (a *V2CommandAdapter) AdaptPushQuota(ctx context.Context, req *pb.QuotaPush
 		log.Printf("[V2Adapter] QuotaPush 分发失败: %v", err)
 		return err
 	}
-	log.Printf("[V2Adapter] QuotaPush 已投递 V2 编排链路: user=%s", req.UserId)
+	log.Printf("[V2Adapter] QuotaPush 已投递 V2 编排链路: user=%s", redact.RedactToken(req.UserId))
 	return nil
 }
 

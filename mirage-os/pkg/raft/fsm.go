@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mirage-os/pkg/redact"
 	"sync"
 
 	"github.com/hashicorp/raft"
@@ -15,12 +16,12 @@ import (
 type CommandType string
 
 const (
-	CommandSetQuota         CommandType = "set_quota"
-	CommandUpdateGateway    CommandType = "update_gateway"
-	CommandAddThreat        CommandType = "add_threat"
-	CommandSetConfig        CommandType = "set_config"
-	CommandTacticalUpdate   CommandType = "tactical_state_update"
-	CommandGhostModeToggle  CommandType = "ghost_mode_toggle"
+	CommandSetQuota        CommandType = "set_quota"
+	CommandUpdateGateway   CommandType = "update_gateway"
+	CommandAddThreat       CommandType = "add_threat"
+	CommandSetConfig       CommandType = "set_config"
+	CommandTacticalUpdate  CommandType = "tactical_state_update"
+	CommandGhostModeToggle CommandType = "ghost_mode_toggle"
 )
 
 // Command Raft 命令
@@ -50,10 +51,10 @@ func (f *FSM) Apply(log *raft.Log) interface{} {
 	if err := json.Unmarshal(log.Data, &cmd); err != nil {
 		return fmt.Errorf("解析命令失败: %w", err)
 	}
-	
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	
+
 	switch cmd.Type {
 	case CommandSetQuota:
 		return f.applySetQuota(cmd.Payload)
@@ -76,32 +77,32 @@ func (f *FSM) Apply(log *raft.Log) interface{} {
 func (f *FSM) Snapshot() (raft.FSMSnapshot, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	
+
 	// 深拷贝状态
 	snapshot := make(map[string]interface{})
 	for k, v := range f.state {
 		snapshot[k] = v
 	}
-	
+
 	return &FSMSnapshot{state: snapshot}, nil
 }
 
 // Restore 从快照恢复
 func (f *FSM) Restore(rc io.ReadCloser) error {
 	defer rc.Close()
-	
+
 	var state map[string]interface{}
 	if err := json.NewDecoder(rc).Decode(&state); err != nil {
 		return fmt.Errorf("解码快照失败: %w", err)
 	}
-	
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	
+
 	f.state = state
-	
+
 	log.Println("[FSM] ✅ 已从快照恢复")
-	
+
 	return nil
 }
 
@@ -111,16 +112,16 @@ func (f *FSM) applySetQuota(payload json.RawMessage) interface{} {
 		UserID string `json:"user_id"`
 		Quota  int64  `json:"quota"`
 	}
-	
+
 	if err := json.Unmarshal(payload, &data); err != nil {
 		return err
 	}
-	
+
 	key := fmt.Sprintf("quota:%s", data.UserID)
 	f.state[key] = data.Quota
-	
-	log.Printf("[FSM] 设置配额: %s = %d", data.UserID, data.Quota)
-	
+
+	log.Printf("[FSM] 设置配额: %s = %d", redact.Token(data.UserID), data.Quota)
+
 	return nil
 }
 
@@ -130,16 +131,16 @@ func (f *FSM) applyUpdateGateway(payload json.RawMessage) interface{} {
 		GatewayID string                 `json:"gateway_id"`
 		Status    map[string]interface{} `json:"status"`
 	}
-	
+
 	if err := json.Unmarshal(payload, &data); err != nil {
 		return err
 	}
-	
+
 	key := fmt.Sprintf("gateway:%s", data.GatewayID)
 	f.state[key] = data.Status
-	
+
 	log.Printf("[FSM] 更新网关: %s", data.GatewayID)
-	
+
 	return nil
 }
 
@@ -149,16 +150,16 @@ func (f *FSM) applyAddThreat(payload json.RawMessage) interface{} {
 		IP         string `json:"ip"`
 		ThreatType int    `json:"threat_type"`
 	}
-	
+
 	if err := json.Unmarshal(payload, &data); err != nil {
 		return err
 	}
-	
+
 	key := fmt.Sprintf("threat:%s", data.IP)
 	f.state[key] = data.ThreatType
-	
-	log.Printf("[FSM] 添加威胁: %s (类型: %d)", data.IP, data.ThreatType)
-	
+
+	log.Printf("[FSM] 添加威胁: %s (类型: %d)", redact.IP(data.IP), data.ThreatType)
+
 	return nil
 }
 
@@ -168,15 +169,15 @@ func (f *FSM) applySetConfig(payload json.RawMessage) interface{} {
 		Key   string      `json:"key"`
 		Value interface{} `json:"value"`
 	}
-	
+
 	if err := json.Unmarshal(payload, &data); err != nil {
 		return err
 	}
-	
+
 	f.state[data.Key] = data.Value
-	
+
 	log.Printf("[FSM] 设置配置: %s", data.Key)
-	
+
 	return nil
 }
 
@@ -184,7 +185,7 @@ func (f *FSM) applySetConfig(payload json.RawMessage) interface{} {
 func (f *FSM) Get(key string) (interface{}, bool) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	
+
 	val, ok := f.state[key]
 	return val, ok
 }
@@ -209,11 +210,11 @@ func (f *FSM) applyTacticalUpdate(payload json.RawMessage) interface{} {
 	if err := json.Unmarshal(payload, &data); err != nil {
 		return err
 	}
-	
+
 	f.tacticalMode = data.Mode
 	f.state["tactical_mode"] = data.Mode
 	f.state["tactical_config"] = data.Config
-	
+
 	log.Printf("[FSM] 战术模式更新: %d (发起者: %s)", data.Mode, data.Issuer)
 	return nil
 }
@@ -227,10 +228,10 @@ func (f *FSM) applyGhostModeToggle(payload json.RawMessage) interface{} {
 	if err := json.Unmarshal(payload, &data); err != nil {
 		return err
 	}
-	
+
 	f.ghostMode = data.Enabled
 	f.state["ghost_mode"] = data.Enabled
-	
+
 	log.Printf("[FSM] Ghost Mode: %v", data.Enabled)
 	return nil
 }
@@ -247,15 +248,15 @@ func (s *FSMSnapshot) Persist(sink raft.SnapshotSink) error {
 		if err := json.NewEncoder(sink).Encode(s.state); err != nil {
 			return err
 		}
-		
+
 		return sink.Close()
 	}()
-	
+
 	if err != nil {
 		sink.Cancel()
 		return err
 	}
-	
+
 	return nil
 }
 

@@ -5,6 +5,7 @@ package cortex
 import (
 	"encoding/json"
 	"log"
+	"mirage-gateway/pkg/redact"
 	"net"
 	"sync"
 )
@@ -144,7 +145,7 @@ func (tb *ThreatBus) EmitHighSeverityEvent(event *HighSeverityEvent) {
 	}
 
 	log.Printf("[ThreatBus] 高危事件: %s (Severity=%d, IP=%s, Coords=%v)",
-		event.ThreatType, event.Severity, event.SourceIP, event.GeoCoords)
+		event.ThreatType, event.Severity, redact.RedactIP(event.SourceIP), event.GeoCoords)
 }
 
 // ToJSON 序列化为 JSON（用于 WebSocket 推送）

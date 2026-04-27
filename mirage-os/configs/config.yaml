@@ -1,3 +1,4 @@
+# ⚠️ 仅限开发环境 — 生产环境禁止引用此文件
 # Mirage-OS 配置文件
 
 # 服务配置
@@ -11,7 +12,7 @@ database:
   host: localhost
   port: 54329
   user: postgres
-  password: postgres
+  password: ${DB_PASSWORD:}              # 生产环境必须设置
   dbname: mirage_os
   sslmode: disable
   timezone: UTC
@@ -122,7 +123,7 @@ monero:
 
 # 安全配置
 security:
-  jwt_secret: ${JWT_SECRET:change-this-in-production}
+  jwt_secret: ${JWT_SECRET:}             # 生产环境必须设置
   jwt_expiry: 86400            # JWT 过期时间（秒）
   rate_limit: 100              # 每分钟请求限制
 

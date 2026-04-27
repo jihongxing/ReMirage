@@ -2,6 +2,7 @@ package threat
 
 import (
 	"log"
+	"mirage-gateway/pkg/redact"
 	"net"
 	"sync"
 	"time"
@@ -71,7 +72,7 @@ func (hg *HandshakeGuard) onTimeout(sourceIP string) {
 		if hg.riskScorer != nil {
 			hg.riskScorer.AddScore(sourceIP, 20, "handshake_timeout")
 		}
-		log.Printf("[HandshakeGuard] IP %s 超时 %d 次，已加入黑名单", sourceIP, c.Count)
+		log.Printf("[HandshakeGuard] IP %s 超时 %d 次，已加入黑名单", redact.RedactIP(sourceIP), c.Count)
 	}
 }
 

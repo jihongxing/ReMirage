@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"mirage-os/pkg/models"
+	"mirage-os/pkg/redact"
 	"net/http"
 	"time"
 
@@ -228,7 +229,7 @@ func (mm *MoneroManager) GenerateDepositAddress(ctx context.Context, userID stri
 		return "", fmt.Errorf("生成子地址失败: %w", err)
 	}
 
-	log.Printf("💰 [Monero] 为用户 %s 生成订单级充值子地址: %s", userID, address)
+	log.Printf("💰 [Monero] 为用户 %s 生成订单级充值子地址: %s", redact.Token(userID), address)
 	return address, nil
 }
 
@@ -290,7 +291,7 @@ func (mm *MoneroManager) getTransactionConfirmations(ctx context.Context, txHash
 
 // confirmDeposit 确认充值（单一真相源，幂等）
 func (mm *MoneroManager) confirmDeposit(deposit *models.Deposit) {
-	log.Printf("💰 [Monero] 确认充值: 用户=%s, 金额=%.8f XMR", deposit.UserID, deposit.AmountXMR)
+	log.Printf("💰 [Monero] 确认充值: 用户=%s, 金额=%.8f XMR", redact.Token(deposit.UserID), deposit.AmountXMR)
 
 	err := mm.DB.Transaction(func(tx *gorm.DB) error {
 		// 幂等保护：仅 PENDING → CONFIRMED 可落账
@@ -382,7 +383,7 @@ func (mm *MoneroManager) publishDepositConfirmed(userID string, amountXMR, amoun
 	payload, _ := json.Marshal(event)
 	mm.Redis.Publish(ctx, channel, payload)
 
-	log.Printf("💰 [Monero] 已推送到账通知: 用户=%s, 金额=%.8f XMR", userID, amountXMR)
+	log.Printf("💰 [Monero] 已推送到账通知: 用户=%s, 金额=%.8f XMR", redact.Token(userID), amountXMR)
 }
 
 // CreateDeposit 创建充值记录
@@ -402,7 +403,7 @@ func (mm *MoneroManager) CreateDeposit(userID, txHash string, amountXMR, exchang
 		return fmt.Errorf("创建充值记录失败: %w", err)
 	}
 
-	log.Printf("💰 [Monero] 创建充值记录: 用户=%s, TxHash=%s, 金额=%.8f XMR", userID, txHash, amountXMR)
+	log.Printf("💰 [Monero] 创建充值记录: 用户=%s, TxHash=%s, 金额=%.8f XMR", redact.Token(userID), txHash, amountXMR)
 	return nil
 }
 

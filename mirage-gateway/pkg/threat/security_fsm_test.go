@@ -12,8 +12,13 @@ func TestFSM_NormalToAlert_HighThreat(t *testing.T) {
 	policy := NewIngressPolicy([]PolicyRule{
 		{Condition: "rate_exceeded", Action: ActionThrottle, Params: map[string]int{"pps": 50}, Priority: 50},
 	})
+	var mu sync.Mutex
 	var lastState SecurityState = -1
-	fsm := NewSecurityFSM(policy, func(s SecurityState) { lastState = s })
+	fsm := NewSecurityFSM(policy, func(s SecurityState) {
+		mu.Lock()
+		lastState = s
+		mu.Unlock()
+	})
 
 	// ThreatLevel High → Alert
 	fsm.Evaluate(&SecurityMetrics{ThreatLevel: LevelHigh})
@@ -22,9 +27,12 @@ func TestFSM_NormalToAlert_HighThreat(t *testing.T) {
 		t.Fatalf("期望 Alert，实际: %d", fsm.CurrentState())
 	}
 	// 等回调 goroutine
-	time.Sleep(10 * time.Millisecond)
-	if lastState != StateAlert {
-		t.Fatalf("回调状态期望 Alert，实际: %d", lastState)
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	got := lastState
+	mu.Unlock()
+	if got != StateAlert {
+		t.Fatalf("回调状态期望 Alert，实际: %d", got)
 	}
 }
 

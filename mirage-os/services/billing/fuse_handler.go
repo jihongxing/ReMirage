@@ -18,6 +18,7 @@ package billing
 import (
 	"log"
 	"mirage-os/pkg/models"
+	"mirage-os/pkg/redact"
 
 	"gorm.io/gorm"
 )
@@ -50,6 +51,6 @@ func (h *FuseHandler) HandleFuseEvent(event *FuseEvent) error {
 		log.Printf("[FuseHandler] 写入熔断日志失败: %v", err)
 		return err
 	}
-	log.Printf("[FuseHandler] 用户 %s 配额熔断已记录 (gateway: %s)", event.UserID, event.GatewayID)
+	log.Printf("[FuseHandler] 用户 %s 配额熔断已记录 (gateway: %s)", redact.Token(event.UserID), event.GatewayID)
 	return nil
 }

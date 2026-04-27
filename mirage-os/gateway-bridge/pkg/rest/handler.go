@@ -17,6 +17,7 @@ import (
 
 	"mirage-os/gateway-bridge/pkg/dispatch"
 	"mirage-os/gateway-bridge/pkg/quota"
+	"mirage-os/pkg/redact"
 )
 
 // Handler 内部 REST 处理器
@@ -192,7 +193,7 @@ func (h *Handler) handleXMRWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[REST] XMR 到账: user=%s, amount=%.4f XMR, quota=+%.2f GB", req.UserID, req.AmountXMR, quotaGB)
+	log.Printf("[REST] XMR 到账: user=%s, amount=%.4f XMR, quota=+%.2f GB", redact.Token(req.UserID), req.AmountXMR, quotaGB)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{

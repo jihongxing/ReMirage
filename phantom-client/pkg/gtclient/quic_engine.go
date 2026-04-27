@@ -52,8 +52,45 @@ func NewQUICEngine(cfg *QUICEngineConfig) *QUICEngine {
 		bufSize = 4096
 	}
 
+	// ============================================================
+	// A-06 主线：Client 源头 TLS/QUIC 指纹生成
+	// ============================================================
+	//
+	// 可控字段清单（通过 *tls.Config 可直接配置）：
+	//   - NextProtos:        ["h3"] — 与 Chrome QUIC ALPN 一致
+	//   - MinVersion:        tls.VersionTLS13 — QUIC 强制 TLS 1.3
+	//   - MaxVersion:        （不设置，Go 默认 TLS 1.3 即最高版本）
+	//   - ServerName:        （由上层设置，SNI 伪装）
+	//   - InsecureSkipVerify / VerifyConnection: 证书校验策略
+	//
+	// 不可控字段差异清单（Go crypto/tls 限制，无法与 Chrome 完全对齐）：
+	//   - CipherSuites:      TLS 1.3 cipher suites 由 Go runtime 决定，
+	//                         tls.Config.CipherSuites 字段对 TLS 1.3 不生效。
+	//                         Go 1.21+ 固定顺序: AES-128-GCM, AES-256-GCM, ChaCha20。
+	//                         Chrome 顺序: AES-256-GCM, ChaCha20, AES-128-GCM。
+	//                         差异：顺序不同，但 DPI 通常不以此为强特征（TLS 1.3 仅 3 套件）。
+	//   - CurvePreferences:  可设置 [X25519, P-256, P-384]，但 Go 不保证
+	//                         实际 ClientHello 中的顺序与设置完全一致。
+	//                         Chrome 使用 X25519Kyber768Draft00 + X25519 + P-256，
+	//                         Go 不支持 Kyber PQ 扩展，此差异无法消除。
+	//   - Extensions 顺序:   Go crypto/tls 的 ClientHello Extensions 排列顺序
+	//                         与 Chrome 不同（缺少 GREASE、compress_certificate、
+	//                         application_settings 等 Chrome 特有扩展）。
+	//   - Session Ticket:    Go 的 TLS 1.3 session resumption 行为与 Chrome 不同。
+	//   - ECH/ESNI:          Go 标准库不支持 Encrypted Client Hello。
+	//
+	// 验收门槛：
+	//   pcap 抓包对比 Client QUIC ClientHello vs Chrome，接受以下已知差异：
+	//   1. CipherSuites 顺序差异（3 套件排列不同）
+	//   2. 缺少 Kyber PQ 密钥交换
+	//   3. Extensions 列表差异（缺少 GREASE/compress_certificate/ECH）
+	//   4. Session Ticket 行为差异
+	//   以上差异在当前 Go crypto/tls + quic-go 栈下无法消除，记录为技术债务。
+	//   若需像素级对齐，需等待 quic-go 支持 ClientHello 模板注入或 fork quic-go。
+	// ============================================================
 	tlsConf := &tls.Config{
-		NextProtos: []string{"mirage-gtunnel"},
+		NextProtos: []string{"h3"},
+		MinVersion: tls.VersionTLS13, // QUIC 强制 TLS 1.3，与 Chrome 一致
 	}
 
 	if len(cfg.PinnedCertHash) == 32 {
@@ -80,9 +117,12 @@ func NewQUICEngine(cfg *QUICEngineConfig) *QUICEngine {
 		tlsConf:     tlsConf,
 		nicDetector: cfg.NICDetector,
 		quicConf: &quic.Config{
-			EnableDatagrams: true,
-			KeepAlivePeriod: keepAlive,
-			MaxIdleTimeout:  60 * time.Second,
+			EnableDatagrams:                true,
+			KeepAlivePeriod:                keepAlive,
+			MaxIdleTimeout:                 30 * time.Second, // Chrome 140+ 对齐
+			InitialPacketSize:              1200,             // Chrome 标准 Initial Packet Size
+			InitialStreamReceiveWindow:     6 * 1024 * 1024,  // 6MB — Chrome 140+ 对齐
+			InitialConnectionReceiveWindow: 15 * 1024 * 1024, // 15MB — Chrome 140+ 对齐
 		},
 		recvCh: make(chan []byte, bufSize),
 	}
@@ -138,10 +178,14 @@ func (e *QUICEngine) Connect(ctx context.Context) error {
 		return fmt.Errorf("bind physical NIC %s: %w", physicalIP, err)
 	}
 
-	// 4. QUIC dial with explicit bound socket
-	conn, err := quic.Dial(ctx, udpConn, remoteAddr, e.tlsConf, e.quicConf)
+	// 4. QUIC dial via Transport with CID length 8 bytes (Chrome 默认)
+	transport := &quic.Transport{
+		Conn:               udpConn,
+		ConnectionIDLength: 8, // Chrome 默认 CID 长度
+	}
+	conn, err := transport.Dial(ctx, remoteAddr, e.tlsConf, e.quicConf)
 	if err != nil {
-		udpConn.Close()
+		transport.Close()
 		return fmt.Errorf("quic dial %s: %w", e.addr, err)
 	}
 
@@ -149,7 +193,7 @@ func (e *QUICEngine) Connect(ctx context.Context) error {
 	state := conn.ConnectionState()
 	if !state.SupportsDatagrams.Remote || !state.SupportsDatagrams.Local {
 		conn.CloseWithError(0, "datagrams not supported")
-		udpConn.Close()
+		transport.Close()
 		return fmt.Errorf("gateway does not support QUIC Datagrams")
 	}
 

@@ -3,6 +3,7 @@ package geo
 
 import (
 	"log"
+	"mirage-os/pkg/redact"
 	"net"
 
 	"github.com/oschwald/geoip2-golang"
@@ -62,21 +63,21 @@ func (l *Locator) Resolve(ipStr string) (lat, lng float64, country, city string)
 
 		idx := int(lastByte) % len(cities)
 		c := cities[idx]
-		log.Printf("GeoIP Resolve (占位): %s → %s, %s (%.4f, %.4f)", ipStr, c.city, c.country, c.lat, c.lng)
+		log.Printf("GeoIP Resolve (占位): %s → %s, %s (%.4f, %.4f)", redact.IP(ipStr), c.city, c.country, c.lat, c.lng)
 		return c.lat, c.lng, c.country, c.city
 	}
 
 	// 解析 IP
 	ip := net.ParseIP(ipStr)
 	if ip == nil {
-		log.Printf("GeoIP: 无效 IP %s", ipStr)
+		log.Printf("GeoIP: 无效 IP %s", redact.IP(ipStr))
 		return 0, 0, "Unknown", "Unknown"
 	}
 
 	// 查询 GeoIP2 数据库
 	record, err := l.db.City(ip)
 	if err != nil {
-		log.Printf("GeoIP: 查询失败 %s: %v", ipStr, err)
+		log.Printf("GeoIP: 查询失败 %s: %v", redact.IP(ipStr), err)
 		return 0, 0, "Unknown", "Unknown"
 	}
 
@@ -85,7 +86,7 @@ func (l *Locator) Resolve(ipStr string) (lat, lng float64, country, city string)
 	country = record.Country.Names["en"]
 	city = record.City.Names["en"]
 
-	log.Printf("GeoIP Resolve: %s → %s, %s (%.4f, %.4f)", ipStr, city, country, lat, lng)
+	log.Printf("GeoIP Resolve: %s → %s, %s (%.4f, %.4f)", redact.IP(ipStr), city, country, lat, lng)
 	return lat, lng, country, city
 }
 

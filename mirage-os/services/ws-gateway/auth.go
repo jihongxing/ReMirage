@@ -2,6 +2,7 @@ package wsgateway
 
 import (
 	"log"
+	"mirage-os/pkg/redact"
 	"net/http"
 	"strings"
 
@@ -31,7 +32,7 @@ func JWTAuthMiddleware(jwtSecret string) func(http.Handler) http.Handler {
 			}
 
 			if token == "" {
-				log.Printf("[WARN] ws-gateway JWT: missing token from %s", r.RemoteAddr)
+				log.Printf("[WARN] ws-gateway JWT: missing token from %s", redact.IP(r.RemoteAddr))
 				http.Error(w, "unauthorized: missing token", http.StatusUnauthorized)
 				return
 			}
@@ -43,7 +44,7 @@ func JWTAuthMiddleware(jwtSecret string) func(http.Handler) http.Handler {
 				return []byte(jwtSecret), nil
 			})
 			if err != nil {
-				log.Printf("[WARN] ws-gateway JWT: invalid token from %s: %v", r.RemoteAddr, err)
+				log.Printf("[WARN] ws-gateway JWT: invalid token from %s: %v", redact.IP(r.RemoteAddr), err)
 				http.Error(w, "unauthorized: invalid token", http.StatusUnauthorized)
 				return
 			}

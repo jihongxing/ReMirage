@@ -82,6 +82,16 @@ func (m *QuotaBucketManager) Consume(userID string, bytes uint64) bool {
 			return false
 		}
 		if atomic.CompareAndSwapUint64(&bucket.RemainingBytes, remaining, remaining-bytes) {
+			if remaining == bytes { // 恰好耗尽：余额从 remaining 减至 0
+				if atomic.CompareAndSwapUint32(&bucket.Exhausted, 0, 1) {
+					m.mu.RLock()
+					cb := m.onExhausted
+					m.mu.RUnlock()
+					if cb != nil {
+						go cb(userID)
+					}
+				}
+			}
 			return true
 		}
 	}

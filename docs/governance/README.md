@@ -29,6 +29,18 @@
 - `source-of-truth-map.md`
   真相源地图，回答"某类事实到底该去哪里看、哪里改、哪里不能当权威"。
 
+- `capability-truth-source.md`
+  能力真相源，回答"我们的北极星是什么、什么算验收通过、当前真实做到哪里"。
+
+- `capability-gap-remediation-roadmap.md`
+  北极星实施计划，回答"围绕北极星目标分几个阶段推进、每阶段里程碑是什么、以什么证据验收"。
+
+- `market-positioning-scenarios.md`
+  商业场景与交付叙事，回答"这套系统在市场上怎么讲、适合哪些高价值场景、以什么形态交付"。
+
+- `dpi-risk-audit-checklist.md`
+  DPI 风险审计清单，回答"当前最可能从哪些检测面被识别、缺什么证据、下一步先验证什么"。
+
 - `document-lifecycle.md`
   文档状态规则，回答"草案、输入材料、正式真相源、归档材料如何区分"。
 

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mirage-gateway/pkg/redact"
 	"net"
 	"net/http"
 	"os"
@@ -242,7 +243,7 @@ func (cl *ChameleonListener) handleWebSocket(w http.ResponseWriter, r *http.Requ
 	atomic.AddInt64(&cl.stats.ActiveConnections, 1)
 	atomic.AddInt64(&cl.stats.FallbackEvents, 1)
 
-	log.Printf("🦎 [Chameleon] 客户端降级连接: %s (来自 %s)", clientID, r.RemoteAddr)
+	log.Printf("🦎 [Chameleon] 客户端降级连接: %s (来自 %s)", clientID, redact.RedactIP(r.RemoteAddr))
 
 	// 通知上层
 	cl.mu.RLock()

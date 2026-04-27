@@ -15,6 +15,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -86,6 +87,8 @@ func DefaultChameleonDialConfig() ChameleonDialConfig {
 }
 
 // DialChameleon 拨号建立降级连接
+// O4 深度隐匿：使用 dialWithUTLS 建立底层 TCP+TLS 连接，在 uTLS 连接之上建立 WebSocket
+// 消除 Go 原生 crypto/tls 的 JA3/JA4 指纹差异
 func DialChameleon(ctx context.Context, config ChameleonDialConfig) (*ChameleonClientConn, error) {
 	connCtx, cancel := context.WithCancel(ctx)
 
@@ -97,7 +100,7 @@ func DialChameleon(ctx context.Context, config ChameleonDialConfig) (*ChameleonC
 		cancel:   cancel,
 	}
 
-	// 构建 TLS 配置
+	// 构建 TLS 配置（仅用于 mTLS 证书加载，实际握手由 uTLS 接管）
 	tlsConfig, err := conn.buildClientTLS(config)
 	if err != nil {
 		cancel()
@@ -105,12 +108,30 @@ func DialChameleon(ctx context.Context, config ChameleonDialConfig) (*ChameleonC
 	}
 	conn.tlsConfig = tlsConfig
 
-	// 构建 WebSocket Dialer
+	// 解析 endpoint 中的 host:port 用于 dialWithUTLS
+	wsURL := config.Endpoint
+	host := config.SNI
+	addr := host + ":443" // 默认端口
+	if u, parseErr := parseWSEndpoint(wsURL); parseErr == nil {
+		addr = u.Host
+		if u.Port() == "" {
+			addr = u.Host + ":443"
+		}
+	}
+
+	// 构建 WebSocket Dialer — 使用 NetDialTLSContext 注入 uTLS 连接
 	dialer := &websocket.Dialer{
-		TLSClientConfig:  tlsConfig,
 		HandshakeTimeout: config.DialTimeout,
-		// 伪装 HTTP 头
-		Proxy: http.ProxyFromEnvironment,
+		Proxy:            http.ProxyFromEnvironment,
+		// 关键：通过 NetDialTLSContext 注入 uTLS 连接
+		// 这样 WebSocket 握手在 uTLS 连接之上进行，而非 Go 原生 TLS
+		NetDialTLSContext: func(ctx context.Context, network, dialAddr string) (net.Conn, error) {
+			utlsConn, err := dialWithUTLS(addr, host, tlsConfig)
+			if err != nil {
+				return nil, fmt.Errorf("uTLS 连接失败: %w", err)
+			}
+			return utlsConn, nil
+		},
 	}
 
 	// 伪装请求头
@@ -119,7 +140,6 @@ func DialChameleon(ctx context.Context, config ChameleonDialConfig) (*ChameleonC
 		"Accept":          []string{"text/html,application/xhtml+xml"},
 		"Accept-Language": []string{"en-US,en;q=0.9"},
 		"Accept-Encoding": []string{"gzip, deflate, br"},
-		"Connection":      []string{"Upgrade"},
 		"Cache-Control":   []string{"no-cache"},
 	}
 
@@ -141,7 +161,7 @@ func DialChameleon(ctx context.Context, config ChameleonDialConfig) (*ChameleonC
 	// 启动接收循环
 	go conn.recvLoop()
 
-	log.Printf("🦎 [Chameleon-Client] 降级连接已建立: %s (RTT: %v)", config.Endpoint, conn.rtt)
+	log.Printf("🦎 [Chameleon-Client] 降级连接已建立 (uTLS): %s (RTT: %v)", config.Endpoint, conn.rtt)
 
 	return conn, nil
 }
@@ -308,6 +328,11 @@ func dialWithUTLS(addr, sni string, baseTLS *tls.Config) (net.Conn, error) {
 		// 不设置 CipherSuites/CurvePreferences — 由 HelloChrome_Auto 完全接管
 	}
 
+	// 传递 InsecureSkipVerify（测试/开发环境）
+	if baseTLS != nil && baseTLS.InsecureSkipVerify {
+		utlsConfig.InsecureSkipVerify = true
+	}
+
 	// 加载 mTLS 客户端证书（如果有）
 	if baseTLS != nil && len(baseTLS.Certificates) > 0 {
 		// 只传递核心字段（Certificate chain + PrivateKey）
@@ -332,6 +357,11 @@ func dialWithUTLS(addr, sni string, baseTLS *tls.Config) (net.Conn, error) {
 	}
 
 	return utlsConn, nil
+}
+
+// parseWSEndpoint 解析 WebSocket endpoint URL
+func parseWSEndpoint(endpoint string) (*url.URL, error) {
+	return url.Parse(endpoint)
 }
 
 // deframePackets 解帧（公共函数）
@@ -361,16 +391,25 @@ func deframePackets(message []byte) ([][]byte, error) {
 }
 
 // ============================================================
-// 自动降级控制器 — 集成到 TransportManager
+// 自动降级控制器 — 兼容适配层（委托到 Orchestrator）
+//
+// Deprecated: 以下方法均已委托到内部 Orchestrator 实例。
+// 新代码应直接使用 Orchestrator。
 // ============================================================
 
 // ConnectWithFallback 带降级的连接流程
 //
 // Deprecated: 此方法属于 TransportManager 的二元切换体系，已被 Orchestrator 替代。
 // 新代码应使用 Orchestrator.Start() 进行 HappyEyeballs 多协议竞速。
+// 此方法现已委托到内部 Orchestrator.Start()。
 // 参见 docs/外部零特征消除审计与整改清单.md S-01。
 func (tm *TransportManager) ConnectWithFallback(ctx context.Context) error {
-	// 第一步：尝试 QUIC
+	// 委托到 Orchestrator
+	if tm.orchestrator != nil {
+		return tm.orchestrator.Start(ctx)
+	}
+
+	// 兼容回退：orchestrator 未初始化时使用旧逻辑
 	log.Printf("🚀 [Transport] 尝试 QUIC 连接: %s (超时 %v)", tm.config.QUICAddr, tm.config.FallbackTimeout)
 
 	quicCtx, quicCancel := context.WithTimeout(ctx, tm.config.FallbackTimeout)
@@ -529,7 +568,15 @@ func (tm *TransportManager) dialQUIC(ctx context.Context) (TransportConn, error)
 // probeAndPromote 后台探测 QUIC 并在恢复后回升
 //
 // Deprecated: 已被 Orchestrator.probeLoop() 替代。
+// 此方法现已委托到 Orchestrator 的探测循环。
 func (tm *TransportManager) probeAndPromote(ctx context.Context) {
+	// 委托到 Orchestrator — probeLoop 由 Orchestrator.Start() 自动启动
+	// 此方法保留为空操作兼容层
+	if tm.orchestrator != nil {
+		return
+	}
+
+	// 兼容回退：orchestrator 未初始化时使用旧逻辑
 	ticker := time.NewTicker(tm.config.ProbeInterval)
 	defer ticker.Stop()
 
@@ -567,7 +614,17 @@ func (tm *TransportManager) probeAndPromote(ctx context.Context) {
 // promoteToQUIC 回升到 QUIC 主通道
 //
 // Deprecated: 已被 Orchestrator.promote() 替代。
+// 此方法现已委托到 Orchestrator.promote()。
 func (tm *TransportManager) promoteToQUIC(ctx context.Context) {
+	// 委托到 Orchestrator
+	if tm.orchestrator != nil {
+		if err := tm.orchestrator.promote(TransportQUIC); err != nil {
+			log.Printf("⚠️ [Transport] Orchestrator 升格失败: %v", err)
+		}
+		return
+	}
+
+	// 兼容回退：orchestrator 未初始化时使用旧逻辑
 	log.Printf("⬆️ [Transport] QUIC 恢复，执行回升...")
 
 	tm.mu.Lock()
@@ -599,7 +656,17 @@ func (tm *TransportManager) promoteToQUIC(ctx context.Context) {
 }
 
 // recvLoop 统一接收循环
+//
+// Deprecated: 已被 Orchestrator.receiveLoop() 替代。
+// 此方法现已委托到 Orchestrator 的接收循环。
 func (tm *TransportManager) recvLoop() {
+	// 委托到 Orchestrator — receiveLoop 由 Orchestrator.Start() 自动启动
+	// 此方法保留为空操作兼容层
+	if tm.orchestrator != nil {
+		return
+	}
+
+	// 兼容回退：orchestrator 未初始化时使用旧逻辑
 	for {
 		select {
 		case <-tm.stopChan:

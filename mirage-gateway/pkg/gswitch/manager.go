@@ -331,19 +331,116 @@ func (gm *GSwitchManager) refillStandby() {
 	log.Printf("📦 热备池已补充 %d 个域名，当前: %d", deficit, len(gm.standbyPool))
 }
 
-// generateTempDomain 生成临时域名
+// generateTempDomain 生成临时域名（多格式随机选择）
 func (gm *GSwitchManager) generateTempDomain() *Domain {
-	// 生成随机子域名
-	randBytes := make([]byte, 8)
-	rand.Read(randBytes)
-	subdomain := hex.EncodeToString(randBytes)
+	// 随机选择域名生成模式
+	var patternIdx [1]byte
+	rand.Read(patternIdx[:])
+	idx := int(patternIdx[0]) % len(domainPatterns)
+
+	// 生成 8 字节随机熵
+	entropy := make([]byte, 8)
+	rand.Read(entropy)
+
+	name := domainPatterns[idx].generate(entropy)
 
 	return &Domain{
-		Name:      fmt.Sprintf("%s.cdn.example.com", subdomain),
+		Name:      name,
 		IP:        "0.0.0.0", // 待分配
 		Status:    DomainStandby,
 		CreatedAt: time.Now(),
 	}
+}
+
+// domainPattern 域名生成模式
+type domainPattern struct {
+	name     string
+	generate func(entropy []byte) string
+}
+
+// domainPatterns 5+ 种域名生成模式
+var domainPatterns = []domainPattern{
+	{
+		name: "hex-cdn",
+		generate: func(entropy []byte) string {
+			return fmt.Sprintf("%s.cdn.example.com", hex.EncodeToString(entropy))
+		},
+	},
+	{
+		name: "base32-static",
+		generate: func(entropy []byte) string {
+			return fmt.Sprintf("%s.static.example.net", base32Encode(entropy[:5]))
+		},
+	},
+	{
+		name: "alnum-assets",
+		generate: func(entropy []byte) string {
+			return fmt.Sprintf("%s.assets.example.org", alphanumeric(entropy, 10))
+		},
+	},
+	{
+		name: "word-pair-io",
+		generate: func(entropy []byte) string {
+			return fmt.Sprintf("%s.cdn.example.io", wordPair(entropy))
+		},
+	},
+	{
+		name: "hex-short-cloud",
+		generate: func(entropy []byte) string {
+			return fmt.Sprintf("img-%s.cloud.example.com", hex.EncodeToString(entropy[:4]))
+		},
+	},
+	{
+		name: "alnum-media",
+		generate: func(entropy []byte) string {
+			return fmt.Sprintf("media-%s.example.co", alphanumeric(entropy, 8))
+		},
+	},
+}
+
+// base32Encode 将字节编码为小写 base32（无 padding）
+func base32Encode(data []byte) string {
+	const alphabet = "abcdefghijklmnopqrstuvwxyz234567"
+	var result []byte
+	bits := 0
+	buf := 0
+	for _, b := range data {
+		buf = (buf << 8) | int(b)
+		bits += 8
+		for bits >= 5 {
+			bits -= 5
+			result = append(result, alphabet[(buf>>bits)&0x1f])
+		}
+	}
+	if bits > 0 {
+		result = append(result, alphabet[(buf<<(5-bits))&0x1f])
+	}
+	return string(result)
+}
+
+// alphanumeric 将字节转换为指定长度的字母数字字符串
+func alphanumeric(entropy []byte, length int) string {
+	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+	result := make([]byte, length)
+	for i := 0; i < length; i++ {
+		idx := int(entropy[i%len(entropy)]) % len(charset)
+		result[i] = charset[idx]
+	}
+	return string(result)
+}
+
+// wordPair 从熵生成单词对（模拟 CDN 子域名风格）
+func wordPair(entropy []byte) string {
+	words := []string{
+		"fast", "edge", "node", "core", "data",
+		"link", "mesh", "flow", "sync", "peak",
+		"blue", "gray", "west", "east", "main",
+		"live", "next", "open", "safe", "warm",
+	}
+	w1 := words[int(entropy[0])%len(words)]
+	w2 := words[int(entropy[1])%len(words)]
+	num := int(entropy[2])%900 + 100 // 100-999
+	return fmt.Sprintf("%s-%s-%d", w1, w2, num)
 }
 
 // cooldownRecycleLoop 冷却回收循环

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"mirage-gateway/pkg/ebpf"
+	"mirage-gateway/pkg/redact"
 	"mirage-gateway/pkg/strategy"
 )
 
@@ -172,9 +173,9 @@ func (r *Responder) handleEvent(event *UnifiedThreatEvent) {
 				ttl = 24 * time.Hour
 			}
 			if err := r.blacklist.Add(event.SourceIP+"/32", time.Now().Add(ttl), SourceLocal); err != nil {
-				log.Printf("[Responder] 自动封禁失败: %s: %v", event.SourceIP, err)
+				log.Printf("[Responder] 自动封禁失败: %s: %v", redact.RedactIP(event.SourceIP), err)
 			} else {
-				log.Printf("[Responder] 策略封禁: %s (action=%s, condition=%s)", event.SourceIP, action, condition)
+				log.Printf("[Responder] 策略封禁: %s (action=%s, condition=%s)", redact.RedactIP(event.SourceIP), action, condition)
 			}
 		}
 	} else {
@@ -185,9 +186,9 @@ func (r *Responder) handleEvent(event *UnifiedThreatEvent) {
 				ttl = 24 * time.Hour
 			}
 			if err := r.blacklist.Add(event.SourceIP+"/32", time.Now().Add(ttl), SourceLocal); err != nil {
-				log.Printf("[Responder] 自动封禁失败: %s: %v", event.SourceIP, err)
+				log.Printf("[Responder] 自动封禁失败: %s: %v", redact.RedactIP(event.SourceIP), err)
 			} else {
-				log.Printf("[Responder] 自动封禁: %s (TTL=%v, level=%d)", event.SourceIP, ttl, newLevel)
+				log.Printf("[Responder] 自动封禁: %s (TTL=%v, level=%d)", redact.RedactIP(event.SourceIP), ttl, newLevel)
 			}
 		}
 	}

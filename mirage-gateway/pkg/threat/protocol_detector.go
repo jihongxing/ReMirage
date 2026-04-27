@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"log"
+	"mirage-gateway/pkg/redact"
 	"net"
 	"time"
 )
@@ -82,5 +83,5 @@ func (pd *ProtocolDetector) HandleMalicious(sourceIP string, protocolType string
 
 	ProtocolScanTotal.WithLabelValues(GetGatewayID(), protocolType).Inc()
 
-	log.Printf("[ProtocolDetector] 检测到非预期协议: IP=%s, Protocol=%s", sourceIP, protocolType)
+	log.Printf("[ProtocolDetector] 检测到非预期协议: IP=%s, Protocol=%s", redact.RedactIP(sourceIP), protocolType)
 }

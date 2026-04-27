@@ -1,11 +1,19 @@
 package api
 
 import (
+	"context"
+	"mirage-gateway/pkg/redact"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"google.golang.org/grpc/metadata"
+	"pgregory.net/rapid"
 )
 
 // =============================================================================
@@ -19,8 +27,10 @@ func TestIntegration_MultiUserQuotaIsolation(t *testing.T) {
 	trafficCounter := NewUserTrafficCounter()
 
 	var exhaustedUsers sync.Map
+	exhaustedDone := make(chan string, 2)
 	quotaMgr.SetOnExhausted(func(userID string) {
 		exhaustedUsers.Store(userID, true)
+		exhaustedDone <- userID
 	})
 
 	// 注册 2 个用户的会话
@@ -90,8 +100,13 @@ func TestIntegration_MultiUserQuotaIsolation(t *testing.T) {
 		t.Fatal("userB 不应被标记为耗尽")
 	}
 
-	// 验证：耗尽回调只触发 userA
-	if _, ok := exhaustedUsers.Load("userA"); !ok {
+	// 验证：耗尽回调只触发 userA（等待异步回调完成）
+	select {
+	case uid := <-exhaustedDone:
+		if uid != "userA" {
+			t.Fatalf("耗尽回调应为 userA，实际: %s", uid)
+		}
+	case <-time.After(2 * time.Second):
 		t.Fatal("应触发 userA 耗尽回调")
 	}
 	if _, ok := exhaustedUsers.Load("userB"); ok {
@@ -366,5 +381,197 @@ func TestIntegration_SessionLifecycle(t *testing.T) {
 	}
 	if sessInfo.ConnectedAt.IsZero() {
 		t.Fatal("ConnectedAt 不应为零值")
+	}
+}
+
+// =============================================================================
+// Feature: phase3-operational-baseline, Property 4: AddQuota 重新激活
+// 验证: 需求 6.5
+// =============================================================================
+
+func TestProperty_AddQuotaReactivation(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		initialQuota := rapid.Uint64Range(1, 10000).Draw(t, "initialQuota")
+		additionalQuota := rapid.Uint64Range(1, 10000).Draw(t, "additionalQuota")
+
+		mgr := NewQuotaBucketManager()
+		mgr.UpdateQuota("user1", initialQuota)
+
+		// 耗尽配额
+		mgr.Consume("user1", initialQuota)
+		mgr.Consume("user1", 1) // 确保触发 Exhausted=1
+
+		if !mgr.IsExhausted("user1") {
+			t.Fatal("user1 应被标记为耗尽")
+		}
+
+		// 调用 UpdateQuota 追加配额（等效 AddQuota）
+		mgr.UpdateQuota("user1", additionalQuota)
+
+		// 验证 Exhausted 标志重置为 0
+		if mgr.IsExhausted("user1") {
+			t.Fatal("UpdateQuota 后 Exhausted 应重置为 0")
+		}
+
+		// 验证 RemainingBytes 等于 additionalQuota
+		remaining, ok := mgr.GetRemaining("user1")
+		if !ok {
+			t.Fatal("user1 应存在")
+		}
+		if remaining != additionalQuota {
+			t.Fatalf("RemainingBytes 应为 %d，实际: %d", additionalQuota, remaining)
+		}
+
+		// 验证可继续消费
+		consumeAmount := uint64(1)
+		if additionalQuota > 1 {
+			consumeAmount = rapid.Uint64Range(1, additionalQuota).Draw(t, "consumeAfterReactivation")
+		}
+		if !mgr.Consume("user1", consumeAmount) {
+			t.Fatalf("重新激活后应能消费 %d bytes", consumeAmount)
+		}
+	})
+}
+
+// =============================================================================
+// Critical Test 1: 非法请求不影响配额
+// 验证: 需求 5.3, 7.3
+// 所属部署等级: All
+// =============================================================================
+
+func TestCritical_IllegalRequestNoQuotaImpact(t *testing.T) {
+	secret := "test-secret-critical"
+	auth := NewCommandAuthenticator(secret)
+
+	quotaMgr := NewQuotaBucketManager()
+	quotaMgr.UpdateQuota("legit-user", 5000)
+
+	remainingBefore, _ := quotaMgr.GetRemaining("legit-user")
+
+	// 发送非法请求（无 HMAC）→ 被拒绝
+	ctx := context.Background()
+	err := auth.Verify(ctx, "PushStrategy")
+	if err == nil {
+		t.Fatal("无 metadata 的请求应被拒绝")
+	}
+
+	// 发送无效签名请求 → 被拒绝
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	md := metadata.New(map[string]string{
+		"x-mirage-sig":   "invalid-sig",
+		"x-mirage-ts":    ts,
+		"x-mirage-nonce": "nonce-critical-1",
+	})
+	ctx2 := metadata.NewIncomingContext(context.Background(), md)
+	err2 := auth.Verify(ctx2, "PushStrategy")
+	if err2 == nil {
+		t.Fatal("无效签名应被拒绝")
+	}
+
+	// 验证合法用户配额不变
+	remainingAfter, _ := quotaMgr.GetRemaining("legit-user")
+	if remainingAfter != remainingBefore {
+		t.Fatalf("非法请求后合法用户配额不应变化: before=%d, after=%d", remainingBefore, remainingAfter)
+	}
+	if quotaMgr.IsExhausted("legit-user") {
+		t.Fatal("合法用户不应被标记为耗尽")
+	}
+}
+
+// =============================================================================
+// Critical Test 2: 熔断后日志脱敏
+// 验证: 需求 6.4, 7.4
+// 所属部署等级: All
+// =============================================================================
+
+func TestCritical_FuseLogRedaction(t *testing.T) {
+	// 模拟熔断事件日志中的 IP 脱敏
+	testIP := "192.168.1.100"
+	testToken := "Bearer eyJhbGciOiJIUzI1NiJ9.xxx"
+	testSecret := "my-super-secret-key"
+
+	// 模拟熔断日志内容
+	logLine := "用户 " + testIP + " 配额耗尽，token=" + testToken + "，secret=" + testSecret
+
+	// 应用脱敏
+	redactedIP := redact.RedactIPInText(logLine)
+	// 验证 IP 已脱敏
+	if strings.Contains(redactedIP, ".100") {
+		t.Fatalf("熔断日志中 IP 未脱敏: %s", redactedIP)
+	}
+	if !strings.Contains(redactedIP, ".***") {
+		t.Fatalf("熔断日志中应包含脱敏 IP (x.x.x.***): %s", redactedIP)
+	}
+
+	// 验证 Token 脱敏
+	redactedToken := redact.RedactToken(testToken)
+	if redactedToken != "***" {
+		t.Fatalf("Token 应被脱敏为 ***: got %s", redactedToken)
+	}
+
+	// 验证 Secret 脱敏
+	redactedSecret := redact.RedactSecret(testSecret)
+	if redactedSecret != "[REDACTED]" {
+		t.Fatalf("Secret 应被脱敏为 [REDACTED]: got %s", redactedSecret)
+	}
+}
+
+// =============================================================================
+// Critical Test 3: 配额重新激活端到端
+// 验证: 需求 6.5, 7.3
+// 所属部署等级: All
+// =============================================================================
+
+func TestCritical_QuotaReactivationE2E(t *testing.T) {
+	quotaMgr := NewQuotaBucketManager()
+	sessMgr := NewSessionManager()
+
+	var exhaustedUID string
+	exhaustedDone := make(chan struct{}, 1)
+	quotaMgr.SetOnExhausted(func(userID string) {
+		exhaustedUID = userID
+		select {
+		case exhaustedDone <- struct{}{}:
+		default:
+		}
+	})
+
+	sessMgr.Register("sess-e2e-1", "userE2E", "client-e2e")
+	quotaMgr.UpdateQuota("userE2E", 100)
+
+	// 耗尽配额
+	quotaMgr.Consume("userE2E", 100)
+	quotaMgr.Consume("userE2E", 1) // 触发耗尽
+
+	// 等待回调
+	select {
+	case <-exhaustedDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("耗尽回调未触发")
+	}
+
+	if exhaustedUID != "userE2E" {
+		t.Fatalf("耗尽回调应为 userE2E，实际: %s", exhaustedUID)
+	}
+	if !quotaMgr.IsExhausted("userE2E") {
+		t.Fatal("userE2E 应被标记为耗尽")
+	}
+
+	// 追加配额（AddQuota 等效）
+	quotaMgr.UpdateQuota("userE2E", 500)
+
+	// 验证 Exhausted 恢复为 0
+	if quotaMgr.IsExhausted("userE2E") {
+		t.Fatal("追加配额后 Exhausted 应恢复为 0")
+	}
+
+	// 验证可继续消费
+	if !quotaMgr.Consume("userE2E", 200) {
+		t.Fatal("追加配额后应能继续消费")
+	}
+
+	remaining, _ := quotaMgr.GetRemaining("userE2E")
+	if remaining != 300 {
+		t.Fatalf("消费 200 后剩余应为 300，实际: %d", remaining)
 	}
 }

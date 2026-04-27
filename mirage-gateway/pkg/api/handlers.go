@@ -9,6 +9,7 @@ import (
 
 	"mirage-gateway/pkg/ebpf"
 	"mirage-gateway/pkg/gswitch"
+	"mirage-gateway/pkg/redact"
 	"mirage-gateway/pkg/threat"
 	pb "mirage-proto/gen"
 
@@ -145,11 +146,9 @@ func (h *CommandHandler) PushStrategy(ctx context.Context, req *pb.StrategyPush)
 	}
 
 	if req.DefenseLevel < 0 || req.DefenseLevel > 5 {
-		// TODO: Proto 需要增加 security_state 字段到 StrategyPush
-		// 当前约定：defense_level 100-104 映射到安全状态强制切换
-		// 100=Normal, 101=Alert, 102=HighPressure, 103=Isolated, 104=Silent
-		if req.DefenseLevel >= 100 && req.DefenseLevel <= 104 && h.securityFSM != nil {
-			state := threat.SecurityState(req.DefenseLevel - 100)
+		// 检查是否为安全状态字段
+		if req.SecurityState >= 0 && req.SecurityState <= 4 && h.securityFSM != nil {
+			state := threat.SecurityState(req.SecurityState)
 			h.securityFSM.ForceState(state)
 			log.Printf("[Handler] OS 强制切换安全状态: %d", state)
 			return &pb.PushResponse{Success: true, Message: "security_state forced"}, nil
@@ -295,7 +294,7 @@ func (h *CommandHandler) PushQuota(ctx context.Context, req *pb.QuotaPush) (*pb.
 			userID = GlobalBucketKey // 兼容旧模式
 		}
 		h.quotaBuckets.UpdateQuota(userID, req.RemainingBytes)
-		log.Printf("[Handler] 配额桶已更新: user=%s, remaining=%d bytes", userID, req.RemainingBytes)
+		log.Printf("[Handler] 配额桶已更新: user=%s, remaining=%d bytes", redact.RedactToken(userID), req.RemainingBytes)
 	}
 
 	// 同时写入 eBPF quota_map（保持内核态配额检查兼容）
@@ -311,7 +310,7 @@ func (h *CommandHandler) PushQuota(ctx context.Context, req *pb.QuotaPush) (*pb.
 	}
 
 	if req.RemainingBytes == 0 {
-		log.Printf("[Handler] ⚠️ 配额为 0 (user=%s)，流量阻断已触发", req.UserId)
+		log.Printf("[Handler] ⚠️ 配额为 0 (user=%s)，流量阻断已触发", redact.RedactToken(req.UserId))
 	}
 
 	return &pb.PushResponse{Success: true, Message: "ok"}, nil

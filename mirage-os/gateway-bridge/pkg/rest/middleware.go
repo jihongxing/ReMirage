@@ -2,6 +2,7 @@ package rest
 
 import (
 	"log"
+	"mirage-os/pkg/redact"
 	"net/http"
 	"time"
 )
@@ -51,7 +52,7 @@ func AccessLogMiddleware(next http.Handler) http.Handler {
 		}
 
 		log.Printf("[ACCESS] ip=%s path=%s method=%s status=%d auth=%s duration=%s ts=%s",
-			r.RemoteAddr, r.URL.Path, r.Method, rec.statusCode, authResult,
+			redact.IP(r.RemoteAddr), r.URL.Path, r.Method, rec.statusCode, authResult,
 			time.Since(start).Round(time.Microsecond), start.Format(time.RFC3339))
 	})
 }
