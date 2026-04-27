@@ -38,7 +38,7 @@ C 侧变更（`bdna.c`）：
 
 Go 侧变更（`bdna_profile_updater.go`）：
 - 启动时将已启用画像族的权重写入 `profile_select_map`（CDF 格式，每条包含 cumulative_weight + 真实 profile_id）和 `profile_count_map`
-- 新增 `OverrideConnectionProfile(connKey ConnKey, profileID uint32) error` 方法（策略调整用，非首包路径）
+- 新增 `OverrideConnectionProfile(connKey ConnKey, profileID uint32) error` 方法（策略调整用，ConnKey 包含 l4_proto，非首包路径）
 - 权重从 `gateway.yaml` 的 `bdna.profile_weights` 读取
 - registry 中禁用或 OS 节点不可用的画像不写入 `profile_select_map`
 
@@ -111,8 +111,8 @@ Go 侧变更（`dna_updater.go`）：
 ## 二、Property Tests
 
 ### Property 1: per-connection 画像隔离
-- 生成 N 条随机 conn_key，分配画像后验证：不同 conn_key 可以有不同 profile_id；同一 conn_key 多次查询返回相同 profile_id
-- 验证: 需求 2.1, 2.4
+- 生成 N 条随机 conn_key，分配画像后验证：不同 conn_key 可以有不同 profile_id；同一 conn_key 多次查询返回相同 profile_id；相同 (saddr,daddr,sport,dport) 但 l4_proto 分别为 TCP/UDP 时作为独立 conn_key，不共享 profile
+- 验证: 需求 2.1, 2.4, 2.5
 
 ### Property 2: NPM MIMIC 分布拟合
 - 分三层验证：（1）采样器单独拟合：直接调用 `sample_from_cdf` Mock 1000 次，采样结果分布与目标 CDF 的 JS 散度 < 0.10；（2）单调不截断：任意 current_size，padding 后 output_len ≥ current_size；小包/大包 padding=0；（3）受控等式：生成 current_size 恒为 0（或恒 < 所有目标 bin 下界）的专门样本，验证 output_len == sampled_target_len。全局拟合（含 current_size > sampled_target_len 的包）留给 M15 真实实验

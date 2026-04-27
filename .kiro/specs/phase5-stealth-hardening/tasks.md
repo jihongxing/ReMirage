@@ -69,7 +69,7 @@
   - [ ] 3.2 B-DNA per-connection 画像选择 — Go 侧
     - 在 `bdna_profile_updater.go` 中新增启动时初始化：将已启用画像族的权重写入 `profile_select_map`（CDF 格式，每条包含 cumulative_weight + 真实 profile_id）和 `profile_count_map`。registry 中禁用或 OS 节点不可用的画像不写入 `profile_select_map`
     - Go 侧写入前校验：CDF 单调递增、最后一条 cumulative_weight > 0、每条 profile_id 在 `fingerprint_map` 中存在；校验失败时拒绝写入并 log 告警
-    - 新增 `OverrideConnectionProfile(saddr, daddr uint32, sport, dport uint16, profileID uint32) error`（策略调整用，覆写 C 侧自选结果）
+    - 新增 `OverrideConnectionProfile(connKey ConnKey, profileID uint32) error`（策略调整用，ConnKey 包含 l4_proto，非首包路径）
     - 按 `gateway.yaml` 的 `bdna.profile_weights` 配置权重
     - 默认权重：Chrome 65%、Firefox 15%、Safari 10%、Edge 10%
     - 首包画像由 C 侧 `bpf_get_prng_u32()` + `profile_select_map` 采样保证，Go 侧不参与首包选择
@@ -81,6 +81,7 @@
     - 使用 `rapid` 生成随机 conn_key 集合（数量 ∈ [2,100]），分配画像后验证：
       - 同一 conn_key 多次查询返回相同 profile_id
       - 不同 conn_key 的 profile_id 分布符合配置权重（χ² 检验）
+      - **TCP/UDP 隔离**：相同 (saddr,daddr,sport,dport) 但 l4_proto 分别为 TCP(6)/UDP(17) 时，作为两个独立 conn_key，不共享 `conn_profile_map` 条目，各自独立选择 profile_id
     - 最少 100 次迭代
     - **验证: 需求 2.1, 2.3, 2.4**
 
@@ -207,6 +208,7 @@
     - capability-truth-source.md 已回写
   - **Capability-Upgrade Gate**（能力状态升级判定，与 Implementation Exit 分离）：
     - 仅当 M13 使用真实基线（非降级/非模拟）+ 单维 AUC 均 < 0.75 + 联合 AUC < 0.85 时，才可将能力域从"部分实现"升级为"已实现（限定表述）"
+    - M13-full 判定条件：三个画像族（chrome-win / chrome-macos / firefox-linux）各自的 `capture-metadata.json` 存在、标注为原生 OS 采集、对应 pcapng 和 baseline-stats 数据完整。任一画像族缺失则 M13 为 degraded，不通过 Capability-Upgrade Gate
     - 降级/模拟数据通过 Implementation Exit 但不通过 Capability-Upgrade Gate
 
 ## 备注

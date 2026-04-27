@@ -31,7 +31,7 @@ Phase 2 M6 分类器实验结果显示四个检测面全部 AUC=1.0 / F1=1.0 / A
 - 2.1 `bdna.c` 从 per-global `active_profile_map` 改为 per-connection 画像选择：每条新连接根据 `conn_key` 查 `conn_profile_map` 获取 profile_id，再从 `fingerprint_map` 取对应模板。**首包时序要求**：TCP SYN 是第一个可观测指纹，`conn_profile_map` 必须在 SYN 到达 `bdna_tcp_rewrite` 时已有值。实现方式：C 侧首包自选——SYN 首包未命中 `conn_profile_map` 时，由 eBPF 侧遍历 `profile_select_map` 按 `cumulative_weight` 采样并返回真实 `profile_id`，写入 `conn_profile_map`，后续包直接查表。Go 侧可在连接建立后通过 `conn_profile_map` 覆写（策略调整），但首包画像由 C 侧保证
 - 2.2 Go 控制面负责维护 `profile_select_map`（`BPF_MAP_TYPE_ARRAY`，`max_entries=64`，value=`struct { __u32 cumulative_weight; __u32 profile_id; }`）和 `profile_count_map`（当前可用画像数量）。C 侧首包自选时遍历 `profile_select_map` 按 cumulative_weight 采样，返回对应的真实 `profile_id`。这样画像 ID 不需要连续，registry 中禁用/待采集的画像不写入 `profile_select_map` 即可排除
 - 2.3 权重配置可通过 `gateway.yaml` 调整，默认权重按全球浏览器市场份额分配
-- 2.4 确保同一连接生命周期内画像不变（TCP SYN 重写和后续 QUIC/TLS 参数使用同一 profile）
+- 2.4 确保同一 L4 flow 生命周期内画像不变：TCP 连接（TCP SYN 重写 + TLS ClientHello）使用 TCP key `(saddr,daddr,sport,dport,IPPROTO_TCP)`；QUIC 连接使用 UDP key `(saddr,daddr,sport,dport,IPPROTO_UDP)`。TCP 和 QUIC 是独立的 L4 flow，各自独立选择画像。若需跨协议 session 级画像绑定（同一用户的 TCP 和 QUIC 连接使用同一画像族），由 Go 控制面通过 `OverrideConnectionProfile` 显式绑定，不在 eBPF 侧隐式关联
 - 2.5 `bdna_tls_rewrite`、`bdna_quic_rewrite`、`bdna_tcp_rewrite` 三条路径必须调用同一个内联函数 `select_profile_for_conn`：查 `conn_profile_map` → 未命中则遍历 `profile_select_map` 按 `cumulative_weight` 采样并写入 `conn_profile_map` → 任一门禁失败（count==0 / 读取失败 / profile_id 不存在于 `fingerprint_map`）即回退 `active_profile_map[0]` 且禁止将无效 profile_id 写入 `conn_profile_map`。`conn_key` 维度为 `(saddr, daddr, sport, dport, l4_proto)`，包含 L4 协议字段以防止 TCP/UDP 连接在相同四元组下互相复用 profile
 - 2.6 画像库数据（`fingerprints.yaml` / `profile-registry.v1.json`）中的值必须与真实采集的对照基线一致，发现偏差时更新画像库
 
