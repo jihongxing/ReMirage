@@ -5,22 +5,27 @@
 按 M13→M14→M15→M16 四个里程碑递进实施。本 Spec 修复已识别的隐匿缺陷，采集真实对照基线，重跑分类器实验。
 
 关键约束：
-- M13 需要 Linux 环境 + root/CAP_NET_RAW + 真实浏览器（Chrome/Firefox）
+- M13 需要在对应原生 OS 上采集对照数据（Chrome-Win 在 Windows、Chrome-macOS 在 macOS、Firefox-Linux 在 Linux），不允许跨 OS 替代
 - M14 的 eBPF 改动遵守 protocol-language-rules.md（C 做数据面，Go 做控制面，eBPF Map 通信）
 - PBT 使用 `pgregory.net/rapid`，最少 100 次迭代
-- 能力域状态升级条件：M14 完成 + M13 真实基线 + M15 分类器 AUC 达标
-- 非 Linux 环境：M13 跳过真实采集（标注降级），M14 PBT 使用 Mock，M15 使用模拟数据标注
+- 能力域状态升级条件：M14 完成 + M13 真实基线（非降级） + M15 分类器 AUC 达标（单维 < 0.75 + 联合 < 0.85），三者缺一不可
+- Phase 出关（implementation exit）与能力状态升级（capability-upgrade gate）分离：Phase 可以降级出关，但降级/模拟数据不可作为能力状态升级依据
+- 非 Linux 环境：M13 跳过真实采集（标注降级），M14 PBT 使用 Mock，M15 使用模拟数据标注"校准后模拟"
 
 ## 任务
 
 - [ ] 1. M13：真实对照基线采集
   - [ ] 1.1 创建 `artifacts/dpi-audit/baseline/capture-baseline.sh`
-    - 自动化采集脚本：启动 tcpdump → 用 Chrome headless 访问目标站点列表 → 停止抓包 → 按画像族分组
+    - 自动化采集脚本：启动 tcpdump → 用本机浏览器访问目标站点列表 → 停止抓包 → 按画像族分组
     - 目标站点：google.com、youtube.com、cloudflare.com、github.com、wikipedia.org（覆盖 CDN/直连/混合场景）
-    - 画像族：Chrome-Win（使用当前系统 Chrome）、Chrome-macOS（如有）、Firefox-Win（使用当前系统 Firefox）
+    - 画像族必须在对应原生 OS 上采集：
+      - Chrome-Win：在 Windows 节点运行，使用 Windows 原生 Chrome
+      - Chrome-macOS：在 macOS 节点运行，使用 macOS 原生 Chrome
+      - Firefox-Linux：在 Linux 节点运行，使用 Linux 原生 Firefox
+    - 不允许用 Linux 浏览器数据代表 Windows/macOS 画像族（TCP 栈、TLS 库、OS 指纹不同）
+    - 若某 OS 节点不可用，该画像族标注"待采集"，不用其他 OS 替代
     - 每族至少 100 条独立 HTTPS 连接
-    - 输出：`artifacts/dpi-audit/baseline/{chrome-win,chrome-macos,firefox-win}/*.pcapng`
-    - 非 Linux 环境：跳过，标注"需 Linux 环境采集"
+    - 输出：`artifacts/dpi-audit/baseline/{chrome-win,chrome-macos,firefox-linux}/*.pcapng`
     - _需求: 1.1, 1.2_
 
   - [ ] 1.2 创建 `artifacts/dpi-audit/baseline/extract-baseline-stats.py`
@@ -40,7 +45,8 @@
   - [ ] 1.4 备份模拟数据并替换
     - 将现有 `artifacts/dpi-audit/{handshake,packet-length,timing}/*.pcapng` 重命名为 `*.simulated.pcapng`
     - 用真实采集数据替换（保持文件名不变，分析脚本无需修改）
-    - 更新 `simulation-metadata.json` 标注采集环境
+    - 真实采集元数据存储为 `artifacts/dpi-audit/baseline/capture-metadata.json`（内核版本、浏览器版本、OS 版本、网络条件）
+    - `simulation-metadata.json` 保持不变，仅用于模拟样本；两套元数据文件语义隔离
     - _需求: 1.3, 1.4_
 
 - [ ] 2. Checkpoint — M13 基线采集确认
@@ -49,17 +55,19 @@
 - [ ] 3. M14：隐匿缺陷修复
   - [ ] 3.1 B-DNA per-connection 画像选择 — C 侧
     - 在 `bdna.c` 中新增 `conn_profile_map`（`BPF_MAP_TYPE_LRU_HASH`，`max_entries=65536`，key=`conn_key`，value=`__u32 profile_id`）
-    - 修改 `bdna_tcp_rewrite`：先查 `conn_profile_map`，命中则用返回的 profile_id；未命中则回退到 `active_profile_map[0]`
-    - 修改 `bdna_quic_rewrite` 同理
+    - 新增 `profile_weight_map`（`BPF_MAP_TYPE_ARRAY`，`max_entries=64`，value=`__u32 cumulative_weight`）和 `profile_count_map`（`BPF_MAP_TYPE_ARRAY`，`max_entries=1`）
+    - 修改 `bdna_tcp_rewrite`：先查 `conn_profile_map`，命中则用返回的 profile_id；**未命中（SYN 首包）→ C 侧自选**：用 `bpf_get_prng_u32()` 按 `profile_weight_map` 权重选择 profile_id，写入 `conn_profile_map`，再查 `fingerprint_map`。仅当 `profile_weight_map` 也无数据时回退到 `active_profile_map[0]`
+    - 修改 `bdna_quic_rewrite` 同理：使用相同的 per-connection 查询路径
+    - 修改 `bdna_tls_rewrite` 同理：使用相同的 per-connection 查询路径（不能继续走全局 `active_profile_map`，否则三条路径画像不一致）
     - 确保编译回归通过
-    - _需求: 2.1_
+    - _需求: 2.1, 2.5_
 
   - [ ] 3.2 B-DNA per-connection 画像选择 — Go 侧
-    - 在 `bdna_profile_updater.go` 中新增 `AssignConnectionProfile(saddr, daddr uint32, sport, dport uint16) (uint32, error)`
-    - 按 `gateway.yaml` 的 `bdna.profile_weights` 配置权重随机选择画像族
+    - 在 `bdna_profile_updater.go` 中新增启动时初始化：将画像族权重写入 `profile_weight_map`（CDF 格式）和 `profile_count_map`
+    - 新增 `OverrideConnectionProfile(saddr, daddr uint32, sport, dport uint16, profileID uint32) error`（策略调整用，覆写 C 侧自选结果）
+    - 按 `gateway.yaml` 的 `bdna.profile_weights` 配置权重
     - 默认权重：Chrome 65%、Firefox 15%、Safari 10%、Edge 10%
-    - 将选中的 profile_id 写入 `conn_profile_map`
-    - 在连接建立回调中调用（集成到 `pkg/api/session_manager.go` 或 `pkg/gtunnel/orchestrator.go` 的连接接入路径）
+    - 首包画像由 C 侧 `bpf_get_prng_u32()` + `profile_weight_map` 保证，Go 侧不参与首包选择
     - _需求: 2.2, 2.3, 2.4_
 
   - [ ] 3.3 编写 Property 1: per-connection 画像隔离 PBT
@@ -165,13 +173,10 @@
     - _需求: 7.1_
 
   - [ ] 7.2 评估能力域状态升级
-    - 检查升级条件：
-      - M14 代码实现完成 ✓/✗
-      - M13 真实基线采集完成 ✓/✗
-      - 单维 AUC 均 < 0.9 ✓/✗
-      - 联合 AUC < 0.9 ✓/✗
-    - 全部满足 → 更新 `capability-truth-source.md` 状态为"已实现（限定表述）"
-    - 任一不满足 → 维持"部分实现"，记录差距
+    - 检查升级条件（三档）：
+      - **可升级为"已实现（限定表述）"**：M14 代码实现完成 + M13 真实基线采集完成（非降级/非模拟） + 单维 AUC 均 < 0.75 + 联合 AUC < 0.85
+      - **记录为"风险已下降但不升级"**：实现完成 + 真实基线 + 单维 AUC ∈ [0.75, 0.9) 或联合 AUC ∈ [0.85, 0.9)，维持"部分实现"但在 claims-boundary 中增加限定允许表述
+      - **维持"部分实现"无变更**：AUC ≥ 0.9 或真实基线未采集（降级/模拟数据不可作为升级依据）
     - _需求: 7.2, 7.3, 7.4_
 
   - [ ] 7.3 回写 `docs/governance/capability-truth-source.md`
@@ -185,21 +190,26 @@
     - _需求: 7.1_
 
 - [ ] 8. Exit：Phase 5 出关判定
-  - 逐项检查：
-    - M13 真实对照基线已采集（或标注降级）
+  - **Implementation Exit**（Phase 完成判定）：
+    - M13 真实对照基线已采集（或标注降级，降级不阻塞 Phase 出关）
     - M14 三项修复已实现 + PBT 通过 + 编译回归通过
     - M15 分类器实验已重跑 + AUC 数据已记录
-    - M16 治理回写完成 + 能力域状态评估完成
+    - M16 治理回写完成
     - stealth-experiment-results.md 已更新
     - stealth-claims-boundary.md 已更新
     - capability-truth-source.md 已回写
+  - **Capability-Upgrade Gate**（能力状态升级判定，与 Implementation Exit 分离）：
+    - 仅当 M13 使用真实基线（非降级/非模拟）+ 单维 AUC 均 < 0.75 + 联合 AUC < 0.85 时，才可将能力域从"部分实现"升级为"已实现（限定表述）"
+    - 降级/模拟数据通过 Implementation Exit 但不通过 Capability-Upgrade Gate
 
 ## 备注
 
 - PBT 使用 `pgregory.net/rapid`（Go），最少 100 次迭代
 - PBT 复用现有测试文件：`bdna_conn_property_test.go`、`npm_property_test.go`、`gaussian_property_test.go`
 - eBPF 改动遵守 protocol-language-rules.md：C 做数据面，Go 做控制面，eBPF Map 通信
-- M13 需要 Linux 环境；非 Linux 降级为"使用校准后参数重新生成模拟样本"
+- M13 需要在对应原生 OS 上采集（Chrome-Win 在 Windows、Chrome-macOS 在 macOS、Firefox-Linux 在 Linux）；某 OS 不可用时该画像族标注"待采集"
 - 画像库更新不追求"完全匹配某一个 Chrome 版本常量"，而是"按画像族生成一致指纹"
-- 分类器 AUC 目标是设计目标，不达标时诚实记录，不伪造数据
+- 分类器 AUC 设计目标：单维 < 0.75、联合 < 0.85；升级门禁与设计目标一致，不设宽松中间档
+- Implementation Exit 与 Capability-Upgrade Gate 分离：Phase 可降级出关，但降级/模拟数据不可作为能力状态升级依据
+- 真实采集元数据存储为 `capture-metadata.json`，`simulation-metadata.json` 仅保留给模拟样本
 - 证据产物路径：`artifacts/dpi-audit/baseline/`（真实基线）、`docs/reports/`（报告）

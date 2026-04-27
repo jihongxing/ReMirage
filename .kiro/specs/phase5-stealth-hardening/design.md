@@ -29,12 +29,16 @@ conn_key(saddr,daddr,sport,dport) → conn_profile_map[conn_key] → profile_id
 C 侧变更（`bdna.c`）：
 - `bdna_tcp_rewrite` 中，先用 `conn_key` 查 `conn_profile_map`
 - 命中 → 用返回的 `profile_id` 查 `fingerprint_map`
-- 未命中 → 回退到 `active_profile_map[0]`（兼容现有行为）
+- **未命中（SYN 首包）→ C 侧自选**：用 `bpf_get_prng_u32()` 按 `profile_weight_map` 权重选择 profile_id，写入 `conn_profile_map`，再查 `fingerprint_map`。这确保第一个可观测指纹（TCP SYN）就已经是动态画像，不会回退到全局唯一画像
+- 仅当 `conn_profile_map` 和 `profile_weight_map` 都查不到时，才回退到 `active_profile_map[0]`（兼容降级）
+- `bdna_tls_rewrite` 和 `bdna_quic_rewrite` 使用相同的 per-connection 查询路径，确保三条重写路径画像一致
 - 新增 `conn_profile_map`：`BPF_MAP_TYPE_LRU_HASH`，`max_entries=65536`
+- 新增 `profile_weight_map`：`BPF_MAP_TYPE_ARRAY`，`max_entries=64`，value=`__u32 cumulative_weight`
+- 新增 `profile_count_map`：`BPF_MAP_TYPE_ARRAY`，`max_entries=1`，value=`__u32 count`
 
 Go 侧变更（`bdna_profile_updater.go`）：
-- 新增 `AssignConnectionProfile(connKey ConnKey) error` 方法
-- 按配置权重随机选择画像族，写入 `conn_profile_map`
+- 启动时将画像族权重写入 `profile_weight_map`（CDF 格式）和 `profile_count_map`
+- 新增 `OverrideConnectionProfile(connKey ConnKey, profileID uint32) error` 方法（策略调整用，非首包路径）
 - 权重从 `gateway.yaml` 的 `bdna.profile_weights` 读取
 
 ### 1.2 NPM MIMIC 分布模式
