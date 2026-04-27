@@ -210,7 +210,7 @@
     - capability-truth-source.md 已回写
   - **Capability-Upgrade Gate**（能力状态升级判定，与 Implementation Exit 分离）：
     - 仅当 M13 使用真实基线（非降级/非模拟）+ 单维 AUC 均 < 0.75 + 联合 AUC < 0.85 时，才可将能力域从"部分实现"升级为"已实现（限定表述）"
-    - M13-full 判定条件：三个画像族（chrome-win / chrome-macos / firefox-linux）各自的 `capture-metadata.json` 存在、标注为原生 OS 采集、对应 pcapng 和 baseline-stats 数据完整。任一画像族缺失则 M13 为 degraded，不通过 Capability-Upgrade Gate
+    - M13-full 判定条件：三个画像族（chrome-win / chrome-macos / firefox-linux）各自的 pcapng、`baseline-stats.csv`、`baseline-distribution.json`、`capture-metadata.json` 均存在；`capture-metadata.json` 标注为原生 OS 采集；`baseline-stats.csv` 中 `connection_count >= 100` 且 `profile_family` 与目录画像族一致。任一画像族缺失或连接数不足则 M13 为 degraded，不通过 Capability-Upgrade Gate
     - 降级/模拟数据通过 Implementation Exit 但不通过 Capability-Upgrade Gate
 
 ## 备注

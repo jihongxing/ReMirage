@@ -16,13 +16,16 @@ type connKey struct {
 	DstIP   uint32
 	SrcPort uint16
 	DstPort uint16
+	L4Proto uint8
+	Pad     [3]uint8
 }
 
 // connState mirrors the C struct conn_state
 type connState struct {
-	TargetWindow uint16
-	PktCount     uint16
-	MaxPkt       uint16
+	TargetWindow uint32
+	PktCount     uint32
+	MaxPkt       uint32
+	Pad          uint32
 }
 
 // bdnaConnTracker is a Go userspace equivalent of the eBPF bdna_conn_map logic
@@ -35,9 +38,9 @@ func newBDNAConnTracker() *bdnaConnTracker {
 }
 
 // processSYN stores the target window for a new connection (mirrors SYN path in bdna_tcp_rewrite)
-func (t *bdnaConnTracker) processSYN(key connKey, targetWindow uint16, maxPkt uint16) {
+func (t *bdnaConnTracker) processSYN(key connKey, targetWindow uint16, maxPkt uint32) {
 	t.connMap[key] = &connState{
-		TargetWindow: targetWindow,
+		TargetWindow: uint32(targetWindow),
 		PktCount:     0,
 		MaxPkt:       maxPkt,
 	}
@@ -51,7 +54,7 @@ func (t *bdnaConnTracker) processNonSYN(key connKey, currentWindow uint16) (rewr
 		return currentWindow, false
 	}
 	state.PktCount++
-	return state.TargetWindow, true
+	return uint16(state.TargetWindow), true
 }
 
 func TestProperty_BDNANonSYNWindowConsistency(t *testing.T) {
@@ -64,15 +67,16 @@ func TestProperty_BDNANonSYNWindowConsistency(t *testing.T) {
 			DstIP:   rapid.Uint32().Draw(t, "dstIP"),
 			SrcPort: rapid.Uint16().Draw(t, "srcPort"),
 			DstPort: rapid.Uint16().Draw(t, "dstPort"),
+			L4Proto: IPProtoTCP,
 		}
 		targetWindow := rapid.Uint16Range(1, 65535).Draw(t, "targetWindow")
-		maxPkt := rapid.Uint16Range(1, 50).Draw(t, "maxPkt")
+		maxPkt := rapid.Uint32Range(1, 50).Draw(t, "maxPkt")
 
 		// Process SYN
 		tracker.processSYN(key, targetWindow, maxPkt)
 
 		// Process N non-SYN packets — all should get target window
-		for i := uint16(0); i < maxPkt; i++ {
+		for i := uint32(0); i < maxPkt; i++ {
 			currentWindow := rapid.Uint16Range(1, 65535).Draw(t, "currentWindow")
 			rewritten, ok := tracker.processNonSYN(key, currentWindow)
 			if !ok {
@@ -87,6 +91,35 @@ func TestProperty_BDNANonSYNWindowConsistency(t *testing.T) {
 		_, ok := tracker.processNonSYN(key, 12345)
 		if ok {
 			t.Fatalf("packet beyond maxPkt should not be rewritten")
+		}
+	})
+}
+
+func TestProperty_BDNAConnKeyTCPUDPIsolation(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		base := connKey{
+			SrcIP:   rapid.Uint32().Draw(t, "srcIP"),
+			DstIP:   rapid.Uint32().Draw(t, "dstIP"),
+			SrcPort: rapid.Uint16().Draw(t, "srcPort"),
+			DstPort: rapid.Uint16().Draw(t, "dstPort"),
+		}
+		tcpKey := base
+		tcpKey.L4Proto = IPProtoTCP
+		udpKey := base
+		udpKey.L4Proto = IPProtoUDP
+
+		tracker := newBDNAConnTracker()
+		tracker.processSYN(tcpKey, 65535, 10)
+		tracker.processSYN(udpKey, 32768, 10)
+
+		tcpWindow, ok := tracker.processNonSYN(tcpKey, 1000)
+		if !ok || tcpWindow != 65535 {
+			t.Fatalf("TCP key should keep its own profile window, got %d ok=%v", tcpWindow, ok)
+		}
+
+		udpWindow, ok := tracker.processNonSYN(udpKey, 1000)
+		if !ok || udpWindow != 32768 {
+			t.Fatalf("UDP key should keep its own profile window, got %d ok=%v", udpWindow, ok)
 		}
 	})
 }

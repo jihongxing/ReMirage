@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -74,6 +75,15 @@ type BDNAProfileUpdater struct {
 	loader   *Loader
 	mu       sync.RWMutex
 	registry *BDNAProfileRegistry
+}
+
+type BDNAProfileSelectEntry struct {
+	CumulativeWeight uint32
+	ProfileID        uint32
+}
+
+type BDNAConnProfileValue struct {
+	ProfileID uint32
 }
 
 func NewBDNAProfileUpdater(loader *Loader) *BDNAProfileUpdater {
@@ -279,6 +289,155 @@ func (u *BDNAProfileUpdater) SetActiveProfile(profileID uint32) error {
 	}
 
 	return nil
+}
+
+func (u *BDNAProfileUpdater) SyncProfileSelection(weights map[uint32]uint32) error {
+	u.mu.RLock()
+	registry := u.registry
+	u.mu.RUnlock()
+
+	if registry == nil {
+		return fmt.Errorf("profile registry not loaded")
+	}
+
+	selectMap := u.loader.GetMap("profile_select_map")
+	if selectMap == nil {
+		return fmt.Errorf("profile_select_map not found")
+	}
+	countMap := u.loader.GetMap("profile_count_map")
+	if countMap == nil {
+		return fmt.Errorf("profile_count_map not found")
+	}
+
+	entries, err := BuildProfileSelectEntries(registry, weights)
+	if err != nil {
+		return err
+	}
+
+	if err := ValidateProfileSelectEntries(registry, entries); err != nil {
+		return err
+	}
+
+	for i, entry := range entries {
+		key := uint32(i)
+		if err := selectMap.Put(&key, &entry); err != nil {
+			return fmt.Errorf("write profile_select_map[%d]: %w", i, err)
+		}
+	}
+
+	count := uint32(len(entries))
+	key := uint32(0)
+	if err := countMap.Put(&key, &count); err != nil {
+		return fmt.Errorf("write profile_count_map[0]: %w", err)
+	}
+
+	return nil
+}
+
+func (u *BDNAProfileUpdater) OverrideConnectionProfile(connKey ConnKey, profileID uint32) error {
+	u.mu.RLock()
+	registry := u.registry
+	u.mu.RUnlock()
+
+	if registry != nil {
+		if _, ok := registry.ProfileByID(profileID); !ok {
+			return fmt.Errorf("profile %d not found in loaded registry", profileID)
+		}
+	}
+
+	connProfileMap := u.loader.GetMap("conn_profile_map")
+	if connProfileMap == nil {
+		return fmt.Errorf("conn_profile_map not found")
+	}
+
+	value := BDNAConnProfileValue{ProfileID: profileID}
+	if err := connProfileMap.Put(&connKey, &value); err != nil {
+		return fmt.Errorf("write conn_profile_map: %w", err)
+	}
+
+	return nil
+}
+
+func BuildProfileSelectEntries(registry *BDNAProfileRegistry, weights map[uint32]uint32) ([]BDNAProfileSelectEntry, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("registry is nil")
+	}
+
+	var entries []BDNAProfileSelectEntry
+	var cumulative uint32
+	for _, profileID := range registry.ProfileIDs() {
+		entry, ok := registry.ProfileByID(profileID)
+		if !ok {
+			return nil, fmt.Errorf("profile %d missing from registry", profileID)
+		}
+
+		weight := weights[profileID]
+		if weight == 0 {
+			weight = defaultProfileWeight(entry.Name)
+		}
+		if weight == 0 {
+			continue
+		}
+
+		if ^uint32(0)-cumulative < weight {
+			return nil, fmt.Errorf("profile weights overflow")
+		}
+		cumulative += weight
+		entries = append(entries, BDNAProfileSelectEntry{
+			CumulativeWeight: cumulative,
+			ProfileID:        profileID,
+		})
+	}
+
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("no enabled profiles for selection")
+	}
+	if len(entries) > 64 {
+		return nil, fmt.Errorf("profile selection entries exceed 64")
+	}
+
+	return entries, nil
+}
+
+func ValidateProfileSelectEntries(registry *BDNAProfileRegistry, entries []BDNAProfileSelectEntry) error {
+	if registry == nil {
+		return fmt.Errorf("registry is nil")
+	}
+	if len(entries) == 0 {
+		return fmt.Errorf("profile selection entries are empty")
+	}
+	if len(entries) > 64 {
+		return fmt.Errorf("profile selection entries exceed 64")
+	}
+
+	var prev uint32
+	for i, entry := range entries {
+		if entry.CumulativeWeight <= prev {
+			return fmt.Errorf("profile_select_map[%d] cumulative_weight is not strictly increasing", i)
+		}
+		if _, ok := registry.ProfileByID(entry.ProfileID); !ok {
+			return fmt.Errorf("profile_select_map[%d] references unknown profile %d", i, entry.ProfileID)
+		}
+		prev = entry.CumulativeWeight
+	}
+
+	return nil
+}
+
+func defaultProfileWeight(name string) uint32 {
+	n := strings.ToLower(name)
+	switch {
+	case strings.Contains(n, "chrome"):
+		return 65
+	case strings.Contains(n, "firefox"):
+		return 15
+	case strings.Contains(n, "safari"):
+		return 10
+	case strings.Contains(n, "edge"):
+		return 10
+	default:
+		return 1
+	}
 }
 
 func (u *BDNAProfileUpdater) GetActiveProfile() (uint32, error) {

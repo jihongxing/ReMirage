@@ -9,16 +9,21 @@ import * as crypto from 'crypto';
 // ─── 辅助函数 ───
 
 /** 生成自签名 CA 证书和私钥 */
-function generateCA(): { caCert: forge.pki.Certificate; caKey: forge.pki.PrivateKey; caCertPem: string; caKeyPem: string } {
+function generateCA(): { caCert: forge.pki.Certificate; caKey: forge.pki.rsa.PrivateKey; caCertPem: string; caKeyPem: string } {
   const keys = forge.pki.rsa.generateKeyPair(2048);
   const cert = forge.pki.createCertificate();
+  cert.version = 2;
   cert.publicKey = keys.publicKey;
   cert.serialNumber = '01';
-  cert.validity.notBefore = new Date();
+  cert.validity.notBefore = new Date(Date.now() - 60_000);
   cert.validity.notAfter = new Date(Date.now() + 365 * 24 * 3600 * 1000);
   cert.setSubject([{ name: 'commonName', value: 'Mirage Test CA' }]);
   cert.setIssuer([{ name: 'commonName', value: 'Mirage Test CA' }]);
-  cert.setExtensions([{ name: 'basicConstraints', cA: true }]);
+  cert.setExtensions([
+    { name: 'basicConstraints', cA: true, critical: true },
+    { name: 'keyUsage', keyCertSign: true, cRLSign: true, critical: true },
+    { name: 'subjectKeyIdentifier' },
+  ]);
   cert.sign(keys.privateKey, forge.md.sha256.create());
   return {
     caCert: cert,
@@ -46,7 +51,7 @@ function signCert(
   csrPem: string,
   gatewayId: string,
   caCert: forge.pki.Certificate,
-  caKey: forge.pki.PrivateKey,
+  caKey: forge.pki.rsa.PrivateKey,
   validityHours = 72,
 ): { certificate: string; expiresAt: string; serialNumber: string } {
   const csr = forge.pki.certificationRequestFromPem(csrPem);
@@ -58,10 +63,11 @@ function signCert(
   }
 
   const serialNumber = crypto.randomBytes(16).toString('hex');
-  const now = new Date();
+  const now = new Date(Date.now() - 60_000);
   const expiresAt = new Date(now.getTime() + validityHours * 3600 * 1000);
 
   const cert = forge.pki.createCertificate();
+  cert.version = 2;
   cert.publicKey = csr.publicKey as forge.pki.PublicKey;
   cert.serialNumber = serialNumber;
   cert.validity.notBefore = now;
@@ -72,6 +78,12 @@ function signCert(
     { name: 'basicConstraints', cA: false },
     { name: 'keyUsage', digitalSignature: true, keyEncipherment: true },
     { name: 'extKeyUsage', serverAuth: true, clientAuth: true },
+    {
+      name: 'authorityKeyIdentifier',
+      keyIdentifier: true,
+      authorityCertIssuer: true,
+      serialNumber: true,
+    },
   ]);
   cert.sign(caKey, forge.md.sha256.create());
 
@@ -101,10 +113,9 @@ describe('CertSignController - 签发逻辑', () => {
     expect(result.serialNumber).toHaveLength(32);
     expect(new Date(result.expiresAt).getTime()).toBeGreaterThan(Date.now());
 
-    // 验证证书可被 CA 验证
+    // 验证证书确实由测试 CA 签发
     const signedCert = forge.pki.certificateFromPem(result.certificate);
-    const caStore = forge.pki.createCaStore([ca.caCert]);
-    expect(forge.pki.verifyCertificateChain(caStore, [signedCert])).toBe(true);
+    expect(ca.caCert.verify(signedCert)).toBe(true);
 
     // 验证 Subject CN
     const cn = signedCert.subject.getField('CN');

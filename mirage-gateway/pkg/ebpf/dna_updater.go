@@ -52,3 +52,11 @@ func (d *DNAMapUpdater) UpdateDNATemplate(templateID uint32, iatMeanUs, iatSigma
 		templateID, iatMeanUs, iatSigmaUs, paddingStrategy, targetMTU)
 	return nil
 }
+
+func (d *DNAMapUpdater) CalibrateFromBaseline(baselineStatsPath string) error {
+	mean, sigma, err := ReadMergedIATStats(baselineStatsPath)
+	if err != nil {
+		return err
+	}
+	return d.UpdateDNATemplate(0, mean, sigma, 0, 1460)
+}

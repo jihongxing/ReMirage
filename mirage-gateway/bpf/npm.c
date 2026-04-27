@@ -39,11 +39,25 @@ struct {
 #define NPM_MODE_FIXED_MTU      0
 #define NPM_MODE_RANDOM_RANGE   1
 #define NPM_MODE_GAUSSIAN       2
+#define NPM_MODE_MIMIC          3
 
 // 默认 MTU
 #define DEFAULT_GLOBAL_MTU      1460
 #define MIN_PADDING_SIZE        64
 #define MAX_PADDING_SIZE        1400
+
+struct npm_distribution_bin {
+    __u32 cumulative_prob;  // 1..10000
+    __u16 pkt_len_low;
+    __u16 pkt_len_high;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 256);
+    __type(key, __u32);
+    __type(value, struct npm_distribution_bin);
+} npm_target_distribution_map SEC(".maps");
 
 /* ============================================
  * 辅助函数
@@ -87,6 +101,40 @@ static __always_inline __u32 calculate_padding(
                 padding = target_mtu - current_size;
         }
         break;
+
+    case NPM_MODE_MIMIC:
+        {
+            __u32 roll = (bpf_get_prandom_u32() % 10000) + 1;
+            __u32 target_len = 0;
+
+#pragma unroll
+            for (int i = 0; i < 256; i++) {
+                __u32 idx = (__u32)i;
+                struct npm_distribution_bin *bin = bpf_map_lookup_elem(&npm_target_distribution_map, &idx);
+                if (!bin)
+                    break;
+                if (bin->cumulative_prob == 0)
+                    continue;
+                if (roll <= bin->cumulative_prob) {
+                    __u16 low = bin->pkt_len_low;
+                    __u16 high = bin->pkt_len_high;
+                    if (high < low)
+                        high = low;
+                    __u32 span = (__u32)high - (__u32)low + 1;
+                    target_len = (__u32)low + (bpf_get_prandom_u32() % span);
+                    break;
+                }
+            }
+
+            if (target_len == 0 || target_len <= current_size)
+                return 0;
+            padding = target_len - current_size;
+            if (padding > target_mtu - current_size)
+                padding = target_mtu - current_size;
+            if (padding > MAX_PADDING_SIZE)
+                padding = MAX_PADDING_SIZE;
+            return padding;
+        }
     }
     
     // 确保填充大小合理

@@ -78,6 +78,17 @@ struct conn_key {
     __u32 dst_ip;
     __u16 src_port;
     __u16 dst_port;
+    __u8  l4_proto;
+    __u8  _pad[3];
+};
+
+struct conn_profile_value {
+    __u32 profile_id;
+};
+
+struct profile_select_entry {
+    __u32 cumulative_weight;
+    __u32 profile_id;
 };
 
 struct conn_state {
@@ -95,6 +106,27 @@ struct {
     __type(value, struct conn_state);
 } bdna_conn_map SEC(".maps");
 
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 65536);
+    __type(key, struct conn_key);
+    __type(value, struct conn_profile_value);
+} conn_profile_map SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 64);
+    __type(key, __u32);
+    __type(value, struct profile_select_entry);
+} profile_select_map SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u32);
+} profile_count_map SEC(".maps");
+
 // B-DNA 统计
 struct bdna_stats {
     __u64 tcp_rewritten;
@@ -109,6 +141,73 @@ struct {
     __type(key, __u32);
     __type(value, struct bdna_stats);
 } bdna_stats_map SEC(".maps");
+
+static __always_inline struct stack_fingerprint *fallback_active_profile(void)
+{
+    __u32 key = 0;
+    __u32 *profile_id = bpf_map_lookup_elem(&active_profile_map, &key);
+    if (!profile_id)
+        return 0;
+    return bpf_map_lookup_elem(&fingerprint_map, profile_id);
+}
+
+static __always_inline struct stack_fingerprint *select_profile_for_conn(struct conn_key *ckey)
+{
+    struct conn_profile_value *existing = bpf_map_lookup_elem(&conn_profile_map, ckey);
+    if (existing) {
+        struct stack_fingerprint *fp = bpf_map_lookup_elem(&fingerprint_map, &existing->profile_id);
+        if (fp)
+            return fp;
+        bpf_map_delete_elem(&conn_profile_map, ckey);
+        return fallback_active_profile();
+    }
+
+    __u32 zero = 0;
+    __u32 *count_ptr = bpf_map_lookup_elem(&profile_count_map, &zero);
+    if (!count_ptr || *count_ptr == 0 || *count_ptr > 64)
+        return fallback_active_profile();
+
+    __u32 profile_count = *count_ptr;
+    __u32 last_idx = profile_count - 1;
+    struct profile_select_entry *last = bpf_map_lookup_elem(&profile_select_map, &last_idx);
+    if (!last || last->cumulative_weight == 0)
+        return fallback_active_profile();
+
+    __u32 roll = (bpf_get_prandom_u32() % last->cumulative_weight) + 1;
+    __u32 selected_profile = 0;
+    __u8 selected = 0;
+
+#pragma unroll
+    for (int i = 0; i < 64; i++) {
+        if ((__u32)i >= profile_count)
+            break;
+
+        __u32 idx = (__u32)i;
+        struct profile_select_entry *entry = bpf_map_lookup_elem(&profile_select_map, &idx);
+        if (!entry)
+            return fallback_active_profile();
+
+        if (!selected && roll <= entry->cumulative_weight) {
+            selected_profile = entry->profile_id;
+            selected = 1;
+            break;
+        }
+    }
+
+    if (!selected)
+        return fallback_active_profile();
+
+    struct stack_fingerprint *fp = bpf_map_lookup_elem(&fingerprint_map, &selected_profile);
+    if (!fp)
+        return fallback_active_profile();
+
+    struct conn_profile_value value = {
+        .profile_id = selected_profile,
+    };
+    bpf_map_update_elem(&conn_profile_map, ckey, &value, BPF_ANY);
+
+    return fp;
+}
 
 /* ============================================
  * TCP 选项常量
@@ -167,6 +266,7 @@ int bdna_tcp_rewrite(struct __sk_buff *skb)
         .dst_ip = ip->daddr,
         .src_port = tcp->source,
         .dst_port = tcp->dest,
+        .l4_proto = IPPROTO_TCP,
     };
 
     // 5. 非 SYN 包：前 N 个包维护 Window Size 一致性
@@ -198,13 +298,9 @@ int bdna_tcp_rewrite(struct __sk_buff *skb)
         return TC_ACT_OK;
     }
 
-    // 6. SYN 包处理：获取当前激活的指纹
+    // 6. SYN 包处理：按连接选择指纹
     __u32 key = 0;
-    __u32 *profile_id = bpf_map_lookup_elem(&active_profile_map, &key);
-    if (!profile_id)
-        return TC_ACT_OK;
-    
-    struct stack_fingerprint *fp = bpf_map_lookup_elem(&fingerprint_map, profile_id);
+    struct stack_fingerprint *fp = select_profile_for_conn(&ckey);
     if (!fp) {
         struct bdna_stats *stats = bpf_map_lookup_elem(&bdna_stats_map, &key);
         if (stats)
@@ -410,12 +506,16 @@ int bdna_quic_rewrite(struct __sk_buff *skb)
         return TC_ACT_OK;
     
     // 6. 获取指纹配置
+    struct conn_key ckey = {
+        .src_ip = ip->saddr,
+        .dst_ip = ip->daddr,
+        .src_port = udp->source,
+        .dst_port = udp->dest,
+        .l4_proto = IPPROTO_UDP,
+    };
+
     __u32 key = 0;
-    __u32 *profile_id = bpf_map_lookup_elem(&active_profile_map, &key);
-    if (!profile_id)
-        return TC_ACT_OK;
-    
-    struct stack_fingerprint *fp = bpf_map_lookup_elem(&fingerprint_map, profile_id);
+    struct stack_fingerprint *fp = select_profile_for_conn(&ckey);
     if (!fp)
         return TC_ACT_OK;
     
@@ -516,12 +616,16 @@ int bdna_tls_rewrite(struct __sk_buff *skb)
         return TC_ACT_OK;
     
     // 5. 获取指纹配置
+    struct conn_key ckey = {
+        .src_ip = ip->saddr,
+        .dst_ip = ip->daddr,
+        .src_port = tcp->source,
+        .dst_port = tcp->dest,
+        .l4_proto = IPPROTO_TCP,
+    };
+
     __u32 key = 0;
-    __u32 *profile_id = bpf_map_lookup_elem(&active_profile_map, &key);
-    if (!profile_id)
-        return TC_ACT_OK;
-    
-    struct stack_fingerprint *fp = bpf_map_lookup_elem(&fingerprint_map, profile_id);
+    struct stack_fingerprint *fp = select_profile_for_conn(&ckey);
     if (!fp)
         return TC_ACT_OK;
     

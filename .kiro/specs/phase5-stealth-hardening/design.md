@@ -68,7 +68,8 @@ case 3: // MIMIC — 从目标分布 CDF 采样
 - key：`__u32`（bin index，0-255）
 - value：`struct { __u32 cumulative_prob; __u16 pkt_len_low; __u16 pkt_len_high; }`
 - 256 个 bin 覆盖 0-1500 字节范围
-- Go 控制面从真实对照基线的包长直方图生成 CDF 写入
+- Go 控制面从 `artifacts/dpi-audit/baseline/baseline-distribution-merged.json` 读取三族合并后的全局混合包长 CDF 写入
+- 本期不按 `profile_family` 分别加载 CDF，不宣称包长分布与选定画像族跨层一致；per-family CDF 留作后续任务
 
 采样算法（C 侧）：
 ```c
@@ -95,8 +96,9 @@ gateway.yaml → jitter_config_map → jitter_lite_egress → gaussian_sample(me
 
 Go 侧变更（`dna_updater.go`）：
 - 新增 `CalibrateFromBaseline(baselinePath string) error` 方法
-- 从 `artifacts/dpi-audit/timing/iat-stats.csv` 读取真实 IAT 统计
+- 从 `artifacts/dpi-audit/baseline/baseline-stats-merged.csv` 读取三族合并后的全局混合 IAT 统计
 - 将 `iat_mean_us` / `iat_std_us` 写入 `dna_template_map` 的 `TargetIATMu` / `TargetIATSigma`
+- 本期不按 `profile_family` 分别加载 IAT 参数，不宣称 IAT 分布与选定画像族跨层一致；per-family IAT 参数留作后续任务
 
 ### 1.4 TLS/QUIC 指纹审计矩阵
 

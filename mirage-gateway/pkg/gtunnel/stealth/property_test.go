@@ -5,6 +5,7 @@ import (
 
 	pb "mirage-proto/gen"
 
+	"google.golang.org/protobuf/proto"
 	"pgregory.net/rapid"
 )
 
@@ -36,12 +37,13 @@ func TestProperty1_ProtobufRoundTrip(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		cmd := genControlCommand().Draw(t, "cmd")
 
-		data, err := pb.MarshalControlCommand(cmd)
+		data, err := proto.Marshal(cmd)
 		if err != nil {
 			t.Fatalf("MarshalControlCommand failed: %v", err)
 		}
 
-		restored, err := pb.UnmarshalControlCommand(data)
+		restored := &pb.ControlCommand{}
+		err = proto.Unmarshal(data, restored)
 		if err != nil {
 			t.Fatalf("UnmarshalControlCommand failed: %v", err)
 		}

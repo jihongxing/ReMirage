@@ -3,8 +3,10 @@ import { BridgeClientService } from './bridge-client.service';
 
 describe('BridgeClientService', () => {
   let service: BridgeClientService;
+  const originalEnv = process.env;
 
   beforeEach(async () => {
+    process.env = { ...originalEnv };
     const module: TestingModule = await Test.createTestingModule({
       providers: [BridgeClientService],
     }).compile();
@@ -12,16 +14,24 @@ describe('BridgeClientService', () => {
     service = module.get<BridgeClientService>(BridgeClientService);
   });
 
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
   it('should be defined', () => {
     expect(service).toBeDefined();
   });
 
-  it('should initialize with default base URL', () => {
+  it('should initialize with default base URL when internal secret is set', () => {
     delete process.env.BRIDGE_URL;
-    delete process.env.BRIDGE_INTERNAL_SECRET;
+    process.env.BRIDGE_INTERNAL_SECRET = 'test-secret';
     service.onModuleInit();
-    // service is initialized without error
     expect(service).toBeDefined();
+  });
+
+  it('should reject startup without internal secret', () => {
+    delete process.env.BRIDGE_INTERNAL_SECRET;
+    expect(() => service.onModuleInit()).toThrow(/BRIDGE_INTERNAL_SECRET/);
   });
 
   it('should use env vars when set', () => {
@@ -29,7 +39,5 @@ describe('BridgeClientService', () => {
     process.env.BRIDGE_INTERNAL_SECRET = 'test-secret';
     service.onModuleInit();
     expect(service).toBeDefined();
-    delete process.env.BRIDGE_URL;
-    delete process.env.BRIDGE_INTERNAL_SECRET;
   });
 });

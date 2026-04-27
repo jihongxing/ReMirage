@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	pb "mirage-proto/gen"
+
+	"google.golang.org/protobuf/proto"
 )
 
 // MinStegoPayloadOverhead is HMAC_Tag(32) + ctLen(2) + nonce(12) + auth_tag(16) = 62 bytes minimum overhead.
@@ -19,7 +21,7 @@ func BuildStegoPayload(key []byte, cmd *pb.ControlCommand, targetLen int) ([]byt
 		return nil, errors.New("nil ControlCommand")
 	}
 
-	serialized, err := pb.MarshalControlCommand(cmd)
+	serialized, err := proto.Marshal(cmd)
 	if err != nil {
 		return nil, fmt.Errorf("marshal: %w", err)
 	}
@@ -93,7 +95,8 @@ func ParseStegoPayload(key []byte, payload []byte) (*pb.ControlCommand, error) {
 		return nil, fmt.Errorf("decrypt failed: %w", err)
 	}
 
-	cmd, err := pb.UnmarshalControlCommand(plaintext)
+	cmd := &pb.ControlCommand{}
+	err = proto.Unmarshal(plaintext, cmd)
 	if err != nil {
 		return nil, fmt.Errorf("unmarshal failed: %w", err)
 	}

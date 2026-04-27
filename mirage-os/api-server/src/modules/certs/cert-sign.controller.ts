@@ -88,10 +88,11 @@ export class CertSignController {
     const serialNumber = crypto.randomBytes(16).toString('hex');
 
     // 6. 签发证书
-    const now = new Date();
+    const now = new Date(Date.now() - 60_000);
     const expiresAt = new Date(now.getTime() + validityHours * 3600 * 1000);
 
     const cert = forge.pki.createCertificate();
+    cert.version = 2;
     cert.publicKey = csr.publicKey as forge.pki.PublicKey;
     cert.serialNumber = serialNumber;
     cert.validity.notBefore = now;
@@ -124,10 +125,16 @@ export class CertSignController {
           { type: 7, ip: '127.0.0.1' },               // IP
         ],
       },
+      {
+        name: 'authorityKeyIdentifier',
+        keyIdentifier: true,
+        authorityCertIssuer: true,
+        serialNumber: true,
+      },
     ]);
 
     // 使用 CA 私钥签名
-    cert.sign(this.caKey, forge.md.sha256.create());
+    cert.sign(this.caKey as forge.pki.rsa.PrivateKey, forge.md.sha256.create());
 
     const certPem = forge.pki.certificateToPem(cert);
 

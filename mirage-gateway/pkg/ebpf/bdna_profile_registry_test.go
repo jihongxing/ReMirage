@@ -103,3 +103,55 @@ func TestBDNAProfileRegistryValidateRejectsDuplicateIDs(t *testing.T) {
 		t.Fatalf("Validate() error = nil, want duplicate id error")
 	}
 }
+
+func TestBuildProfileSelectEntriesAllowsSparseProfileIDs(t *testing.T) {
+	t.Parallel()
+
+	registry := &BDNAProfileRegistry{
+		SchemaVersion:        BDNAProfileRegistrySchemaV1,
+		RegistryVersion:      "2026-04-23",
+		DefaultActiveProfile: 10,
+		Profiles: []BDNAProfileRegistryEntry{
+			{ID: 10, Name: "chrome-win", TLSExtOrder: []uint8{0x00}},
+			{ID: 42, Name: "firefox-linux", TLSExtOrder: []uint8{0x00}},
+		},
+	}
+
+	entries, err := BuildProfileSelectEntries(registry, map[uint32]uint32{10: 7, 42: 3})
+	if err != nil {
+		t.Fatalf("BuildProfileSelectEntries() error = %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("len(entries) = %d, want 2", len(entries))
+	}
+	if entries[0].ProfileID != 10 || entries[0].CumulativeWeight != 7 {
+		t.Fatalf("entries[0] = %+v", entries[0])
+	}
+	if entries[1].ProfileID != 42 || entries[1].CumulativeWeight != 10 {
+		t.Fatalf("entries[1] = %+v", entries[1])
+	}
+	if err := ValidateProfileSelectEntries(registry, entries); err != nil {
+		t.Fatalf("ValidateProfileSelectEntries() error = %v", err)
+	}
+}
+
+func TestValidateProfileSelectEntriesRejectsInvalidCDF(t *testing.T) {
+	t.Parallel()
+
+	registry := &BDNAProfileRegistry{
+		SchemaVersion:        BDNAProfileRegistrySchemaV1,
+		RegistryVersion:      "2026-04-23",
+		DefaultActiveProfile: 1,
+		Profiles: []BDNAProfileRegistryEntry{
+			{ID: 1, Name: "chrome-win", TLSExtOrder: []uint8{0x00}},
+		},
+	}
+
+	err := ValidateProfileSelectEntries(registry, []BDNAProfileSelectEntry{
+		{CumulativeWeight: 10, ProfileID: 1},
+		{CumulativeWeight: 10, ProfileID: 1},
+	})
+	if err == nil {
+		t.Fatalf("ValidateProfileSelectEntries() error = nil, want non-increasing CDF error")
+	}
+}

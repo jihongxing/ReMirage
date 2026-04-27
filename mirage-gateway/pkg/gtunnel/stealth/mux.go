@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 
 	pb "mirage-proto/gen"
+
+	"google.golang.org/protobuf/proto"
 )
 
 // QUICStream abstracts a QUIC stream for testability.
@@ -55,7 +57,7 @@ func (m *ShadowStreamMux) WriteCommand(cmd *pb.ControlCommand) error {
 	if m.closed.Load() {
 		return errors.New("mux closed")
 	}
-	data, err := pb.MarshalControlCommand(cmd)
+	data, err := proto.Marshal(cmd)
 	if err != nil {
 		return err
 	}
@@ -94,7 +96,11 @@ func (m *ShadowStreamMux) ReadCommand() (*pb.ControlCommand, error) {
 		return nil, err
 	}
 
-	return pb.UnmarshalControlCommand(data)
+	cmd := &pb.ControlCommand{}
+	if err := proto.Unmarshal(data, cmd); err != nil {
+		return nil, err
+	}
+	return cmd, nil
 }
 
 // IsAvailable checks if Stream 0 is available.

@@ -79,6 +79,7 @@ const (
 	NPMModeFixedMTU uint32 = iota
 	NPMModeRandomRange
 	NPMModeGaussian
+	NPMModeMimic
 )
 
 const (
@@ -107,10 +108,26 @@ func NewDefaultNPMConfig(paddingRate uint32) NPMConfig {
 		FillingRate:   paddingRate,
 		GlobalMTU:     DefaultNPMGlobalMTU,
 		MinPacketSize: DefaultNPMMinPacketSize,
-		PaddingMode:   NPMModeGaussian,
+		PaddingMode:   NPMModeMimic,
 		DecoyRate:     0,
 	}
 }
+
+// ConnKey mirrors B-DNA's C struct conn_key. L4Proto is part of the key so
+// TCP and UDP flows with the same four-tuple cannot share a profile entry.
+type ConnKey struct {
+	SrcIP   uint32
+	DstIP   uint32
+	SrcPort uint16
+	DstPort uint16
+	L4Proto uint8
+	Pad     [3]uint8
+}
+
+const (
+	IPProtoTCP uint8 = 6
+	IPProtoUDP uint8 = 17
+)
 
 // ThreatHandler 威胁处理器接口
 type ThreatHandler interface {

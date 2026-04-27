@@ -6,7 +6,8 @@ import (
 )
 
 // VerifyGaussianMode 启动时从 eBPF Map 读取完整 NPMConfig 结构体，
-// 检查 PaddingMode 字段是否为 Gaussian，非 Gaussian 时记录错误、修正后写回。
+// 检查 PaddingMode 字段是否为 MIMIC，非 MIMIC 时记录错误、修正后写回。
+// 名称保留是为了兼容旧调用点。
 func (da *DefenseApplier) VerifyGaussianMode() error {
 	npmMap := da.loader.GetMap("npm_config_map")
 	if npmMap == nil {
@@ -19,20 +20,20 @@ func (da *DefenseApplier) VerifyGaussianMode() error {
 		return fmt.Errorf("读取 npm_config_map 失败: %w", err)
 	}
 
-	if cfg.PaddingMode == NPMModeGaussian {
-		log.Println("[NPM] ✅ PaddingMode 已为 Gaussian")
+	if cfg.PaddingMode == NPMModeMimic {
+		log.Println("[NPM] ✅ PaddingMode 已为 MIMIC")
 		return nil
 	}
 
-	log.Printf("[NPM] ⚠️ PaddingMode=%d 非 Gaussian(%d)，强制修正",
-		cfg.PaddingMode, NPMModeGaussian)
+	log.Printf("[NPM] ⚠️ PaddingMode=%d 非 MIMIC(%d)，强制修正",
+		cfg.PaddingMode, NPMModeMimic)
 
-	cfg.PaddingMode = NPMModeGaussian
+	cfg.PaddingMode = NPMModeMimic
 	if err := npmMap.Put(&key, &cfg); err != nil {
 		return fmt.Errorf("写回 npm_config_map 失败: %w", err)
 	}
 
-	log.Println("[NPM] ✅ PaddingMode 已修正为 Gaussian")
+	log.Println("[NPM] ✅ PaddingMode 已修正为 MIMIC")
 	return nil
 }
 
@@ -44,11 +45,11 @@ func VerifyGaussianModeWithMap(m MapAccessor) error {
 		return fmt.Errorf("读取 npm_config_map 失败: %w", err)
 	}
 
-	if cfg.PaddingMode == NPMModeGaussian {
+	if cfg.PaddingMode == NPMModeMimic {
 		return nil
 	}
 
-	cfg.PaddingMode = NPMModeGaussian
+	cfg.PaddingMode = NPMModeMimic
 	if err := m.Put(&key, &cfg); err != nil {
 		return fmt.Errorf("写回 npm_config_map 失败: %w", err)
 	}

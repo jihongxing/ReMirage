@@ -5,6 +5,7 @@ import (
 
 	pb "mirage-proto/gen"
 
+	"google.golang.org/protobuf/proto"
 	"pgregory.net/rapid"
 )
 
@@ -29,7 +30,7 @@ func TestProperty3_StegoPayloadLengthInvariant(t *testing.T) {
 		cmd := genControlCommand().Draw(t, "cmd")
 
 		// Compute minimum target length for this command
-		serialized, err := pb.MarshalControlCommand(cmd)
+		serialized, err := proto.Marshal(cmd)
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
 		}
@@ -56,7 +57,7 @@ func TestProperty4_StegoRoundTrip(t *testing.T) {
 		key := rapid.SliceOfN(rapid.Byte(), KeySize, KeySize).Draw(t, "key")
 		cmd := genControlCommand().Draw(t, "cmd")
 
-		serialized, err := pb.MarshalControlCommand(cmd)
+		serialized, err := proto.Marshal(cmd)
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
 		}

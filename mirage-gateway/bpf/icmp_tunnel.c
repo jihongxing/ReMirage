@@ -9,11 +9,23 @@
  */
 
 #include "common.h"
-#include <linux/icmp.h>
 
 #define ICMP_ECHO_REQUEST 8
 #define ICMP_ECHO_REPLY   0
 #define ICMP_MAX_PAYLOAD  1024
+
+struct mirage_icmphdr {
+    __u8 type;
+    __u8 code;
+    __sum16 checksum;
+    union {
+        struct {
+            __be16 id;
+            __be16 sequence;
+        } echo;
+        __u32 gateway;
+    } un;
+};
 
 /* ICMP Tunnel 配置（Go → C） */
 struct icmp_config {
@@ -60,35 +72,22 @@ struct {
     __type(value, struct icmp_tx_entry);
 } icmp_tx_map SEC(".maps");
 
+/* Per-CPU scratch buffer for queue pop results.
+ * icmp_tx_entry is larger than the BPF stack limit, so egress must not place it
+ * on the stack even when the current implementation only consumes the queue.
+ */
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, struct icmp_tx_entry);
+} icmp_tx_scratch_map SEC(".maps");
+
 /* 接收事件 Ring Buffer（C → Go） */
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
     __uint(max_entries, 256 * 1024); /* 256KB */
 } icmp_data_events SEC(".maps");
-
-/* 辅助函数：计算 ICMP 校验和 */
-static __always_inline __u16 icmp_checksum(void *data, int len) {
-    __u32 sum = 0;
-    __u16 *ptr = data;
-    int i;
-
-    #pragma unroll
-    for (i = 0; i < 512; i++) { /* 最大 1024 字节 / 2 */
-        if (i * 2 >= len)
-            break;
-        sum += *ptr++;
-    }
-
-    /* 处理奇数长度 */
-    if (len & 1)
-        sum += *(__u8 *)ptr;
-
-    /* 折叠进位 */
-    while (sum >> 16)
-        sum = (sum & 0xFFFF) + (sum >> 16);
-
-    return ~sum;
-}
 
 /* 读取配置 */
 static __always_inline struct icmp_config *get_icmp_config(void) {
@@ -131,7 +130,7 @@ int icmp_tunnel_egress(struct __sk_buff *skb) {
         return TC_ACT_OK;
 
     /* 解析 ICMP 头 */
-    struct icmphdr *icmp = (void *)(ip + 1);
+    struct mirage_icmphdr *icmp = (void *)(ip + 1);
     if ((void *)(icmp + 1) > data_end)
         return TC_ACT_OK;
 
@@ -144,8 +143,12 @@ int icmp_tunnel_egress(struct __sk_buff *skb) {
         return TC_ACT_OK;
 
     /* 从发送队列读取数据 */
-    struct icmp_tx_entry tx;
-    if (bpf_map_pop_elem(&icmp_tx_map, &tx) != 0)
+    __u32 scratch_key = 0;
+    struct icmp_tx_entry *tx = bpf_map_lookup_elem(&icmp_tx_scratch_map, &scratch_key);
+    if (!tx)
+        return TC_ACT_OK;
+
+    if (bpf_map_pop_elem(&icmp_tx_map, tx) != 0)
         return TC_ACT_OK; /* 队列为空，放行原始包 */
 
     /* 注入 Payload 数据到 ICMP 包
@@ -187,7 +190,7 @@ int icmp_tunnel_ingress(struct __sk_buff *skb) {
         return TC_ACT_OK;
 
     /* 解析 ICMP 头 */
-    struct icmphdr *icmp = (void *)(ip + 1);
+    struct mirage_icmphdr *icmp = (void *)(ip + 1);
     if ((void *)(icmp + 1) > data_end)
         return TC_ACT_OK;
 

@@ -19,6 +19,7 @@ function Check {
     param([string]$Name, [scriptblock]$Block)
     Write-Host "── $Name ──"
     try {
+        $global:LASTEXITCODE = $null
         $result = & $Block 2>&1
         if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq $null) {
             Write-Host "  ✅ PASS"
@@ -44,12 +45,14 @@ Check "Gateway go vet"  { Push-Location (Join-Path $ProjectRoot "mirage-gateway"
 Check "OS go vet"       { Push-Location (Join-Path $ProjectRoot "mirage-os"); go vet ./...; Pop-Location }
 Check "Gateway build"   { Push-Location (Join-Path $ProjectRoot "mirage-gateway"); go build ./cmd/gateway/; Pop-Location }
 Check "OS build"        { Push-Location (Join-Path $ProjectRoot "mirage-os"); go build ./...; Pop-Location }
+Check "API Server build" { Push-Location (Join-Path $ProjectRoot "mirage-os\api-server"); npm run build; Pop-Location }
 Check "Client build"    { Push-Location (Join-Path $ProjectRoot "phantom-client"); go build ./cmd/phantom/; Pop-Location }
 Check "CLI build"       { Push-Location (Join-Path $ProjectRoot "mirage-cli"); go build ./...; Pop-Location }
 
 # Gate 2: 关键测试
 Check "Gateway tests"   { Push-Location (Join-Path $ProjectRoot "mirage-gateway"); go test ./...; Pop-Location }
 Check "OS tests"        { Push-Location (Join-Path $ProjectRoot "mirage-os"); go test ./...; Pop-Location }
+Check "API Server tests" { Push-Location (Join-Path $ProjectRoot "mirage-os\api-server"); npm test -- --runInBand; Pop-Location }
 Check "Benchmarks"      { Push-Location (Join-Path $ProjectRoot "benchmarks"); go test ./...; Pop-Location }
 Check "Quota -count=10" { Push-Location (Join-Path $ProjectRoot "mirage-gateway"); go test -count=10 ./pkg/api/; Pop-Location }
 
@@ -86,6 +89,7 @@ function CheckSkip {
     param([string]$Name, [scriptblock]$Block)
     Write-Host "── $Name ──"
     try {
+        $global:LASTEXITCODE = $null
         $result = & $Block 2>&1
         if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq $null) {
             Write-Host "  ✅ PASS"
@@ -120,6 +124,7 @@ if (Test-Path $clientDir) {
 $evidenceFiles = @(
     "docs\governance\carrier-matrix.md",
     "docs\reports\stealth-experiment-plan.md",
+    "docs\reports\stealth-experiment-results.md",
     "docs\reports\ebpf-coverage-map.md",
     "docs\reports\deployment-tiers.md",
     "docs\reports\access-control-joint-drill.md",

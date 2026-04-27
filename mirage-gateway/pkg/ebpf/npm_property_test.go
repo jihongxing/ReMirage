@@ -68,10 +68,10 @@ func TestProperty_NPMModeCorrection(t *testing.T) {
 			t.Fatalf("VerifyGaussianMode failed: %v", err)
 		}
 
-		// Property: PaddingMode must be Gaussian after verification
-		if m.cfg.PaddingMode != NPMModeGaussian {
+		// Property: PaddingMode must be MIMIC after verification
+		if m.cfg.PaddingMode != NPMModeMimic {
 			t.Fatalf("PaddingMode=%d after VerifyGaussianMode, expected %d",
-				m.cfg.PaddingMode, NPMModeGaussian)
+				m.cfg.PaddingMode, NPMModeMimic)
 		}
 
 		// Property: other fields must be preserved
@@ -128,6 +128,12 @@ func calculatePadding(mode, currentSize, targetMTU uint32) uint32 {
 		// Simulate gaussian: pick a value in [0, space]
 		// Use ~68% of space as representative gaussian center
 		padding = (space * 68) / 100
+	case NPMModeMimic:
+		target := uint32(1000)
+		if target <= currentSize {
+			return 0
+		}
+		padding = target - currentSize
 	default:
 		return 0
 	}
@@ -140,6 +146,29 @@ func calculatePadding(mode, currentSize, targetMTU uint32) uint32 {
 		padding = MAX_PADDING_SIZE
 	}
 	return padding
+}
+
+type mimicBin struct {
+	Low        uint32
+	High       uint32
+	Cumulative uint32
+}
+
+func sampleMimicCDF(bins []mimicBin, roll uint32) uint32 {
+	for _, bin := range bins {
+		if roll <= bin.Cumulative {
+			span := bin.High - bin.Low + 1
+			return bin.Low + (roll % span)
+		}
+	}
+	return 0
+}
+
+func mimicPadding(currentSize, sampledTargetLen uint32) uint32 {
+	if sampledTargetLen <= currentSize {
+		return 0
+	}
+	return sampledTargetLen - currentSize
 }
 
 // handleNPMPadding is the Go equivalent of C handle_npm_padding in npm.c.
@@ -308,7 +337,7 @@ func TestExample_NPMLargePacketNoPadding(t *testing.T) {
 func TestProperty_NPMPaddingCorrectness(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		// Generate random npm_config
-		mode := rapid.Uint32Range(0, 2).Draw(t, "paddingMode")
+		mode := rapid.Uint32Range(0, 3).Draw(t, "paddingMode")
 		globalMTU := rapid.Uint32Range(500, 1500).Draw(t, "globalMTU")
 		minPkt := rapid.Uint32Range(0, 256).Draw(t, "minPacketSize")
 
@@ -380,6 +409,11 @@ func TestProperty_NPMPaddingCorrectness(t *testing.T) {
 		case NPMModeGaussian:
 			// Property: padding ∈ [0, space] (after clamping, may be clamped up to MIN)
 			// padding can be 0 if gaussian sample is 0, or clamped to MIN_PADDING_SIZE
+		case NPMModeMimic:
+			// Mock MIMIC target is 1000; it never truncates.
+			if currentSize < 1000 && padding == 0 {
+				t.Fatalf("MIMIC: currentSize=%d should pad toward mock target", currentSize)
+			}
 		}
 
 		// Universal property: when padding > 0, MIN_PADDING_SIZE ≤ padding ≤ MAX_PADDING_SIZE
@@ -404,7 +438,7 @@ func TestProperty_NPMPaddingCorrectness(t *testing.T) {
 func TestProperty_NPMStatsConsistency(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		// Generate random config
-		mode := rapid.Uint32Range(0, 2).Draw(t, "paddingMode")
+		mode := rapid.Uint32Range(0, 3).Draw(t, "paddingMode")
 		globalMTU := rapid.Uint32Range(500, 1500).Draw(t, "globalMTU")
 		minPkt := rapid.Uint32Range(0, 256).Draw(t, "minPacketSize")
 
@@ -444,6 +478,37 @@ func TestProperty_NPMStatsConsistency(t *testing.T) {
 		if s.PaddedPackets > s.TotalPackets-s.SkippedPackets {
 			t.Fatalf("padded(%d) > total(%d) - skipped(%d)",
 				s.PaddedPackets, s.TotalPackets, s.SkippedPackets)
+		}
+	})
+}
+
+func TestProperty_NPMMimicDistributionFit(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		bins := []mimicBin{
+			{Low: 100, High: 199, Cumulative: 2500},
+			{Low: 200, High: 399, Cumulative: 6500},
+			{Low: 400, High: 799, Cumulative: 10000},
+		}
+
+		roll := rapid.Uint32Range(1, 10000).Draw(t, "roll")
+		sampled := sampleMimicCDF(bins, roll)
+		if sampled < 100 || sampled > 799 {
+			t.Fatalf("sampled target %d outside CDF bounds", sampled)
+		}
+
+		currentSize := rapid.Uint32Range(0, 1600).Draw(t, "currentSize")
+		padding := mimicPadding(currentSize, sampled)
+		output := currentSize + padding
+		if output < currentSize {
+			t.Fatalf("MIMIC truncated packet: output=%d current=%d", output, currentSize)
+		}
+		if currentSize >= sampled && padding != 0 {
+			t.Fatalf("MIMIC must not pad when current=%d >= sampled=%d", currentSize, sampled)
+		}
+
+		controlledPadding := mimicPadding(0, sampled)
+		if controlledPadding != sampled {
+			t.Fatalf("controlled equality failed: padding=%d sampled=%d", controlledPadding, sampled)
 		}
 	})
 }
