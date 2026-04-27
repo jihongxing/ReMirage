@@ -11,7 +11,7 @@ Phase 2 M6 分类器实验结果显示四个检测面全部 AUC=1.0 / F1=1.0 / A
 ## 约束
 
 - 本 Spec 不新增协议，只修复现有协议的隐匿效果
-- 能力域状态升级条件：第一层实现完成 + Linux 真实抓包实验重新跑通 + 单维/联合 AUC 达到目标后，才可从"部分实现"升级为"已实现（限定表述）"
+- 能力域状态升级条件：第一层实现完成 + 原生 OS 真实抓包基线采集完成 + 单维/联合 AUC 达到目标后，才可从"部分实现"升级为"已实现（限定表述）"
 - 不追求"完全匹配某一个 Chrome 常量"，目标是"按目标画像族生成一致指纹"
 - H2 SETTINGS、H3/QUIC、WebSocket upgrade 三条路径分别审计，不混为一谈
 - eBPF 数据面改动遵守 protocol-language-rules.md 铁律
@@ -29,7 +29,7 @@ Phase 2 M6 分类器实验结果显示四个检测面全部 AUC=1.0 / F1=1.0 / A
 ### 2. B-DNA 指纹动态化
 
 - 2.1 `bdna.c` 从 per-global `active_profile_map` 改为 per-connection 画像选择：每条新连接根据 `conn_key` 查 `conn_profile_map` 获取 profile_id，再从 `fingerprint_map` 取对应模板。**首包时序要求**：TCP SYN 是第一个可观测指纹，`conn_profile_map` 必须在 SYN 到达 `bdna_tcp_rewrite` 时已有值。实现方式二选一：（A）C 侧首包自选——SYN 首包未命中 `conn_profile_map` 时，由 eBPF 侧用 `bpf_get_prng_u32() % profile_count` 选择 profile_id 并写入 `conn_profile_map`，后续包直接查表；（B）Go 侧预注册——在 listener accept 之前通过 eBPF Map 预写 profile_id（仅适用于 Gateway 主动监听场景）。推荐方案 A，因为 SYN 到达时 Go 侧尚未感知连接
-- 2.2 Go 控制面负责维护 `profile_count_map`（当前可用画像数量）和 `profile_weight_map`（各画像族权重），C 侧首包自选时读取这两个 Map。Go 侧也可在连接建立后覆写 `conn_profile_map` 中的值（用于策略调整），但首包画像由 C 侧保证
+- 2.2 Go 控制面负责维护 `profile_select_map`（`BPF_MAP_TYPE_ARRAY`，`max_entries=64`，value=`struct { __u32 cumulative_weight; __u32 profile_id; }`）和 `profile_count_map`（当前可用画像数量）。C 侧首包自选时遍历 `profile_select_map` 按 cumulative_weight 采样，返回对应的真实 `profile_id`。这样画像 ID 不需要连续，registry 中禁用/待采集的画像不写入 `profile_select_map` 即可排除
 - 2.3 权重配置可通过 `gateway.yaml` 调整，默认权重按全球浏览器市场份额分配
 - 2.4 确保同一连接生命周期内画像不变（TCP SYN 重写和后续 QUIC/TLS 参数使用同一 profile）
 - 2.5 `bdna_tls_rewrite` 和 `bdna_quic_rewrite` 必须与 `bdna_tcp_rewrite` 使用相同的 per-connection 画像查询路径（先查 `conn_profile_map`，未命中回退 `active_profile_map[0]`），确保三条重写路径画像一致
@@ -47,7 +47,7 @@ Phase 2 M6 分类器实验结果显示四个检测面全部 AUC=1.0 / F1=1.0 / A
 
 - 4.1 `dna_template_map` 中的 `TargetIATMu` / `TargetIATSigma` 必须从真实对照基线的 IAT 统计值校准，不能使用任意配置值
 - 4.2 Go 控制面在启动时从对照基线数据加载 IAT 参数，写入 `dna_template_map`
-- 4.3 Jitter 扰动后的 IAT 分布与目标流量的 KS 检验 p-value 目标 > 0.05（作为设计目标，实际值由实验决定）
+- 4.3 Jitter 扰动后的 IAT 分布验收指标：均值偏差 < 20%、标准差偏差 < 30%、P95 偏差 < 50%。KS 检验 p-value > 0.05 作为远期设计目标，不作为本轮升级门禁（真实 IAT 往往是重尾/突发/多峰分布，单一 gaussian 参数难以满足 KS 检验；若需通过 KS，需后续引入经验 CDF 或混合分布模型）
 - 4.4 `jitter.c` 的 `jitter_lite_egress` 在无 `dna_template` 时的回退行为保持不变（使用 `jitter_config` 的 gaussian_sample）
 
 ### 5. TLS/QUIC 指纹对齐

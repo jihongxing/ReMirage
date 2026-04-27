@@ -29,17 +29,18 @@ conn_key(saddr,daddr,sport,dport) → conn_profile_map[conn_key] → profile_id
 C 侧变更（`bdna.c`）：
 - `bdna_tcp_rewrite` 中，先用 `conn_key` 查 `conn_profile_map`
 - 命中 → 用返回的 `profile_id` 查 `fingerprint_map`
-- **未命中（SYN 首包）→ C 侧自选**：用 `bpf_get_prng_u32()` 按 `profile_weight_map` 权重选择 profile_id，写入 `conn_profile_map`，再查 `fingerprint_map`。这确保第一个可观测指纹（TCP SYN）就已经是动态画像，不会回退到全局唯一画像
-- 仅当 `conn_profile_map` 和 `profile_weight_map` 都查不到时，才回退到 `active_profile_map[0]`（兼容降级）
+- **未命中（SYN 首包）→ C 侧自选**：用 `bpf_get_prng_u32()` 按 `profile_select_map` 权重选择 profile_id，写入 `conn_profile_map`，再查 `fingerprint_map`。这确保第一个可观测指纹（TCP SYN）就已经是动态画像，不会回退到全局唯一画像
+- 仅当 `conn_profile_map` 和 `profile_select_map` 都查不到时，才回退到 `active_profile_map[0]`（兼容降级）
 - `bdna_tls_rewrite` 和 `bdna_quic_rewrite` 使用相同的 per-connection 查询路径，确保三条重写路径画像一致
 - 新增 `conn_profile_map`：`BPF_MAP_TYPE_LRU_HASH`，`max_entries=65536`
-- 新增 `profile_weight_map`：`BPF_MAP_TYPE_ARRAY`，`max_entries=64`，value=`__u32 cumulative_weight`
-- 新增 `profile_count_map`：`BPF_MAP_TYPE_ARRAY`，`max_entries=1`，value=`__u32 count`
+- 新增 `profile_select_map`：`BPF_MAP_TYPE_ARRAY`，`max_entries=64`，value=`struct { __u32 cumulative_weight; __u32 profile_id; }`。Go 侧只将已启用且已采集基线的画像写入此 Map，禁用/待采集的画像不写入即可排除。画像 ID 不要求连续
+- 新增 `profile_count_map`：`BPF_MAP_TYPE_ARRAY`，`max_entries=1`，value=`__u32 count`（`profile_select_map` 中有效条目数）
 
 Go 侧变更（`bdna_profile_updater.go`）：
-- 启动时将画像族权重写入 `profile_weight_map`（CDF 格式）和 `profile_count_map`
+- 启动时将已启用画像族的权重写入 `profile_select_map`（CDF 格式，每条包含 cumulative_weight + 真实 profile_id）和 `profile_count_map`
 - 新增 `OverrideConnectionProfile(connKey ConnKey, profileID uint32) error` 方法（策略调整用，非首包路径）
 - 权重从 `gateway.yaml` 的 `bdna.profile_weights` 读取
+- registry 中禁用或 OS 节点不可用的画像不写入 `profile_select_map`
 
 ### 1.2 NPM MIMIC 分布模式
 
@@ -114,11 +115,11 @@ Go 侧变更（`dna_updater.go`）：
 - 验证: 需求 2.1, 2.4
 
 ### Property 2: NPM MIMIC 分布拟合
-- 生成随机目标 CDF（单调递增），随机包序列经 MIMIC 处理后，输出包长分布与目标 CDF 的 JS 散度 < 阈值
+- 生成随机目标 CDF（单调递增），随机 **padding-eligible** 包序列（current_size ∈ [min_packet_size, target_mtu]）经 MIMIC 处理后，输出包长分布与目标 CDF 的 JS 散度 < 阈值。同时验证：current_size < min_packet_size 的包不填充、current_size > target_mtu 的包 padding=0（单调不截断约束）。全局 JS 散度（含不可填充包）留给 M15 真实实验验证，不作为 PBT 断言
 - 验证: 需求 3.2, 3.5
 
 ### Property 3: Jitter 校准后 IAT 分布
-- 生成随机 baseline IAT 参数（mean ∈ [500,5000]μs, std ∈ [50,1000]μs），校准后 Jitter 输出的 IAT 序列均值/标准差与目标偏差 < 20%
+- 生成随机 baseline IAT 参数（mean ∈ [500,5000]μs, std ∈ [50,1000]μs），校准后 Jitter 输出的 IAT 序列均值偏差 < 20%、标准差偏差 < 30%、P95 偏差 < 50%。KS 检验 p-value > 0.05 作为远期目标，不作为 PBT 断言（单一 gaussian 参数难以拟合真实重尾/多峰 IAT 分布）
 - 验证: 需求 4.1, 4.3
 
 ### Property 4: 画像族权重分布
@@ -129,7 +130,7 @@ Go 侧变更（`dna_updater.go`）：
 
 | 里程碑 | 内容 | 出关条件 |
 |--------|------|----------|
-| M13 | 真实对照基线采集 | 至少 3 个画像族各 100 条连接的 pcapng + 统计数据 |
+| M13 | 真实对照基线采集 | **M13-full**：至少 3 个画像族各 100 条连接的 pcapng + 统计数据（在对应原生 OS 采集）。**M13-degraded**：部分画像族标注"待采集"，已采集画像族数据有效。M13-full 才能进入 Capability-Upgrade Gate，M13-degraded 只能进入 Implementation Exit |
 | M14 | B-DNA 动态化 + NPM MIMIC + Jitter 校准 | 代码实现 + PBT 通过 + 编译回归通过 |
 | M15 | TLS/QUIC 指纹审计 + 分类器实验迭代 | 三条路径审计报告 + 新 AUC 数据 |
 | M16 | 治理回写 + 能力域状态评估 | capability-truth-source 回写 + claims-boundary 更新 |

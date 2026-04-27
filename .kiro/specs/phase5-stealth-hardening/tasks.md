@@ -55,15 +55,15 @@
 - [ ] 3. M14：隐匿缺陷修复
   - [ ] 3.1 B-DNA per-connection 画像选择 — C 侧
     - 在 `bdna.c` 中新增 `conn_profile_map`（`BPF_MAP_TYPE_LRU_HASH`，`max_entries=65536`，key=`conn_key`，value=`__u32 profile_id`）
-    - 新增 `profile_weight_map`（`BPF_MAP_TYPE_ARRAY`，`max_entries=64`，value=`__u32 cumulative_weight`）和 `profile_count_map`（`BPF_MAP_TYPE_ARRAY`，`max_entries=1`）
-    - 修改 `bdna_tcp_rewrite`：先查 `conn_profile_map`，命中则用返回的 profile_id；**未命中（SYN 首包）→ C 侧自选**：用 `bpf_get_prng_u32()` 按 `profile_weight_map` 权重选择 profile_id，写入 `conn_profile_map`，再查 `fingerprint_map`。仅当 `profile_weight_map` 也无数据时回退到 `active_profile_map[0]`
+    - 新增 `profile_select_map`（`BPF_MAP_TYPE_ARRAY`，`max_entries=64`，value=`struct { __u32 cumulative_weight; __u32 profile_id; }`）和 `profile_count_map`（`BPF_MAP_TYPE_ARRAY`，`max_entries=1`）。Go 侧只将已启用且已采集基线的画像写入 `profile_select_map`，禁用/待采集的画像不写入
+    - 修改 `bdna_tcp_rewrite`：先查 `conn_profile_map`，命中则用返回的 profile_id；**未命中（SYN 首包）→ C 侧自选**：用 `bpf_get_prng_u32()` 按 `profile_select_map` 采样（遍历 cumulative_weight，返回对应的真实 profile_id），写入 `conn_profile_map`，再查 `fingerprint_map`。仅当 `profile_select_map` 也无数据时回退到 `active_profile_map[0]`
     - 修改 `bdna_quic_rewrite` 同理：使用相同的 per-connection 查询路径
     - 修改 `bdna_tls_rewrite` 同理：使用相同的 per-connection 查询路径（不能继续走全局 `active_profile_map`，否则三条路径画像不一致）
     - 确保编译回归通过
     - _需求: 2.1, 2.5_
 
   - [ ] 3.2 B-DNA per-connection 画像选择 — Go 侧
-    - 在 `bdna_profile_updater.go` 中新增启动时初始化：将画像族权重写入 `profile_weight_map`（CDF 格式）和 `profile_count_map`
+    - 在 `bdna_profile_updater.go` 中新增启动时初始化：将已启用画像族的权重写入 `profile_select_map`（CDF 格式，每条包含 cumulative_weight + 真实 profile_id）和 `profile_count_map`。registry 中禁用或 OS 节点不可用的画像不写入 `profile_select_map`
     - 新增 `OverrideConnectionProfile(saddr, daddr uint32, sport, dport uint16, profileID uint32) error`（策略调整用，覆写 C 侧自选结果）
     - 按 `gateway.yaml` 的 `bdna.profile_weights` 配置权重
     - 默认权重：Chrome 65%、Firefox 15%、Safari 10%、Edge 10%
@@ -104,10 +104,11 @@
   - [ ] 3.7 编写 Property 2: NPM MIMIC 分布拟合 PBT
     - 测试函数: `TestProperty_NPMMimicDistributionFit`
     - 文件: `mirage-gateway/pkg/ebpf/npm_property_test.go`
-    - 使用 `rapid` 生成随机目标 CDF（256 bin，单调递增），随机包序列（数量 ∈ [100,500]，大小 ∈ [64,1500]）经 MIMIC Mock 处理后：
-      - 输出包长分布与目标 CDF 的 JS 散度 < 0.15
-      - 小包（< min_packet_size）不填充
-      - 大包（> target_mtu）不截断
+    - 使用 `rapid` 生成随机目标 CDF（256 bin，单调递增），随机 **padding-eligible** 包序列（数量 ∈ [100,500]，大小 ∈ [min_packet_size, target_mtu]）经 MIMIC Mock 处理后：
+      - padding-eligible 子集的输出包长分布与目标 CDF 的 JS 散度 < 0.15
+      - 小包（< min_packet_size）不填充（padding=0）
+      - 大包（> target_mtu）不截断（padding=0）
+    - 全局 JS 散度（含不可填充包）留给 M15 真实实验验证，不作为 PBT 断言
     - 最少 100 次迭代
     - **验证: 需求 3.2, 3.5**
 
@@ -123,6 +124,8 @@
     - 使用 `rapid` 生成随机 baseline IAT 参数（mean ∈ [500,5000]μs, std ∈ [50,1000]μs），校准后生成 200 个 IAT 样本：
       - 样本均值与目标均值偏差 < 20%
       - 样本标准差与目标标准差偏差 < 30%
+      - 样本 P95 与目标 P95 偏差 < 50%
+    - KS 检验 p-value > 0.05 作为远期目标，不作为 PBT 断言（单一 gaussian 参数难以拟合真实重尾/多峰 IAT 分布，需后续引入经验 CDF 或混合分布模型）
     - 最少 100 次迭代
     - **验证: 需求 4.1, 4.3**
 
@@ -209,7 +212,7 @@
 - eBPF 改动遵守 protocol-language-rules.md：C 做数据面，Go 做控制面，eBPF Map 通信
 - M13 需要在对应原生 OS 上采集（Chrome-Win 在 Windows、Chrome-macOS 在 macOS、Firefox-Linux 在 Linux）；某 OS 不可用时该画像族标注"待采集"
 - 画像库更新不追求"完全匹配某一个 Chrome 版本常量"，而是"按画像族生成一致指纹"
-- 分类器 AUC 设计目标：单维 < 0.75、联合 < 0.85；升级门禁与设计目标一致，不设宽松中间档
+- 分类器 AUC 设计目标：单维 < 0.75、联合 < 0.85；升级门禁与设计目标一致；[0.75, 0.9) / [0.85, 0.9) 为"风险已下降但不升级"中间档，仅允许在 claims-boundary 中增加限定表述，不允许能力状态升级
 - Implementation Exit 与 Capability-Upgrade Gate 分离：Phase 可降级出关，但降级/模拟数据不可作为能力状态升级依据
 - 真实采集元数据存储为 `capture-metadata.json`，`simulation-metadata.json` 仅保留给模拟样本
 - 证据产物路径：`artifacts/dpi-audit/baseline/`（真实基线）、`docs/reports/`（报告）
