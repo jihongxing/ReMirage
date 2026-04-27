@@ -21,7 +21,7 @@ active_profile_map[0] → profile_id → fingerprint_map[profile_id] → stack_f
 
 目标架构：
 ```
-conn_key(saddr,daddr,sport,dport) → conn_profile_map[conn_key] → profile_id
+conn_key(saddr,daddr,sport,dport,l4_proto) → conn_profile_map[conn_key] → profile_id
                                                                       ↓
                                               fingerprint_map[profile_id] → stack_fingerprint
 ```
@@ -30,7 +30,7 @@ C 侧变更（`bdna.c`）：
 - `bdna_tcp_rewrite` 中，先用 `conn_key` 查 `conn_profile_map`
 - 命中 → 用返回的 `profile_id` 查 `fingerprint_map`
 - **未命中（SYN 首包）→ C 侧自选**：用 `bpf_get_prng_u32()` 遍历 `profile_select_map` 按 `cumulative_weight` 采样，返回对应的真实 `profile_id`，写入 `conn_profile_map`，再查 `fingerprint_map`。这确保第一个可观测指纹（TCP SYN）就已经是动态画像，不会回退到全局唯一画像
-- **有效性门禁**：C 侧在以下情况回退到 `active_profile_map[0]`：`profile_count_map[0]` == 0、采样得到的 `profile_id` 在 `fingerprint_map` 中不存在、`profile_select_map` 读取失败。Go 侧写入 `profile_select_map` 前必须校验：CDF 单调递增、最后一条 `cumulative_weight` > 0、每条 `profile_id` 在 `fingerprint_map` 中存在。仅当门禁全部未通过时才回退 `active_profile_map[0]`
+- **有效性门禁**：C 侧**任一**以下条件成立即回退到 `active_profile_map[0]`（不写入 `conn_profile_map`）：`profile_count_map[0]` == 0、`profile_select_map` 读取失败、采样得到的 `profile_id` 在 `fingerprint_map` 中不存在。禁止将无效 `profile_id` 写入 `conn_profile_map`。Go 侧写入 `profile_select_map` 前必须校验：CDF 单调递增、最后一条 `cumulative_weight` > 0、每条 `profile_id` 在 `fingerprint_map` 中存在
 - `bdna_tls_rewrite` 和 `bdna_quic_rewrite` 使用相同的 per-connection 查询路径，确保三条重写路径画像一致
 - 新增 `conn_profile_map`：`BPF_MAP_TYPE_LRU_HASH`，`max_entries=65536`
 - 新增 `profile_select_map`：`BPF_MAP_TYPE_ARRAY`，`max_entries=64`，value=`struct { __u32 cumulative_weight; __u32 profile_id; }`。Go 侧只将已启用且已采集基线的画像写入此 Map，禁用/待采集的画像不写入即可排除。画像 ID 不要求连续

@@ -24,7 +24,7 @@ Phase 2 M6 分类器实验结果显示四个检测面全部 AUC=1.0 / F1=1.0 / A
 - 1.1 采集真实浏览器访问主流 HTTPS 站点的流量，提取握手指纹（TCP SYN 字段 + TLS ClientHello extension 列表 + JA4）、包长分布（前 N 包长度/方向/上下行比例/熵值）、IAT 分布（均值/标准差/P50/P95/P99/burst 结构）
 - 1.2 采集至少 3 个目标画像族的对照数据，每族至少 100 条连接。画像族必须在对应原生 OS 上采集：Chrome-Win 在 Windows 节点采集、Chrome-macOS 在 macOS 节点采集、Firefox-Linux 在 Linux 节点采集。不允许用 Linux 浏览器数据代表 Windows/macOS 画像族（TCP 栈、TLS 库、OS 指纹不同）。若某 OS 节点不可用，该画像族标注"待采集"而非用其他 OS 替代
 - 1.3 采集结果替换 `artifacts/dpi-audit/` 中的模拟 pcapng 文件，保留模拟数据为 `*.simulated.pcapng` 后缀备份
-- 1.4 真实采集元数据存储为 `artifacts/dpi-audit/baseline/capture-metadata.json`（内核版本、浏览器版本、OS 版本、网络条件），不复用 `simulation-metadata.json`。`simulation-metadata.json` 仅保留给模拟样本，两套元数据文件语义隔离
+- 1.4 真实采集元数据按画像族独立存储：`artifacts/dpi-audit/baseline/chrome-win/capture-metadata.json`、`artifacts/dpi-audit/baseline/chrome-macos/capture-metadata.json`、`artifacts/dpi-audit/baseline/firefox-linux/capture-metadata.json`。每个文件记录：OS 版本/build、浏览器版本、采集工具（tcpdump/tshark/PacketMon）、网卡类型、网络条件、采集时间。`simulation-metadata.json` 仅保留给模拟样本，两套元数据语义隔离。Capability-Upgrade Gate 审计时按画像族逐一检查 capture-metadata.json 是否存在且标注为原生 OS 采集
 
 ### 2. B-DNA 指纹动态化
 
@@ -32,7 +32,7 @@ Phase 2 M6 分类器实验结果显示四个检测面全部 AUC=1.0 / F1=1.0 / A
 - 2.2 Go 控制面负责维护 `profile_select_map`（`BPF_MAP_TYPE_ARRAY`，`max_entries=64`，value=`struct { __u32 cumulative_weight; __u32 profile_id; }`）和 `profile_count_map`（当前可用画像数量）。C 侧首包自选时遍历 `profile_select_map` 按 cumulative_weight 采样，返回对应的真实 `profile_id`。这样画像 ID 不需要连续，registry 中禁用/待采集的画像不写入 `profile_select_map` 即可排除
 - 2.3 权重配置可通过 `gateway.yaml` 调整，默认权重按全球浏览器市场份额分配
 - 2.4 确保同一连接生命周期内画像不变（TCP SYN 重写和后续 QUIC/TLS 参数使用同一 profile）
-- 2.5 `bdna_tls_rewrite`、`bdna_quic_rewrite`、`bdna_tcp_rewrite` 三条路径必须调用同一个内联函数 `select_profile_for_conn`：查 `conn_profile_map` → 未命中则遍历 `profile_select_map` 按 `cumulative_weight` 采样并写入 `conn_profile_map` → 采样/校验失败才回退 `active_profile_map[0]`。不允许 TLS/QUIC 路径跳过自选直接回退全局画像（否则当 TLS/QUIC 路径先于 TCP 路径看到连接、或 conn_key 维度不一致时，仍会暴露全局唯一画像）
+- 2.5 `bdna_tls_rewrite`、`bdna_quic_rewrite`、`bdna_tcp_rewrite` 三条路径必须调用同一个内联函数 `select_profile_for_conn`：查 `conn_profile_map` → 未命中则遍历 `profile_select_map` 按 `cumulative_weight` 采样并写入 `conn_profile_map` → 任一门禁失败（count==0 / 读取失败 / profile_id 不存在于 `fingerprint_map`）即回退 `active_profile_map[0]` 且禁止将无效 profile_id 写入 `conn_profile_map`。`conn_key` 维度为 `(saddr, daddr, sport, dport, l4_proto)`，包含 L4 协议字段以防止 TCP/UDP 连接在相同四元组下互相复用 profile
 - 2.6 画像库数据（`fingerprints.yaml` / `profile-registry.v1.json`）中的值必须与真实采集的对照基线一致，发现偏差时更新画像库
 
 ### 3. NPM 拟态分布模式

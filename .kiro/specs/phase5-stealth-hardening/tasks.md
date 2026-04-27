@@ -48,8 +48,8 @@
   - [ ] 1.4 备份模拟数据并替换
     - 将现有 `artifacts/dpi-audit/{handshake,packet-length,timing}/*.pcapng` 重命名为 `*.simulated.pcapng`
     - 用真实采集数据替换（保持文件名不变，分析脚本无需修改）
-    - 真实采集元数据存储为 `artifacts/dpi-audit/baseline/capture-metadata.json`（内核版本、浏览器版本、OS 版本、网络条件）
-    - `simulation-metadata.json` 保持不变，仅用于模拟样本；两套元数据文件语义隔离
+    - 真实采集元数据按画像族独立存储：`artifacts/dpi-audit/baseline/chrome-win/capture-metadata.json`、`chrome-macos/capture-metadata.json`、`firefox-linux/capture-metadata.json`，每个文件记录 OS 版本/build、浏览器版本、采集工具、网卡类型、网络条件、采集时间
+    - `simulation-metadata.json` 保持不变，仅用于模拟样本；Capability-Upgrade Gate 审计时按画像族逐一检查 capture-metadata.json 是否存在且标注为原生 OS 采集
     - _需求: 1.3, 1.4_
 
 - [ ] 2. Checkpoint — M13 基线采集确认
@@ -59,10 +59,10 @@
   - [ ] 3.1 B-DNA per-connection 画像选择 — C 侧
     - 在 `bdna.c` 中新增 `conn_profile_map`（`BPF_MAP_TYPE_LRU_HASH`，`max_entries=65536`，key=`conn_key`，value=`__u32 profile_id`）
     - 新增 `profile_select_map`（`BPF_MAP_TYPE_ARRAY`，`max_entries=64`，value=`struct { __u32 cumulative_weight; __u32 profile_id; }`）和 `profile_count_map`（`BPF_MAP_TYPE_ARRAY`，`max_entries=1`）。Go 侧只将已启用且已采集基线的画像写入 `profile_select_map`，禁用/待采集的画像不写入
-    - 修改 `bdna_tcp_rewrite`：先查 `conn_profile_map`，命中则用返回的 profile_id；**未命中（SYN 首包）→ C 侧自选**：用 `bpf_get_prng_u32()` 遍历 `profile_select_map` 按 `cumulative_weight` 采样返回真实 `profile_id`，写入 `conn_profile_map`，再查 `fingerprint_map`。**有效性门禁**：`profile_count_map[0]` == 0 或采样 `profile_id` 在 `fingerprint_map` 中不存在时回退 `active_profile_map[0]`
+    - 修改 `bdna_tcp_rewrite`：先查 `conn_profile_map`，命中则用返回的 profile_id；**未命中（SYN 首包）→ C 侧自选**：用 `bpf_get_prng_u32()` 遍历 `profile_select_map` 按 `cumulative_weight` 采样返回真实 `profile_id`，写入 `conn_profile_map`，再查 `fingerprint_map`。**有效性门禁**：任一条件成立即回退 `active_profile_map[0]` 且不写入 `conn_profile_map`：`profile_count_map[0]` == 0、`profile_select_map` 读取失败、采样 `profile_id` 在 `fingerprint_map` 中不存在
     - 修改 `bdna_quic_rewrite` 同理：调用同一个 `select_profile_for_conn` 内联函数
     - 修改 `bdna_tls_rewrite` 同理：调用同一个 `select_profile_for_conn` 内联函数（不允许跳过自选直接回退全局画像）
-    - 三条路径的 `conn_key` 维度必须一致（saddr, daddr, sport, dport），确保同一连接无论哪条路径先触发都能正确自选并持久化
+    - 三条路径的 `conn_key` 维度必须一致且包含 L4 协议：`(saddr, daddr, sport, dport, l4_proto)`，其中 `l4_proto` 为 `IPPROTO_TCP`(6) 或 `IPPROTO_UDP`(17)。不包含 `l4_proto` 会导致 TCP/UDP 连接在相同四元组下互相复用 profile，QUIC/TLS 画像被另一条协议路径污染
     - 确保编译回归通过
     - _需求: 2.1, 2.5_
 
