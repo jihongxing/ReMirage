@@ -1,0 +1,5 @@
+# eBPF CPU 占用报告
+# 状态: 待采集（需 Linux + perf 环境）
+# 采集命令: sudo perf top -e cycles:k
+# 对照基准: C 数据面 CPU < 5%
+  证据状态: CPU 数据待 Linux 环境采集

@@ -1,0 +1,18 @@
+# 2026/04/23 09:55:00.052557 [TestProperty_QuotaDegradationNormal] [rapid] draw total: 0x2711
+# 2026/04/23 09:55:00.052557 [TestProperty_QuotaDegradationNormal] [rapid] draw ratioPercent: 10
+# 2026/04/23 09:55:00.052557 [TestProperty_QuotaDegradationNormal] [rapid] draw seed: 0
+# 2026/04/23 09:55:00.052557 [TestProperty_QuotaDegradationNormal] ratio=10.0% should always pass, but was dropped
+# 
+v0.4.8#8976079862884091055
+0x0
+0x1
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0

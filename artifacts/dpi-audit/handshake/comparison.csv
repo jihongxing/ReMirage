@@ -1,0 +1,4 @@
+source,tcp_window,tcp_mss,tcp_wscale,tcp_sack,tcp_timestamps,tls_ext_count,tls_extensions,tls_ext_sequence,ja4_fingerprint
+remirage,64240,1380,8,True,True,10,0;10;11;13;16;18;23;43;45;51,0;10;11;13;16;18;23;43;45;51,191650f387149a7f
+chrome,65535,1460,8,True,True,12,0;5;10;11;13;16;18;21;23;43;45;51,0;5;10;11;13;16;18;21;23;43;45;51,4c4484c1f099b69d
+utls,64240,1460,7,True,True,11,0;10;11;13;16;18;23;35;43;45;51,0;10;11;13;16;18;23;35;43;45;51,380416123dab4291

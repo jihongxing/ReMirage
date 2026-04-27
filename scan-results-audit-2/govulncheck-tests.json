@@ -1,0 +1,28 @@
+﻿{
+  "config": {
+    "protocol_version": "v1.0.0",
+    "scanner_name": "govulncheck",
+    "scanner_version": "v1.2.0",
+    "db": "https://vuln.go.dev",
+    "db_last_modified": "2026-04-21T18:59:51Z",
+    "go_version": "go1.25.5",
+    "scan_level": "symbol",
+    "scan_mode": "source"
+  }
+}
+govulncheck.exe : govulncheck: loading packages: 
+At D:\codeSpace\ReMirage\scripts\security-scan.ps1:75 char:22
++         $RawOutput = & govulncheck -json ./... 2>&1 | Out-String
++                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (govulncheck: loading packages: :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+There are errors with the provided package patterns:
+
+-: ambiguous import: found package mirage-gateway/tests in multiple modules:
+	mirage-gateway v0.0.0 (D:\codeSpace\ReMirage\mirage-gateway\tests)
+	mirage-gateway/tests (D:\codeSpace\ReMirage\tests)
+
+For details on package patterns, see https://pkg.go.dev/cmd/go#hdr-Package_lists_and_patterns.
+
+

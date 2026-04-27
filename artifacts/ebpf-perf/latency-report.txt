@@ -1,0 +1,5 @@
+# eBPF 延迟报告
+# 状态: 待采集（需 Linux + bpftrace 环境）
+# 采集命令: sudo bpftrace benchmarks/ebpf_latency.bt
+# 对照基准: C 数据面延迟 < 1ms
+  证据状态: 延迟数据待 Linux 环境采集

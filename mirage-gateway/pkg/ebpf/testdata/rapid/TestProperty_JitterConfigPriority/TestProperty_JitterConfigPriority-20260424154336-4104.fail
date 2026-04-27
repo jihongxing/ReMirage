@@ -1,0 +1,19 @@
+# 2026/04/24 15:43:36.268385 [TestProperty_JitterConfigPriority] [rapid] draw tpl_iat_mu: 0x64
+# 2026/04/24 15:43:36.268385 [TestProperty_JitterConfigPriority] [rapid] draw tpl_iat_sigma: 0xa
+# 2026/04/24 15:43:36.268385 [TestProperty_JitterConfigPriority] [rapid] draw cfg_mean_iat: 0x64
+# 2026/04/24 15:43:36.268385 [TestProperty_JitterConfigPriority] [rapid] draw cfg_stddev_iat: 0x2a
+# 2026/04/24 15:43:36.268385 [TestProperty_JitterConfigPriority] [rapid] draw seed: 2
+# 2026/04/24 15:43:36.268385 [TestProperty_JitterConfigPriority] Scenario B: delay_ns should be > 0, got 0 (cfg_mean=100, cfg_stddev=42)
+# 
+v0.4.8#11891928646595441269
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0xdbb6620ab61a1
+0x20
+0x0
+0x1e5f75270d046
+0x2

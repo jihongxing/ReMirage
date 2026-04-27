@@ -1,0 +1,18 @@
+# 2026/04/23 09:57:49.569340 [TestProperty_SocialClockSigmoidContinuity] [rapid] draw peakStart: 0x8
+# 2026/04/23 09:57:49.570333 [TestProperty_SocialClockSigmoidContinuity] [rapid] draw peakEnd: 0xa
+# 2026/04/23 09:57:49.570333 [TestProperty_SocialClockSigmoidContinuity] [rapid] draw peakMult: 0x78
+# 2026/04/23 09:57:49.570333 [TestProperty_SocialClockSigmoidContinuity] [rapid] draw nightMult: 0x1e
+# 2026/04/23 09:57:49.570333 [TestProperty_SocialClockSigmoidContinuity] [rapid] draw transitionWindow: 0x16
+# 2026/04/23 09:57:49.570333 [TestProperty_SocialClockSigmoidContinuity] step too large at peak_start boundary: maxStep=6.0, allowed=5.7 (tw=22, range=20)
+# 
+v0.4.8#3470927404707204851
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x9867f1f40f739
+0xc

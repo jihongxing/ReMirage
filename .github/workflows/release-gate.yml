@@ -1,0 +1,144 @@
+name: Release Gate
+on: [push, pull_request]
+
+jobs:
+  # ── Gate 1: 安全扫描（阻断式） ──
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: Go module vulnerability scan
+        run: |
+          FAIL=0
+          for mod in $(find . -name go.mod -not -path '*/node_modules/*' -not -path '*/.git/*'); do
+            dir=$(dirname "$mod")
+            echo "── Scanning $dir ──"
+            if ! (cd "$dir" && govulncheck ./...); then
+              FAIL=1
+            fi
+          done
+          exit $FAIL
+      - name: npm audit (sdk/js)
+        run: |
+          if [ -f sdk/js/package.json ]; then
+            cd sdk/js && npm audit --omit=dev
+          fi
+
+  # ── Gate 2: 敏感日志扫描 ──
+  log-redact-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - name: Scan unredacted sensitive logs
+        run: |
+          # 覆盖所有已知敏感日志模式：
+          #   user=%s / user_%s / 用户 %s / uid=%s / link=%s
+          #   IP=%s / SourceIP / RemoteAddr / 源IP
+          PATTERNS='user[=_]%s\|用户 %s\|uid=%s\|link=%s'
+          HITS=$(grep -rn "log\.Printf.*\($PATTERNS\)" --include='*.go' \
+            --exclude='*_test.go' --exclude-dir=vendor \
+            mirage-gateway/ mirage-os/ phantom-client/ mirage-cli/ \
+            | grep -v 'redact\.' || true)
+          if [ -n "$HITS" ]; then
+            echo "❌ Unredacted userID/uid/token logs found:"
+            echo "$HITS"
+            exit 1
+          fi
+
+          IP_PATTERNS='IP[=: ]%s\|SourceI[Pp]\|RemoteAddr\|源IP=%s'
+          HITS2=$(grep -rn "log\.Printf.*\($IP_PATTERNS\)" --include='*.go' \
+            --exclude='*_test.go' --exclude-dir=vendor \
+            mirage-gateway/ mirage-os/ phantom-client/ mirage-cli/ \
+            | grep -v 'redact\.' | grep -v '// ' || true)
+          if [ -n "$HITS2" ]; then
+            echo "❌ Unredacted IP logs found:"
+            echo "$HITS2"
+            exit 1
+          fi
+          echo "✅ No unredacted sensitive logs"
+      - name: Redact unit tests (gateway)
+        working-directory: mirage-gateway
+        run: go test -v ./pkg/redact/
+      - name: Redact unit tests (os)
+        working-directory: mirage-os
+        run: go test -v ./pkg/redact/
+
+  # ── Gate 3: 关键测试 ──
+  critical-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - name: go vet (gateway)
+        working-directory: mirage-gateway
+        run: go vet ./...
+      - name: go vet (os)
+        working-directory: mirage-os
+        run: go vet ./...
+      - name: Gateway tests
+        working-directory: mirage-gateway
+        run: go test ./...
+      - name: OS tests
+        working-directory: mirage-os
+        run: go test ./...
+      - name: Benchmarks runnable
+        working-directory: benchmarks
+        run: go test ./...
+      - name: Quota race test (-count=10 -race)
+        working-directory: mirage-gateway
+        run: go test -count=10 -race ./pkg/api/
+
+  # ── Gate 4: 产物清洁度 ──
+  artifact-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check no tracked binaries
+        run: |
+          BINS=$(git ls-files '*.exe' '*.dll' '*.o' | grep -v 'wintun.dll' || true)
+          if [ -n "$BINS" ]; then
+            echo "❌ Tracked binary artifacts found:"
+            echo "$BINS"
+            exit 1
+          fi
+      - name: Check config has no dangerous defaults
+        run: |
+          if grep -q 'password: postgres\|change-this-in-production' mirage-os/configs/config.yaml; then
+            echo "❌ Dangerous defaults in config.yaml"
+            exit 1
+          fi
+      - name: Check Redis auth in production compose
+        run: |
+          if ! grep -q 'requirepass' deploy/docker-compose.os.yml; then
+            echo "❌ Redis missing requirepass in production compose"
+            exit 1
+          fi
+
+  # ── Gate 5: 文档一致性 ──
+  doc-consistency:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check audit report status
+        run: |
+          if grep -q 'release_blocked' docs/audit-report.md; then
+            echo "❌ Audit report still shows release_blocked"
+            exit 1
+          fi
+      - name: Check all P0/P1 verified
+        run: |
+          OPEN=$(grep -c '| open |' docs/audit-report.md || true)
+          if [ "$OPEN" -gt 0 ]; then
+            echo "❌ Found $OPEN open findings in audit report"
+            exit 1
+          fi

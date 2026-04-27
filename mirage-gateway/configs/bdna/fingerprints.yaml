@@ -1,0 +1,554 @@
+# B-DNA 浏览器指纹模板配置
+# 覆盖 Chrome 130-140+, Firefox 120-130+, Safari 17-18, Edge 120-130+
+# 通过 Go 控制面启动时加载到 eBPF fingerprint_map
+
+fingerprints:
+  # Chrome Windows
+  - profile_id: 0
+    profile_name: "Chrome-140-Win11"
+    browser: "Chrome"
+    version: "140"
+    os: "Windows 11"
+    tcp_window: 65535
+    tcp_wscale: 8
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 15728640
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 100
+    quic_ack_delay_exp: 3
+  - profile_id: 1
+    profile_name: "Chrome-139-Win11"
+    browser: "Chrome"
+    version: "139"
+    os: "Windows 11"
+    tcp_window: 65535
+    tcp_wscale: 8
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 15728640
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 100
+    quic_ack_delay_exp: 3
+  - profile_id: 2
+    profile_name: "Chrome-138-Win11"
+    browser: "Chrome"
+    version: "138"
+    os: "Windows 11"
+    tcp_window: 65535
+    tcp_wscale: 8
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 15728640
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 100
+    quic_ack_delay_exp: 3
+  - profile_id: 3
+    profile_name: "Chrome-137-Win10"
+    browser: "Chrome"
+    version: "137"
+    os: "Windows 10"
+    tcp_window: 65535
+    tcp_wscale: 8
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 15728640
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 100
+    quic_ack_delay_exp: 3
+  - profile_id: 4
+    profile_name: "Chrome-136-Win10"
+    browser: "Chrome"
+    version: "136"
+    os: "Windows 10"
+    tcp_window: 65535
+    tcp_wscale: 8
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 15728640
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 100
+    quic_ack_delay_exp: 3
+  - profile_id: 5
+    profile_name: "Chrome-135-Win11"
+    browser: "Chrome"
+    version: "135"
+    os: "Windows 11"
+    tcp_window: 65535
+    tcp_wscale: 8
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 15728640
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 100
+    quic_ack_delay_exp: 3
+  # Chrome macOS
+  - profile_id: 6
+    profile_name: "Chrome-140-macOS"
+    browser: "Chrome"
+    version: "140"
+    os: "macOS 15"
+    tcp_window: 65535
+    tcp_wscale: 6
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 15728640
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 100
+    quic_ack_delay_exp: 3
+  - profile_id: 7
+    profile_name: "Chrome-138-macOS"
+    browser: "Chrome"
+    version: "138"
+    os: "macOS 14"
+    tcp_window: 65535
+    tcp_wscale: 6
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 15728640
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 100
+    quic_ack_delay_exp: 3
+  - profile_id: 8
+    profile_name: "Chrome-134-macOS"
+    browser: "Chrome"
+    version: "134"
+    os: "macOS 14"
+    tcp_window: 65535
+    tcp_wscale: 6
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 15728640
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 100
+    quic_ack_delay_exp: 3
+  - profile_id: 9
+    profile_name: "Chrome-130-Win11"
+    browser: "Chrome"
+    version: "130"
+    os: "Windows 11"
+    tcp_window: 65535
+    tcp_wscale: 8
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 15728640
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 100
+    quic_ack_delay_exp: 3
+  # Firefox Windows
+  - profile_id: 10
+    profile_name: "Firefox-130-Win11"
+    browser: "Firefox"
+    version: "130"
+    os: "Windows 11"
+    tcp_window: 65535
+    tcp_wscale: 8
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 10485760
+    quic_max_streams_bi: 16
+    quic_max_streams_uni: 16
+    quic_ack_delay_exp: 3
+  - profile_id: 11
+    profile_name: "Firefox-129-Win11"
+    browser: "Firefox"
+    version: "129"
+    os: "Windows 11"
+    tcp_window: 65535
+    tcp_wscale: 8
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 10485760
+    quic_max_streams_bi: 16
+    quic_max_streams_uni: 16
+    quic_ack_delay_exp: 3
+  - profile_id: 12
+    profile_name: "Firefox-128-Win10"
+    browser: "Firefox"
+    version: "128"
+    os: "Windows 10"
+    tcp_window: 65535
+    tcp_wscale: 8
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 10485760
+    quic_max_streams_bi: 16
+    quic_max_streams_uni: 16
+    quic_ack_delay_exp: 3
+  - profile_id: 13
+    profile_name: "Firefox-126-Win11"
+    browser: "Firefox"
+    version: "126"
+    os: "Windows 11"
+    tcp_window: 65535
+    tcp_wscale: 8
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 10485760
+    quic_max_streams_bi: 16
+    quic_max_streams_uni: 16
+    quic_ack_delay_exp: 3
+  - profile_id: 14
+    profile_name: "Firefox-124-Win10"
+    browser: "Firefox"
+    version: "124"
+    os: "Windows 10"
+    tcp_window: 65535
+    tcp_wscale: 8
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 10485760
+    quic_max_streams_bi: 16
+    quic_max_streams_uni: 16
+    quic_ack_delay_exp: 3
+  # Firefox Linux
+  - profile_id: 15
+    profile_name: "Firefox-130-Linux"
+    browser: "Firefox"
+    version: "130"
+    os: "Linux"
+    tcp_window: 29200
+    tcp_wscale: 7
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 10485760
+    quic_max_streams_bi: 16
+    quic_max_streams_uni: 16
+    quic_ack_delay_exp: 3
+  - profile_id: 16
+    profile_name: "Firefox-126-Linux"
+    browser: "Firefox"
+    version: "126"
+    os: "Linux"
+    tcp_window: 29200
+    tcp_wscale: 7
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 10485760
+    quic_max_streams_bi: 16
+    quic_max_streams_uni: 16
+    quic_ack_delay_exp: 3
+  - profile_id: 17
+    profile_name: "Firefox-120-Win11"
+    browser: "Firefox"
+    version: "120"
+    os: "Windows 11"
+    tcp_window: 65535
+    tcp_wscale: 8
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 10485760
+    quic_max_streams_bi: 16
+    quic_max_streams_uni: 16
+    quic_ack_delay_exp: 3
+  # Safari macOS
+  - profile_id: 18
+    profile_name: "Safari-18-macOS15"
+    browser: "Safari"
+    version: "18"
+    os: "macOS 15"
+    tcp_window: 65535
+    tcp_wscale: 6
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 8388608
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 3
+    quic_ack_delay_exp: 3
+  - profile_id: 19
+    profile_name: "Safari-17.6-macOS14"
+    browser: "Safari"
+    version: "17.6"
+    os: "macOS 14"
+    tcp_window: 65535
+    tcp_wscale: 6
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 8388608
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 3
+    quic_ack_delay_exp: 3
+  - profile_id: 20
+    profile_name: "Safari-17.4-macOS14"
+    browser: "Safari"
+    version: "17.4"
+    os: "macOS 14"
+    tcp_window: 65535
+    tcp_wscale: 6
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 8388608
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 3
+    quic_ack_delay_exp: 3
+  - profile_id: 21
+    profile_name: "Safari-17.2-macOS14"
+    browser: "Safari"
+    version: "17.2"
+    os: "macOS 14"
+    tcp_window: 65535
+    tcp_wscale: 6
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 8388608
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 3
+    quic_ack_delay_exp: 3
+  - profile_id: 22
+    profile_name: "Safari-17-macOS14"
+    browser: "Safari"
+    version: "17"
+    os: "macOS 14"
+    tcp_window: 65535
+    tcp_wscale: 6
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 8388608
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 3
+    quic_ack_delay_exp: 3
+  # Safari iOS
+  - profile_id: 23
+    profile_name: "Safari-18-iOS18"
+    browser: "Safari"
+    version: "18"
+    os: "iOS 18"
+    tcp_window: 65535
+    tcp_wscale: 6
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 8388608
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 3
+    quic_ack_delay_exp: 3
+  - profile_id: 24
+    profile_name: "Safari-17-iOS17"
+    browser: "Safari"
+    version: "17"
+    os: "iOS 17"
+    tcp_window: 65535
+    tcp_wscale: 6
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 8388608
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 3
+    quic_ack_delay_exp: 3
+  # Edge Windows
+  - profile_id: 25
+    profile_name: "Edge-130-Win11"
+    browser: "Edge"
+    version: "130"
+    os: "Windows 11"
+    tcp_window: 65535
+    tcp_wscale: 8
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 15728640
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 100
+    quic_ack_delay_exp: 3
+  - profile_id: 26
+    profile_name: "Edge-128-Win11"
+    browser: "Edge"
+    version: "128"
+    os: "Windows 11"
+    tcp_window: 65535
+    tcp_wscale: 8
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 15728640
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 100
+    quic_ack_delay_exp: 3
+  - profile_id: 27
+    profile_name: "Edge-126-Win10"
+    browser: "Edge"
+    version: "126"
+    os: "Windows 10"
+    tcp_window: 65535
+    tcp_wscale: 8
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 15728640
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 100
+    quic_ack_delay_exp: 3
+  - profile_id: 28
+    profile_name: "Edge-124-Win11"
+    browser: "Edge"
+    version: "124"
+    os: "Windows 11"
+    tcp_window: 65535
+    tcp_wscale: 8
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 15728640
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 100
+    quic_ack_delay_exp: 3
+  - profile_id: 29
+    profile_name: "Edge-122-Win10"
+    browser: "Edge"
+    version: "122"
+    os: "Windows 10"
+    tcp_window: 65535
+    tcp_wscale: 8
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 15728640
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 100
+    quic_ack_delay_exp: 3
+  - profile_id: 30
+    profile_name: "Edge-120-Win11"
+    browser: "Edge"
+    version: "120"
+    os: "Windows 11"
+    tcp_window: 65535
+    tcp_wscale: 8
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 15728640
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 100
+    quic_ack_delay_exp: 3
+  # Chrome Linux
+  - profile_id: 31
+    profile_name: "Chrome-140-Linux"
+    browser: "Chrome"
+    version: "140"
+    os: "Linux"
+    tcp_window: 29200
+    tcp_wscale: 7
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 15728640
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 100
+    quic_ack_delay_exp: 3
+  - profile_id: 32
+    profile_name: "Chrome-136-Linux"
+    browser: "Chrome"
+    version: "136"
+    os: "Linux"
+    tcp_window: 29200
+    tcp_wscale: 7
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 15728640
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 100
+    quic_ack_delay_exp: 3
+  - profile_id: 33
+    profile_name: "Chrome-132-macOS"
+    browser: "Chrome"
+    version: "132"
+    os: "macOS 14"
+    tcp_window: 65535
+    tcp_wscale: 6
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 15728640
+    quic_max_streams_bi: 100
+    quic_max_streams_uni: 100
+    quic_ack_delay_exp: 3
+  # Firefox macOS
+  - profile_id: 34
+    profile_name: "Firefox-130-macOS"
+    browser: "Firefox"
+    version: "130"
+    os: "macOS 15"
+    tcp_window: 65535
+    tcp_wscale: 6
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 10485760
+    quic_max_streams_bi: 16
+    quic_max_streams_uni: 16
+    quic_ack_delay_exp: 3
+  - profile_id: 35
+    profile_name: "Firefox-122-macOS"
+    browser: "Firefox"
+    version: "122"
+    os: "macOS 14"
+    tcp_window: 65535
+    tcp_wscale: 6
+    tcp_mss: 1460
+    tcp_sack_ok: 1
+    tcp_timestamps: 1
+    quic_max_idle: 30000
+    quic_max_data: 10485760
+    quic_max_streams_bi: 16
+    quic_max_streams_uni: 16
+    quic_ack_delay_exp: 3

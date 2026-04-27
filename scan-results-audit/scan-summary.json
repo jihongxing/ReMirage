@@ -1,0 +1,19 @@
+﻿{
+  "timestamp": "20260423T190822Z",
+  "project": "mirage-project",
+  "has_critical_vulnerabilities": false,
+  "results": [
+    {"module":"benchmarks","type":"go","status":"success","high_severity_count":0,"result_file":"govulncheck-benchmarks.json"},
+    {"module":"deploy/chaos/genesis/mock-services","type":"go","status":"success","high_severity_count":0,"result_file":"govulncheck-deploy-chaos-genesis-mock-services.json"},
+    {"module":"mirage-cli","type":"go","status":"success","high_severity_count":0,"result_file":"govulncheck-mirage-cli.json"},
+    {"module":"mirage-gateway","type":"go","status":"success","high_severity_count":0,"result_file":"govulncheck-mirage-gateway.json"},
+    {"module":"mirage-os","type":"go","status":"success","high_severity_count":0,"result_file":"govulncheck-mirage-os.json"},
+    {"module":"mirage-os/gateway-bridge","type":"go","status":"success","high_severity_count":0,"result_file":"govulncheck-mirage-os-gateway-bridge.json"},
+    {"module":"mirage-os/tests","type":"go","status":"success","high_severity_count":0,"result_file":"govulncheck-mirage-os-tests.json"},
+    {"module":"mirage-proto","type":"go","status":"success","high_severity_count":0,"result_file":"govulncheck-mirage-proto.json"},
+    {"module":"phantom-client","type":"go","status":"success","high_severity_count":0,"result_file":"govulncheck-phantom-client.json"},
+    {"module":"sdk/go","type":"go","status":"success","high_severity_count":0,"result_file":"govulncheck-sdk-go.json"},
+    {"module":"tests","type":"go","status":"success","high_severity_count":0,"result_file":"govulncheck-tests.json"},
+    {"module":"tests/p0_runtime","type":"go","status":"success","high_severity_count":0,"result_file":"govulncheck-tests-p0_runtime.json"}
+  ]
+}

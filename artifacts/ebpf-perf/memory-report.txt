@@ -1,0 +1,5 @@
+# eBPF Map 内存占用报告
+# 状态: 待采集（需 Linux + bpftool 环境）
+# 采集命令: sudo bpftool map show
+# 对照基准: C 数据面内存 < 50MB
+  证据状态: Map 内存数据待 Linux 环境采集

@@ -1,0 +1,5 @@
+config,iat_mean_us,iat_std_us,iat_p50_us,iat_p95_us,iat_p99_us,burst_count,burst_mean_size,burst_mean_interval_us,reorder_rate,loss_rate
+none,999.92,0.27,999.93,1000.17,1000.17,0,0.0,0.0,0.0,0.0
+jitter-only,1053.69,190.14,1030.21,1372.27,1539.23,0,0.0,0.0,0.0,0.0
+vpc-only,1017.78,135.61,982.05,1418.61,1479.2,0,0.0,0.0,0.0293,0.0476
+jitter-vpc,1190.02,338.4,1129.87,1873.68,2115.07,0,0.0,0.0,0.0293,0.0625
