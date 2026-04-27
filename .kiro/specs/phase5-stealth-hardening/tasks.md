@@ -8,9 +8,9 @@
 - M13 需要在对应原生 OS 上采集对照数据（Chrome-Win 在 Windows、Chrome-macOS 在 macOS、Firefox-Linux 在 Linux），不允许跨 OS 替代
 - M14 的 eBPF 改动遵守 protocol-language-rules.md（C 做数据面，Go 做控制面，eBPF Map 通信）
 - PBT 使用 `pgregory.net/rapid`，最少 100 次迭代
-- 能力域状态升级条件：M14 完成 + M13 真实基线（非降级） + M15 分类器 AUC 达标（单维 < 0.75 + 联合 < 0.85），三者缺一不可
+- 能力域状态升级条件：M14 完成 + M13-full 真实基线（非降级） + M15 分类器 AUC 达标（单维 < 0.75 + 联合 < 0.85），三者缺一不可
 - Phase 出关（implementation exit）与能力状态升级（capability-upgrade gate）分离：Phase 可以降级出关，但降级/模拟数据不可作为能力状态升级依据
-- 非 Linux 环境：M13 跳过真实采集（标注降级），M14 PBT 使用 Mock，M15 使用模拟数据标注"校准后模拟"
+- M13 采集按画像族独立执行：每个画像族在对应原生 OS 节点采集，当前节点不匹配目标画像族时仅跳过该画像族（标注"待采集"），不跳过整个 M13
 
 ## 任务
 
@@ -56,7 +56,7 @@
   - [ ] 3.1 B-DNA per-connection 画像选择 — C 侧
     - 在 `bdna.c` 中新增 `conn_profile_map`（`BPF_MAP_TYPE_LRU_HASH`，`max_entries=65536`，key=`conn_key`，value=`__u32 profile_id`）
     - 新增 `profile_select_map`（`BPF_MAP_TYPE_ARRAY`，`max_entries=64`，value=`struct { __u32 cumulative_weight; __u32 profile_id; }`）和 `profile_count_map`（`BPF_MAP_TYPE_ARRAY`，`max_entries=1`）。Go 侧只将已启用且已采集基线的画像写入 `profile_select_map`，禁用/待采集的画像不写入
-    - 修改 `bdna_tcp_rewrite`：先查 `conn_profile_map`，命中则用返回的 profile_id；**未命中（SYN 首包）→ C 侧自选**：用 `bpf_get_prng_u32()` 按 `profile_select_map` 采样（遍历 cumulative_weight，返回对应的真实 profile_id），写入 `conn_profile_map`，再查 `fingerprint_map`。仅当 `profile_select_map` 也无数据时回退到 `active_profile_map[0]`
+    - 修改 `bdna_tcp_rewrite`：先查 `conn_profile_map`，命中则用返回的 profile_id；**未命中（SYN 首包）→ C 侧自选**：用 `bpf_get_prng_u32()` 遍历 `profile_select_map` 按 `cumulative_weight` 采样返回真实 `profile_id`，写入 `conn_profile_map`，再查 `fingerprint_map`。**有效性门禁**：`profile_count_map[0]` == 0 或采样 `profile_id` 在 `fingerprint_map` 中不存在时回退 `active_profile_map[0]`
     - 修改 `bdna_quic_rewrite` 同理：使用相同的 per-connection 查询路径
     - 修改 `bdna_tls_rewrite` 同理：使用相同的 per-connection 查询路径（不能继续走全局 `active_profile_map`，否则三条路径画像不一致）
     - 确保编译回归通过
@@ -64,6 +64,7 @@
 
   - [ ] 3.2 B-DNA per-connection 画像选择 — Go 侧
     - 在 `bdna_profile_updater.go` 中新增启动时初始化：将已启用画像族的权重写入 `profile_select_map`（CDF 格式，每条包含 cumulative_weight + 真实 profile_id）和 `profile_count_map`。registry 中禁用或 OS 节点不可用的画像不写入 `profile_select_map`
+    - Go 侧写入前校验：CDF 单调递增、最后一条 cumulative_weight > 0、每条 profile_id 在 `fingerprint_map` 中存在；校验失败时拒绝写入并 log 告警
     - 新增 `OverrideConnectionProfile(saddr, daddr uint32, sport, dport uint16, profileID uint32) error`（策略调整用，覆写 C 侧自选结果）
     - 按 `gateway.yaml` 的 `bdna.profile_weights` 配置权重
     - 默认权重：Chrome 65%、Firefox 15%、Safari 10%、Edge 10%
@@ -106,8 +107,8 @@
     - 文件: `mirage-gateway/pkg/ebpf/npm_property_test.go`
     - 使用 `rapid` 生成随机目标 CDF（256 bin，单调递增），PBT 分三层验证：
       - **采样器拟合**：直接调用 `sample_from_cdf` Mock 1000 次，采样结果分布与目标 CDF 的 JS 散度 < 0.10
-      - **单调不截断**：随机包序列（大小 ∈ [0,1600]），padding 后包长 ≥ 原始包长（不截断）；小包（< min_packet_size）padding=0；大包（> target_mtu）padding=0
-      - **受控子集拟合**：仅取 current_size ≤ sampled_target_len 的包子集，输出包长分布与目标 CDF 的 JS 散度 < 0.15
+      - **单调不截断**：随机包序列（大小 ∈ [0,1600]），padding 后 output_len ≥ current_size；小包（< min_packet_size）padding=0；大包（> target_mtu）padding=0
+      - **受控等式**：生成 current_size 恒为 0（或恒 < 所有目标 bin 下界）的专门样本，验证 output_len == sampled_target_len
     - 全局 JS 散度（含 current_size > sampled_target_len 的包）留给 M15 真实实验验证，不作为 PBT 断言
     - 最少 100 次迭代
     - **验证: 需求 3.2, 3.5**
@@ -143,7 +144,7 @@
   - [ ] 5.2 重新生成实验样本
     - 使用 M14 修复后的代码 + M13 真实对照基线，重新生成 ReMirage 侧实验样本
     - 更新 `artifacts/dpi-audit/{handshake,packet-length,timing}/` 中的 remirage 样本
-    - 非 Linux 环境：使用更新后的模拟参数重新生成模拟样本，标注"校准后模拟"
+    - 非原生 OS 环境的画像族：使用更新后的模拟参数重新生成模拟样本，标注"校准后模拟"
     - _需求: 6.1_
 
   - [ ] 5.3 重跑分类器实验
@@ -209,7 +210,7 @@
 - PBT 使用 `pgregory.net/rapid`（Go），最少 100 次迭代
 - PBT 复用现有测试文件：`bdna_conn_property_test.go`、`npm_property_test.go`、`gaussian_property_test.go`
 - eBPF 改动遵守 protocol-language-rules.md：C 做数据面，Go 做控制面，eBPF Map 通信
-- M13 需要在对应原生 OS 上采集（Chrome-Win 在 Windows、Chrome-macOS 在 macOS、Firefox-Linux 在 Linux）；某 OS 不可用时该画像族标注"待采集"
+- M13 采集按画像族独立执行：Chrome-Win 在 Windows、Chrome-macOS 在 macOS、Firefox-Linux 在 Linux；当前节点不匹配目标画像族时仅跳过该画像族（标注"待采集"）
 - 画像库更新不追求"完全匹配某一个 Chrome 版本常量"，而是"按画像族生成一致指纹"
 - 分类器 AUC 设计目标：单维 < 0.75、联合 < 0.85；升级门禁与设计目标一致；[0.75, 0.9) / [0.85, 0.9) 为"风险已下降但不升级"中间档，仅允许在 claims-boundary 中增加限定表述，不允许能力状态升级
 - Implementation Exit 与 Capability-Upgrade Gate 分离：Phase 可降级出关，但降级/模拟数据不可作为能力状态升级依据

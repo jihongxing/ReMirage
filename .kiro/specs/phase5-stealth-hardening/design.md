@@ -29,8 +29,8 @@ conn_key(saddr,daddr,sport,dport) → conn_profile_map[conn_key] → profile_id
 C 侧变更（`bdna.c`）：
 - `bdna_tcp_rewrite` 中，先用 `conn_key` 查 `conn_profile_map`
 - 命中 → 用返回的 `profile_id` 查 `fingerprint_map`
-- **未命中（SYN 首包）→ C 侧自选**：用 `bpf_get_prng_u32()` 按 `profile_select_map` 权重选择 profile_id，写入 `conn_profile_map`，再查 `fingerprint_map`。这确保第一个可观测指纹（TCP SYN）就已经是动态画像，不会回退到全局唯一画像
-- 仅当 `conn_profile_map` 和 `profile_select_map` 都查不到时，才回退到 `active_profile_map[0]`（兼容降级）
+- **未命中（SYN 首包）→ C 侧自选**：用 `bpf_get_prng_u32()` 遍历 `profile_select_map` 按 `cumulative_weight` 采样，返回对应的真实 `profile_id`，写入 `conn_profile_map`，再查 `fingerprint_map`。这确保第一个可观测指纹（TCP SYN）就已经是动态画像，不会回退到全局唯一画像
+- **有效性门禁**：C 侧在以下情况回退到 `active_profile_map[0]`：`profile_count_map[0]` == 0、采样得到的 `profile_id` 在 `fingerprint_map` 中不存在、`profile_select_map` 读取失败。Go 侧写入 `profile_select_map` 前必须校验：CDF 单调递增、最后一条 `cumulative_weight` > 0、每条 `profile_id` 在 `fingerprint_map` 中存在。仅当门禁全部未通过时才回退 `active_profile_map[0]`
 - `bdna_tls_rewrite` 和 `bdna_quic_rewrite` 使用相同的 per-connection 查询路径，确保三条重写路径画像一致
 - 新增 `conn_profile_map`：`BPF_MAP_TYPE_LRU_HASH`，`max_entries=65536`
 - 新增 `profile_select_map`：`BPF_MAP_TYPE_ARRAY`，`max_entries=64`，value=`struct { __u32 cumulative_weight; __u32 profile_id; }`。Go 侧只将已启用且已采集基线的画像写入此 Map，禁用/待采集的画像不写入即可排除。画像 ID 不要求连续
@@ -115,7 +115,7 @@ Go 侧变更（`dna_updater.go`）：
 - 验证: 需求 2.1, 2.4
 
 ### Property 2: NPM MIMIC 分布拟合
-- 生成随机目标 CDF（单调递增），随机 **padding-eligible** 包序列（current_size ∈ [min_packet_size, target_mtu]）经 MIMIC 处理后，输出包长分布与目标 CDF 的 JS 散度 < 阈值。同时验证：current_size < min_packet_size 的包不填充、current_size > target_mtu 的包 padding=0（单调不截断约束）。全局 JS 散度（含不可填充包）留给 M15 真实实验验证，不作为 PBT 断言
+- 分三层验证：（1）采样器单独拟合：直接调用 `sample_from_cdf` Mock 1000 次，采样结果分布与目标 CDF 的 JS 散度 < 0.10；（2）单调不截断：任意 current_size，padding 后 output_len ≥ current_size；小包/大包 padding=0；（3）受控等式：生成 current_size 恒为 0（或恒 < 所有目标 bin 下界）的专门样本，验证 output_len == sampled_target_len。全局拟合（含 current_size > sampled_target_len 的包）留给 M15 真实实验
 - 验证: 需求 3.2, 3.5
 
 ### Property 3: Jitter 校准后 IAT 分布
