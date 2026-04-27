@@ -19,6 +19,7 @@ const (
 )
 
 const BDNAProfileRegistrySchemaV1 = "remirage.bdna.registry/v1"
+const BDNAProfileSelectMaxEntries = 8
 
 // BDNAFingerprintProfile 对应 C 结构体 stack_fingerprint。
 // 它只负责握手 / 栈画像，不承载跨协议时域模板。
@@ -392,8 +393,8 @@ func BuildProfileSelectEntries(registry *BDNAProfileRegistry, weights map[uint32
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("no enabled profiles for selection")
 	}
-	if len(entries) > 64 {
-		return nil, fmt.Errorf("profile selection entries exceed 64")
+	if len(entries) > BDNAProfileSelectMaxEntries {
+		return nil, fmt.Errorf("profile selection entries exceed %d", BDNAProfileSelectMaxEntries)
 	}
 
 	return entries, nil
@@ -406,8 +407,8 @@ func ValidateProfileSelectEntries(registry *BDNAProfileRegistry, entries []BDNAP
 	if len(entries) == 0 {
 		return fmt.Errorf("profile selection entries are empty")
 	}
-	if len(entries) > 64 {
-		return fmt.Errorf("profile selection entries exceed 64")
+	if len(entries) > BDNAProfileSelectMaxEntries {
+		return fmt.Errorf("profile selection entries exceed %d", BDNAProfileSelectMaxEntries)
 	}
 
 	var prev uint32

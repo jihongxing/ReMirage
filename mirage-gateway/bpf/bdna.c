@@ -54,6 +54,10 @@ struct stack_fingerprint {
 #define PROFILE_SAFARI_MACOS    4
 #define PROFILE_EDGE_WIN11      5
 
+// Keep verifier state bounded. The current registry has six browser-family
+// profiles; expanding this requires updating the Go-side selection cap too.
+#define BDNA_MAX_PROFILE_SELECT 8
+
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(max_entries, 64);
@@ -164,10 +168,13 @@ static __always_inline struct stack_fingerprint *select_profile_for_conn(struct 
 
     __u32 zero = 0;
     __u32 *count_ptr = bpf_map_lookup_elem(&profile_count_map, &zero);
-    if (!count_ptr || *count_ptr == 0 || *count_ptr > 64)
+    if (!count_ptr || *count_ptr == 0)
         return fallback_active_profile();
 
     __u32 profile_count = *count_ptr;
+    if (profile_count > BDNA_MAX_PROFILE_SELECT)
+        profile_count = BDNA_MAX_PROFILE_SELECT;
+
     __u32 last_idx = profile_count - 1;
     struct profile_select_entry *last = bpf_map_lookup_elem(&profile_select_map, &last_idx);
     if (!last || last->cumulative_weight == 0)
@@ -178,7 +185,7 @@ static __always_inline struct stack_fingerprint *select_profile_for_conn(struct 
     __u8 selected = 0;
 
 #pragma unroll
-    for (int i = 0; i < 64; i++) {
+    for (int i = 0; i < BDNA_MAX_PROFILE_SELECT; i++) {
         if ((__u32)i >= profile_count)
             break;
 

@@ -18,6 +18,14 @@ ReMirage 是一个高级流量隐匿与反审计系统，采用三层架构：
 
 ## 🚀 快速开始
 
+### 0. OpenCloudOS 无 UDP 单机部署
+
+如果目标服务器没有可用 UDP，请不要使用 QUIC/H3 作为公开数据面。已验证的 OpenCloudOS 单机部署流程见：
+
+- [OpenCloudOS 无 UDP 单机部署实录](docs/05-实施指南/OpenCloudOS-无UDP单机部署实录.md)
+
+该流程会以 TCP/WSS 降级模式启动 Gateway，保持 `data_plane.enable_quic: false`，并使用 systemd 托管 `mirage-gateway-bridge` 与 `mirage-gateway`。
+
 ### 1. 开发环境部署
 
 ```bash
@@ -204,6 +212,8 @@ MONERO_RPC_PASSWORD=your_monero_password
 ### UDP 网络连通性（关键前置检查）
 
 G-Tunnel 使用 QUIC 协议（基于 UDP）传输加密流量。**如果客户端所在网络封锁了 UDP 出站，整个隧道将无法建立。**
+
+若部署环境确认没有 UDP，请直接使用 TCP/WSS 降级部署路径，并保持 `data_plane.enable_quic: false`。参考：[OpenCloudOS 无 UDP 单机部署实录](docs/05-实施指南/OpenCloudOS-无UDP单机部署实录.md)。
 
 #### 症状
 

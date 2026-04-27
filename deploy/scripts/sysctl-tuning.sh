@@ -136,7 +136,7 @@ for key in "${!PARAMS[@]}"; do
         printf "%-46s %-20s %-20s %s\n" "$key" "⚠️  $current" "$target" "$desc"
         BACKUP_CONTENT="${BACKUP_CONTENT}${key} = ${current}\n"
         CONF_CONTENT="${CONF_CONTENT}${key} = ${target}\n"
-        ((CHANGES++))
+        ((++CHANGES))
     fi
 done
 
@@ -185,7 +185,7 @@ for key in "${!PARAMS[@]}"; do
     actual=$(sysctl -n "$key" 2>/dev/null | tr '\t' ' ' || echo "N/A")
     if [ "$actual" != "$target" ] && [ "$actual" != "N/A" ]; then
         echo "  ⚠️  $key = $actual (期望: $target)"
-        ((VERIFY_FAIL++))
+        ((++VERIFY_FAIL))
     fi
 done
 

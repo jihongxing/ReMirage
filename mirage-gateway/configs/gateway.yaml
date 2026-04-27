@@ -207,6 +207,7 @@ mcc:
 
 # 数据面配置
 data_plane:
+  enable_quic: false          # 启用公网 QUIC/H3 数据面监听；无 UDP 环境必须保持 false
   quic_listen_addr: ":443"    # 公网 QUIC/H3 数据面监听地址（B-01b，待实现）
   enable_wss: true            # 启用 WSS 降级监听
   enable_webrtc: false        # WebRTC 依赖 WSS 信令

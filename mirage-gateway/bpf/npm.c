@@ -418,19 +418,9 @@ int npm_decoy_marker(struct __sk_buff *skb)
         bpf_ringbuf_submit(evt, 0);
     }
 
-    // 6. 发送前检查 stego_command_map 执行替换
-    struct stego_command *cmd = bpf_map_lookup_elem(&stego_command_map, &key);
-    if (cmd && cmd->valid && cmd->payload_len > 0 && cmd->payload_len <= dummy_len) {
-        // 替换废包内容为隐写负载
-        // 使用 bpf_skb_store_bytes 写入 payload（从 L4 payload 偏移开始）
-        // 注意：实际偏移需要根据协议头计算，这里简化为从以太网头后开始
-        __u32 offset = sizeof(struct ethhdr) + sizeof(struct iphdr);
-        if (offset + cmd->payload_len <= skb->len) {
-            bpf_skb_store_bytes(skb, offset, cmd->payload, cmd->payload_len, 0);
-        }
-        // 清除 valid 标志
-        cmd->valid = 0;
-    }
+    // 6. 保留隐写就绪事件上报。实际 payload 替换暂由用户态处理。
+    // 旧实现使用 map value 中的动态长度 payload 直接调用 bpf_skb_store_bytes，
+    // 在 6.6 verifier 上无法证明 cmd->payload/cmd->payload_len 的边界安全。
     
     return TC_ACT_OK;
 }

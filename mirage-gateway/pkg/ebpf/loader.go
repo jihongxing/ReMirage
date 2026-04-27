@@ -117,7 +117,7 @@ func (l *Loader) LoadAndAttach() error {
 		{
 			name:     "B-DNA 指纹拟态 (TC)",
 			path:     "bpf/bdna.o",
-			critical: true,
+			critical: false,
 			attachFn: l.attachBDNA,
 		},
 		{

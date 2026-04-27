@@ -106,6 +106,7 @@ type GatewayConfig struct {
 		ListenAddr string `yaml:"listen_addr"`
 	} `yaml:"tproxy"`
 	DataPlane struct {
+		EnableQUIC     bool   `yaml:"enable_quic"`      // 启用公网 QUIC/H3 数据面监听
 		QUICListenAddr string `yaml:"quic_listen_addr"` // 公网 QUIC/H3 数据面监听地址，默认 :443
 		EnableWSS      bool   `yaml:"enable_wss"`       // 启用 WSS 降级监听
 		EnableWebRTC   bool   `yaml:"enable_webrtc"`
@@ -748,7 +749,9 @@ func main() {
 		}
 	}
 
-	if len(h3TLSConfig.Certificates) > 0 {
+	if !cfg.DataPlane.EnableQUIC {
+		log.Println("ℹ️ QUIC/H3 bearer listener 已禁用（data_plane.enable_quic=false）")
+	} else if len(h3TLSConfig.Certificates) > 0 {
 		quicConf := &quic.Config{
 			EnableDatagrams: true,
 			MaxIdleTimeout:  30 * time.Second,
