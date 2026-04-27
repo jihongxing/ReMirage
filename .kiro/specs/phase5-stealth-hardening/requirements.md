@@ -28,7 +28,7 @@ Phase 2 M6 分类器实验结果显示四个检测面全部 AUC=1.0 / F1=1.0 / A
 
 ### 2. B-DNA 指纹动态化
 
-- 2.1 `bdna.c` 从 per-global `active_profile_map` 改为 per-connection 画像选择：每条新连接根据 `conn_key` 查 `conn_profile_map` 获取 profile_id，再从 `fingerprint_map` 取对应模板。**首包时序要求**：TCP SYN 是第一个可观测指纹，`conn_profile_map` 必须在 SYN 到达 `bdna_tcp_rewrite` 时已有值。实现方式二选一：（A）C 侧首包自选——SYN 首包未命中 `conn_profile_map` 时，由 eBPF 侧用 `bpf_get_prng_u32() % profile_count` 选择 profile_id 并写入 `conn_profile_map`，后续包直接查表；（B）Go 侧预注册——在 listener accept 之前通过 eBPF Map 预写 profile_id（仅适用于 Gateway 主动监听场景）。推荐方案 A，因为 SYN 到达时 Go 侧尚未感知连接
+- 2.1 `bdna.c` 从 per-global `active_profile_map` 改为 per-connection 画像选择：每条新连接根据 `conn_key` 查 `conn_profile_map` 获取 profile_id，再从 `fingerprint_map` 取对应模板。**首包时序要求**：TCP SYN 是第一个可观测指纹，`conn_profile_map` 必须在 SYN 到达 `bdna_tcp_rewrite` 时已有值。实现方式：C 侧首包自选——SYN 首包未命中 `conn_profile_map` 时，由 eBPF 侧遍历 `profile_select_map` 按 `cumulative_weight` 采样并返回真实 `profile_id`，写入 `conn_profile_map`，后续包直接查表。Go 侧可在连接建立后通过 `conn_profile_map` 覆写（策略调整），但首包画像由 C 侧保证
 - 2.2 Go 控制面负责维护 `profile_select_map`（`BPF_MAP_TYPE_ARRAY`，`max_entries=64`，value=`struct { __u32 cumulative_weight; __u32 profile_id; }`）和 `profile_count_map`（当前可用画像数量）。C 侧首包自选时遍历 `profile_select_map` 按 cumulative_weight 采样，返回对应的真实 `profile_id`。这样画像 ID 不需要连续，registry 中禁用/待采集的画像不写入 `profile_select_map` 即可排除
 - 2.3 权重配置可通过 `gateway.yaml` 调整，默认权重按全球浏览器市场份额分配
 - 2.4 确保同一连接生命周期内画像不变（TCP SYN 重写和后续 QUIC/TLS 参数使用同一 profile）
@@ -47,7 +47,7 @@ Phase 2 M6 分类器实验结果显示四个检测面全部 AUC=1.0 / F1=1.0 / A
 
 - 4.1 `dna_template_map` 中的 `TargetIATMu` / `TargetIATSigma` 必须从真实对照基线的 IAT 统计值校准，不能使用任意配置值
 - 4.2 Go 控制面在启动时从对照基线数据加载 IAT 参数，写入 `dna_template_map`
-- 4.3 Jitter 扰动后的 IAT 分布验收指标：均值偏差 < 20%、标准差偏差 < 30%、P95 偏差 < 50%。KS 检验 p-value > 0.05 作为远期设计目标，不作为本轮升级门禁（真实 IAT 往往是重尾/突发/多峰分布，单一 gaussian 参数难以满足 KS 检验；若需通过 KS，需后续引入经验 CDF 或混合分布模型）
+- 4.3 Jitter 扰动后的 IAT 分布验收指标分两层：**代码校准验收**（PBT 断言）：均值偏差 < 20%、标准差偏差 < 30%。**实验观测指标**（M15 记录但不作为 PBT 断言）：P95 偏差、KS 检验 p-value。原因：当前 `dna_template_map` 只有 `TargetIATMu` / `TargetIATSigma` 两个字段，仅靠 mean/std 无法精确控制 P95；若需代码级 P95 控制，需后续在 `dna_template_map` 增加分位数字段或引入经验 CDF 模型
 - 4.4 `jitter.c` 的 `jitter_lite_egress` 在无 `dna_template` 时的回退行为保持不变（使用 `jitter_config` 的 gaussian_sample）
 
 ### 5. TLS/QUIC 指纹对齐

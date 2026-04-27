@@ -67,7 +67,7 @@
     - 新增 `OverrideConnectionProfile(saddr, daddr uint32, sport, dport uint16, profileID uint32) error`（策略调整用，覆写 C 侧自选结果）
     - 按 `gateway.yaml` 的 `bdna.profile_weights` 配置权重
     - 默认权重：Chrome 65%、Firefox 15%、Safari 10%、Edge 10%
-    - 首包画像由 C 侧 `bpf_get_prng_u32()` + `profile_weight_map` 保证，Go 侧不参与首包选择
+    - 首包画像由 C 侧 `bpf_get_prng_u32()` + `profile_select_map` 采样保证，Go 侧不参与首包选择
     - _需求: 2.2, 2.3, 2.4_
 
   - [ ] 3.3 编写 Property 1: per-connection 画像隔离 PBT
@@ -104,11 +104,11 @@
   - [ ] 3.7 编写 Property 2: NPM MIMIC 分布拟合 PBT
     - 测试函数: `TestProperty_NPMMimicDistributionFit`
     - 文件: `mirage-gateway/pkg/ebpf/npm_property_test.go`
-    - 使用 `rapid` 生成随机目标 CDF（256 bin，单调递增），随机 **padding-eligible** 包序列（数量 ∈ [100,500]，大小 ∈ [min_packet_size, target_mtu]）经 MIMIC Mock 处理后：
-      - padding-eligible 子集的输出包长分布与目标 CDF 的 JS 散度 < 0.15
-      - 小包（< min_packet_size）不填充（padding=0）
-      - 大包（> target_mtu）不截断（padding=0）
-    - 全局 JS 散度（含不可填充包）留给 M15 真实实验验证，不作为 PBT 断言
+    - 使用 `rapid` 生成随机目标 CDF（256 bin，单调递增），PBT 分三层验证：
+      - **采样器拟合**：直接调用 `sample_from_cdf` Mock 1000 次，采样结果分布与目标 CDF 的 JS 散度 < 0.10
+      - **单调不截断**：随机包序列（大小 ∈ [0,1600]），padding 后包长 ≥ 原始包长（不截断）；小包（< min_packet_size）padding=0；大包（> target_mtu）padding=0
+      - **受控子集拟合**：仅取 current_size ≤ sampled_target_len 的包子集，输出包长分布与目标 CDF 的 JS 散度 < 0.15
+    - 全局 JS 散度（含 current_size > sampled_target_len 的包）留给 M15 真实实验验证，不作为 PBT 断言
     - 最少 100 次迭代
     - **验证: 需求 3.2, 3.5**
 
@@ -124,8 +124,7 @@
     - 使用 `rapid` 生成随机 baseline IAT 参数（mean ∈ [500,5000]μs, std ∈ [50,1000]μs），校准后生成 200 个 IAT 样本：
       - 样本均值与目标均值偏差 < 20%
       - 样本标准差与目标标准差偏差 < 30%
-      - 样本 P95 与目标 P95 偏差 < 50%
-    - KS 检验 p-value > 0.05 作为远期目标，不作为 PBT 断言（单一 gaussian 参数难以拟合真实重尾/多峰 IAT 分布，需后续引入经验 CDF 或混合分布模型）
+    - P95 偏差和 KS 检验 p-value 作为 M15 实验观测指标记录，不作为 PBT 断言（当前 `dna_template_map` 只有 mean/std 两个字段，无法精确控制 P95；需后续增加分位数字段或引入经验 CDF 模型）
     - 最少 100 次迭代
     - **验证: 需求 4.1, 4.3**
 
@@ -162,7 +161,7 @@
       - 画像库校准偏差清单
       - 指纹审计结论
       - 实验限制说明
-    - 标注证据强度：真实基线（Linux 采集）/ 校准后模拟（非 Linux）
+    - 标注证据强度：真实基线（原生 OS 采集）/ 校准后模拟（非原生 OS）
     - _需求: 6.5_
 
 - [ ] 6. Checkpoint — M15 实验结果确认

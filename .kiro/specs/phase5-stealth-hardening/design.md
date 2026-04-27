@@ -119,7 +119,7 @@ Go 侧变更（`dna_updater.go`）：
 - 验证: 需求 3.2, 3.5
 
 ### Property 3: Jitter 校准后 IAT 分布
-- 生成随机 baseline IAT 参数（mean ∈ [500,5000]μs, std ∈ [50,1000]μs），校准后 Jitter 输出的 IAT 序列均值偏差 < 20%、标准差偏差 < 30%、P95 偏差 < 50%。KS 检验 p-value > 0.05 作为远期目标，不作为 PBT 断言（单一 gaussian 参数难以拟合真实重尾/多峰 IAT 分布）
+- 生成随机 baseline IAT 参数（mean ∈ [500,5000]μs, std ∈ [50,1000]μs），校准后 Jitter 输出的 IAT 序列均值偏差 < 20%、标准差偏差 < 30%。P95 偏差和 KS 检验 p-value 作为 M15 实验观测指标记录，不作为 PBT 断言（当前 `dna_template_map` 只有 mean/std 两个字段，无法精确控制 P95）
 - 验证: 需求 4.1, 4.3
 
 ### Property 4: 画像族权重分布
