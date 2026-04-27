@@ -32,7 +32,7 @@ Phase 2 M6 分类器实验结果显示四个检测面全部 AUC=1.0 / F1=1.0 / A
 - 2.2 Go 控制面负责维护 `profile_select_map`（`BPF_MAP_TYPE_ARRAY`，`max_entries=64`，value=`struct { __u32 cumulative_weight; __u32 profile_id; }`）和 `profile_count_map`（当前可用画像数量）。C 侧首包自选时遍历 `profile_select_map` 按 cumulative_weight 采样，返回对应的真实 `profile_id`。这样画像 ID 不需要连续，registry 中禁用/待采集的画像不写入 `profile_select_map` 即可排除
 - 2.3 权重配置可通过 `gateway.yaml` 调整，默认权重按全球浏览器市场份额分配
 - 2.4 确保同一连接生命周期内画像不变（TCP SYN 重写和后续 QUIC/TLS 参数使用同一 profile）
-- 2.5 `bdna_tls_rewrite` 和 `bdna_quic_rewrite` 必须与 `bdna_tcp_rewrite` 使用相同的 per-connection 画像查询路径（先查 `conn_profile_map`，未命中回退 `active_profile_map[0]`），确保三条重写路径画像一致
+- 2.5 `bdna_tls_rewrite`、`bdna_quic_rewrite`、`bdna_tcp_rewrite` 三条路径必须调用同一个内联函数 `select_profile_for_conn`：查 `conn_profile_map` → 未命中则遍历 `profile_select_map` 按 `cumulative_weight` 采样并写入 `conn_profile_map` → 采样/校验失败才回退 `active_profile_map[0]`。不允许 TLS/QUIC 路径跳过自选直接回退全局画像（否则当 TLS/QUIC 路径先于 TCP 路径看到连接、或 conn_key 维度不一致时，仍会暴露全局唯一画像）
 - 2.6 画像库数据（`fingerprints.yaml` / `profile-registry.v1.json`）中的值必须与真实采集的对照基线一致，发现偏差时更新画像库
 
 ### 3. NPM 拟态分布模式
@@ -41,7 +41,7 @@ Phase 2 M6 分类器实验结果显示四个检测面全部 AUC=1.0 / F1=1.0 / A
 - 3.2 MIMIC 模式从 `npm_target_distribution_map`（BPF_MAP_TYPE_ARRAY，256 个 bin）中采样目标包长，每个 bin 存储该包长区间的累积概率
 - 3.3 Go 控制面从真实对照基线的包长直方图生成 CDF，写入 `npm_target_distribution_map`
 - 3.4 MIMIC 模式保留小包不填充（< min_packet_size）、大包不截断（> target_mtu）的现有行为
-- 3.5 MIMIC 模式的填充目标是让填充后的包长分布与目标流量的 JS 散度 < 0.1
+- 3.5 MIMIC 模式的填充效果由 M15 真实实验观测全局 JS 散度，达不到则记录实际 JS/AUC 值；代码级验收只覆盖采样器拟合（JS < 0.10）、单调不截断、受控等式（current_size=0 时 output == sampled_target_len）
 
 ### 4. Jitter IAT 拟态校准
 
@@ -66,7 +66,7 @@ Phase 2 M6 分类器实验结果显示四个检测面全部 AUC=1.0 / F1=1.0 / A
 - 6.2 重跑四个检测面的分类器实验（握手指纹、包长分布、时序分布、联合分类）
 - 6.3 记录修复前后的 AUC/F1 对比，量化改善幅度
 - 6.4 单维度 AUC 设计目标 < 0.75，联合 AUC 设计目标 < 0.85（实际值由实验决定，不达标不伪造）
-- 6.5 实验结论更新到 `docs/reports/stealth-experiment-results.md`，标注证据强度为"受控环境真实基线"
+- 6.5 实验结论更新到 `docs/reports/stealth-experiment-results.md`，证据强度分两档标注：**真实基线（原生 OS 采集）**——M13-full 产出的画像族数据；**校准后模拟（非原生 OS）**——M13-degraded 或无法在原生 OS 采集的画像族数据。校准后模拟数据不得进入 Capability-Upgrade Gate
 
 ### 7. 治理回写
 

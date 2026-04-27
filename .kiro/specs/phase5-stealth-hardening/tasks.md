@@ -15,8 +15,11 @@
 ## 任务
 
 - [ ] 1. M13：真实对照基线采集
-  - [ ] 1.1 创建 `artifacts/dpi-audit/baseline/capture-baseline.sh`
-    - 自动化采集脚本：启动 tcpdump → 用本机浏览器访问目标站点列表 → 停止抓包 → 按画像族分组
+  - [ ] 1.1 创建跨 OS 采集脚本（三套 runner 入口）
+    - `artifacts/dpi-audit/baseline/capture-baseline.sh`（Linux runner）：tcpdump + Firefox headless，采集 Firefox-Linux 画像族
+    - `artifacts/dpi-audit/baseline/capture-baseline.ps1`（Windows runner）：tshark（需预装 Npcap）+ Chrome headless，采集 Chrome-Win 画像族
+    - `artifacts/dpi-audit/baseline/capture-baseline-macos.sh`（macOS runner）：tcpdump + Chrome headless，采集 Chrome-macOS 画像族
+    - 每个 runner 独立执行，只采集对应画像族，不跨 OS 替代
     - 目标站点：google.com、youtube.com、cloudflare.com、github.com、wikipedia.org（覆盖 CDN/直连/混合场景）
     - 画像族必须在对应原生 OS 上采集：
       - Chrome-Win：在 Windows 节点运行，使用 Windows 原生 Chrome
@@ -57,8 +60,9 @@
     - 在 `bdna.c` 中新增 `conn_profile_map`（`BPF_MAP_TYPE_LRU_HASH`，`max_entries=65536`，key=`conn_key`，value=`__u32 profile_id`）
     - 新增 `profile_select_map`（`BPF_MAP_TYPE_ARRAY`，`max_entries=64`，value=`struct { __u32 cumulative_weight; __u32 profile_id; }`）和 `profile_count_map`（`BPF_MAP_TYPE_ARRAY`，`max_entries=1`）。Go 侧只将已启用且已采集基线的画像写入 `profile_select_map`，禁用/待采集的画像不写入
     - 修改 `bdna_tcp_rewrite`：先查 `conn_profile_map`，命中则用返回的 profile_id；**未命中（SYN 首包）→ C 侧自选**：用 `bpf_get_prng_u32()` 遍历 `profile_select_map` 按 `cumulative_weight` 采样返回真实 `profile_id`，写入 `conn_profile_map`，再查 `fingerprint_map`。**有效性门禁**：`profile_count_map[0]` == 0 或采样 `profile_id` 在 `fingerprint_map` 中不存在时回退 `active_profile_map[0]`
-    - 修改 `bdna_quic_rewrite` 同理：使用相同的 per-connection 查询路径
-    - 修改 `bdna_tls_rewrite` 同理：使用相同的 per-connection 查询路径（不能继续走全局 `active_profile_map`，否则三条路径画像不一致）
+    - 修改 `bdna_quic_rewrite` 同理：调用同一个 `select_profile_for_conn` 内联函数
+    - 修改 `bdna_tls_rewrite` 同理：调用同一个 `select_profile_for_conn` 内联函数（不允许跳过自选直接回退全局画像）
+    - 三条路径的 `conn_key` 维度必须一致（saddr, daddr, sport, dport），确保同一连接无论哪条路径先触发都能正确自选并持久化
     - 确保编译回归通过
     - _需求: 2.1, 2.5_
 
