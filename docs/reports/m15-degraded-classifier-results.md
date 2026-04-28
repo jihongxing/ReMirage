@@ -147,3 +147,46 @@ Boundary:
 - It can guide implementation of real data-plane/profile calibration.
 - It cannot upgrade the stealth capability state.
 - The next evidence target is real ReMirage-side pcap-derived feature extraction under the no-UDP TCP/WSS deployment.
+
+## Real ReMirage-Side Capture Plan
+
+The next evidence step captures real Gateway-side traffic on the no-UDP deployment and converts it into `label=1` classifier rows.
+
+Server-side capture:
+
+```bash
+cd /opt/ReMirage
+
+PROFILE_FAMILY=remirage-real \
+SERVER_IP=119.28.50.29 \
+IFACE=any \
+DURATION_SECONDS=180 \
+PORTS="8443 50847" \
+bash artifacts/dpi-audit/remirage/capture-remirage-linux.sh
+```
+
+While capture is running, generate real client traffic from another machine using Phantom/ReMirage client provisioning or an existing persisted client config. Start the capture before starting/restarting the client so TCP SYN packets are included; otherwise handshake fields may extract as zero.
+
+After capture:
+
+```bash
+python3 artifacts/dpi-audit/remirage/extract-remirage-pcap-features.py \
+  --input artifacts/dpi-audit/remirage/remirage-real \
+  --gateway-ip 119.28.50.29 \
+  --ports "8443 50847" \
+  --output-metadata artifacts/dpi-audit/remirage/remirage-real-metadata.json \
+  --output-csv artifacts/dpi-audit/remirage/remirage-real-features.csv \
+  --min-flows 20
+
+python3 artifacts/dpi-audit/classifier/build-m15-degraded-features.py \
+  --baseline-root artifacts/dpi-audit/baseline \
+  --simulation-metadata artifacts/dpi-audit/remirage/remirage-real-metadata.json \
+  --output artifacts/dpi-audit/classifier/features-m15-real-remirage.csv \
+  --metadata-output artifacts/dpi-audit/classifier/m15-real-remirage-metadata.json
+
+python3 artifacts/dpi-audit/classifier/train-classifier.py \
+  -i artifacts/dpi-audit/classifier/features-m15-real-remirage.csv \
+  -o artifacts/dpi-audit/classifier/results-m15-real-remirage.json
+```
+
+This run is stronger than calibrated simulation because `label=1` comes from real ReMirage pcap-derived rows. It is still not capability-upgrade eligible until M13-full is available, but it can replace the current simulated ReMirage side in the degraded risk trend.

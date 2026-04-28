@@ -38,6 +38,10 @@ Updated: 2026-04-28
   - `artifacts/dpi-audit/classifier/analyze-feature-gap.py` ranks classifier feature gaps by effect size.
   - `artifacts/dpi-audit/classifier/calibrate-remirage-reference.py` creates `simulation-metadata-calibrated.json` for remediation experiments without overwriting the original simulation metadata.
   - These tools are not upgrade evidence; they are for feature calibration and next-iteration diagnosis.
+- M15 real ReMirage-side capture tooling exists:
+  - `artifacts/dpi-audit/remirage/capture-remirage-linux.sh` captures Gateway-side TCP/WSS surfaces (`8443`, `50847` by default).
+  - `artifacts/dpi-audit/remirage/extract-remirage-pcap-features.py` converts real pcap traffic into `label=1` classifier metadata.
+  - This enables replacing simulated ReMirage rows with real pcap-derived rows in the next degraded classifier iteration.
 - M15 calibrated reference remediation run completed on OpenCloudOS:
   - Input rows: control=120, calibrated remirage=120.
   - RandomForest AUC values: C1=0.5293, C2=0.4294, C3=0.3920, C4=0.3931.
@@ -67,7 +71,7 @@ Updated: 2026-04-28
   - `profile_select_map`
   - `profile_count_map`
   - `npm_target_distribution_map`
-- Remaining evidence needed: implement/collect real ReMirage-side pcap-derived samples under the current no-UDP TCP/WSS deployment and rerun the classifier with real label=1 features.
+- Remaining evidence needed: collect real ReMirage-side pcap-derived samples under the current no-UDP TCP/WSS deployment and rerun the classifier with real label=1 features.
 
 ## Not Completed
 
@@ -94,6 +98,8 @@ python artifacts\dpi-audit\classifier\analyze-feature-gap.py --input artifacts\d
 python artifacts\dpi-audit\classifier\calibrate-remirage-reference.py --baseline-root artifacts\dpi-audit\baseline --input-metadata artifacts\dpi-audit\simulation-metadata.json --output-metadata artifacts\dpi-audit\simulation-metadata-calibrated.json
 python artifacts\dpi-audit\classifier\build-m15-degraded-features.py --baseline-root artifacts\dpi-audit\baseline --simulation-metadata artifacts\dpi-audit\simulation-metadata-calibrated.json --output artifacts\dpi-audit\classifier\features-m15-calibrated.csv --metadata-output artifacts\dpi-audit\classifier\m15-calibrated-metadata.json
 python artifacts\dpi-audit\classifier\train-classifier.py -i artifacts\dpi-audit\classifier\features-m15-calibrated.csv -o artifacts\dpi-audit\classifier\results-m15-calibrated.json
+PROFILE_FAMILY=remirage-real SERVER_IP=119.28.50.29 IFACE=any DURATION_SECONDS=180 PORTS="8443 50847" bash artifacts/dpi-audit/remirage/capture-remirage-linux.sh
+python artifacts/dpi-audit/remirage/extract-remirage-pcap-features.py --input artifacts/dpi-audit/remirage/remirage-real --gateway-ip 119.28.50.29 --ports "8443 50847" --output-metadata artifacts/dpi-audit/remirage/remirage-real-metadata.json --output-csv artifacts/dpi-audit/remirage/remirage-real-features.csv --min-flows 20
 python artifacts\dpi-audit\baseline\verify-m13-full.py
 $errors=$null; [System.Management.Automation.PSParser]::Tokenize((Get-Content artifacts\dpi-audit\baseline\capture-baseline.ps1 -Raw), [ref]$errors)
 bash -n artifacts/dpi-audit/baseline/capture-baseline.sh; bash -n artifacts/dpi-audit/baseline/capture-baseline-macos.sh
