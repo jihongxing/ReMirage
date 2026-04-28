@@ -120,3 +120,30 @@ python3 artifacts/dpi-audit/classifier/train-classifier.py \
 ```
 
 This calibrated run is still not upgrade-eligible. It is a remediation experiment to verify whether baseline-driven feature calibration reduces classifier shortcuts before collecting real ReMirage pcap-derived samples.
+
+## Calibrated Reference Result
+
+The OpenCloudOS remediation experiment using `simulation-metadata-calibrated.json` completed successfully.
+
+Input:
+
+- Control: same `chrome-win` + `firefox-linux` real M13 baseline bootstrap, 120 rows.
+- ReMirage: calibrated simulation/reference rows generated from completed baseline families, 120 rows.
+- Missing: `chrome-macos`.
+- Classifier: RandomForest only; XGBoost unavailable on target.
+
+| Experiment | Feature Set | AUC | F1 | Accuracy | CV AUC Mean | Interpretation |
+|------------|-------------|-----|----|----------|-------------|----------------|
+| C1 | Handshake | 0.5293 | 0.5479 | 0.5417 | 0.4983 | low separability in calibrated reference |
+| C2 | Packet Length | 0.4294 | 0.4571 | 0.4722 | 0.4497 | low separability in calibrated reference |
+| C3 | Timing | 0.3920 | 0.4474 | 0.4167 | 0.5149 | low separability in calibrated reference |
+| C4 | Combined | 0.3931 | 0.4658 | 0.4583 | 0.4656 | low separability in calibrated reference |
+
+Compared with the degraded reference run, the classifier moved from `AUC=1.0` on every surface to near-random separability on the calibrated candidate. This confirms the remediation hypothesis: stable MSS, packet-size distribution, and timing-scale mismatches were the dominant classifier shortcuts.
+
+Boundary:
+
+- This is still calibrated simulation/reference evidence, not real ReMirage traffic evidence.
+- It can guide implementation of real data-plane/profile calibration.
+- It cannot upgrade the stealth capability state.
+- The next evidence target is real ReMirage-side pcap-derived feature extraction under the no-UDP TCP/WSS deployment.

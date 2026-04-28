@@ -38,6 +38,11 @@ Updated: 2026-04-28
   - `artifacts/dpi-audit/classifier/analyze-feature-gap.py` ranks classifier feature gaps by effect size.
   - `artifacts/dpi-audit/classifier/calibrate-remirage-reference.py` creates `simulation-metadata-calibrated.json` for remediation experiments without overwriting the original simulation metadata.
   - These tools are not upgrade evidence; they are for feature calibration and next-iteration diagnosis.
+- M15 calibrated reference remediation run completed on OpenCloudOS:
+  - Input rows: control=120, calibrated remirage=120.
+  - RandomForest AUC values: C1=0.5293, C2=0.4294, C3=0.3920, C4=0.3931.
+  - Result: baseline-driven calibration removes the main classifier shortcuts in simulation/reference data.
+  - Boundary: this is still calibrated simulation/reference evidence, not real ReMirage pcap evidence, so no capability upgrade is allowed.
 - M14 Go control-plane support exists and is verified by `go test ./...` in `mirage-gateway`:
   - `ConnKey` includes `l4_proto`.
   - B-DNA profile selector entries support sparse profile IDs.
@@ -62,7 +67,7 @@ Updated: 2026-04-28
   - `profile_select_map`
   - `profile_count_map`
   - `npm_target_distribution_map`
-- Remaining evidence needed: real ReMirage-side pcap-derived sample extraction and another classifier iteration after feature calibration.
+- Remaining evidence needed: implement/collect real ReMirage-side pcap-derived samples under the current no-UDP TCP/WSS deployment and rerun the classifier with real label=1 features.
 
 ## Not Completed
 
@@ -72,7 +77,7 @@ Updated: 2026-04-28
   - `verify-m13-full.py` reports `M13-degraded`.
 - M15-full classifier rerun has not been completed because M13-full is unavailable.
 - M15 TLS/QUIC/WebSocket fingerprint audit has not been completed.
-- AUC/F1/Accuracy targets are not met in degraded rerun; all four RandomForest AUC values are 1.0.
+- AUC/F1/Accuracy targets are not met in real/degraded evidence. The calibrated reference run reaches low AUC, but it is simulated remediation evidence only.
 - Capability status must remain "部分实现" until M13-full plus M15 AUC gates pass.
 - Per-family NPM CDF and per-family Jitter IAT calibration remain out of scope for this spec and are not implemented.
 
@@ -86,6 +91,9 @@ python -m py_compile artifacts\dpi-audit\classifier\build-m15-degraded-features.
 python artifacts\dpi-audit\classifier\build-m15-degraded-features.py --baseline-root artifacts\dpi-audit\baseline --simulation-metadata artifacts\dpi-audit\simulation-metadata.json --output artifacts\dpi-audit\classifier\features-m15-degraded.csv --metadata-output artifacts\dpi-audit\classifier\m15-degraded-metadata.json
 python artifacts\dpi-audit\classifier\train-classifier.py -i artifacts\dpi-audit\classifier\features-m15-degraded.csv -o artifacts\dpi-audit\classifier\results-m15-degraded.json
 python artifacts\dpi-audit\classifier\analyze-feature-gap.py --input artifacts\dpi-audit\classifier\features-m15-degraded.csv --output artifacts\dpi-audit\classifier\feature-gap-m15-degraded.csv --json-output artifacts\dpi-audit\classifier\feature-gap-m15-degraded.json
+python artifacts\dpi-audit\classifier\calibrate-remirage-reference.py --baseline-root artifacts\dpi-audit\baseline --input-metadata artifacts\dpi-audit\simulation-metadata.json --output-metadata artifacts\dpi-audit\simulation-metadata-calibrated.json
+python artifacts\dpi-audit\classifier\build-m15-degraded-features.py --baseline-root artifacts\dpi-audit\baseline --simulation-metadata artifacts\dpi-audit\simulation-metadata-calibrated.json --output artifacts\dpi-audit\classifier\features-m15-calibrated.csv --metadata-output artifacts\dpi-audit\classifier\m15-calibrated-metadata.json
+python artifacts\dpi-audit\classifier\train-classifier.py -i artifacts\dpi-audit\classifier\features-m15-calibrated.csv -o artifacts\dpi-audit\classifier\results-m15-calibrated.json
 python artifacts\dpi-audit\baseline\verify-m13-full.py
 $errors=$null; [System.Management.Automation.PSParser]::Tokenize((Get-Content artifacts\dpi-audit\baseline\capture-baseline.ps1 -Raw), [ref]$errors)
 bash -n artifacts/dpi-audit/baseline/capture-baseline.sh; bash -n artifacts/dpi-audit/baseline/capture-baseline-macos.sh
@@ -94,4 +102,4 @@ bash -lc "cd /mnt/d/codeSpace/ReMirage/mirage-gateway && bash -n scripts/smoke-e
 bash -lc "cd /mnt/d/codeSpace/ReMirage/mirage-gateway && rm -f bpf/*.o && ./scripts/smoke-ebpf-load.sh"
 ```
 
-`go test ./...` passed in `mirage-gateway`. Target OpenCloudOS eBPF verifier load and runtime attach smoke passed after reducing B-DNA verifier complexity. `verify-m13-full.py` correctly fails closed as `M13-degraded` because `chrome-macos` is not present. M15 degraded classifier rerun completed, but all four RandomForest AUC values remain 1.0, so the stealth capability remains `部分实现`.
+`go test ./...` passed in `mirage-gateway`. Target OpenCloudOS eBPF verifier load and runtime attach smoke passed after reducing B-DNA verifier complexity. `verify-m13-full.py` correctly fails closed as `M13-degraded` because `chrome-macos` is not present. M15 degraded classifier rerun completed, but all four RandomForest AUC values remain 1.0, so the stealth capability remains `部分实现`. The calibrated reference remediation run reduced AUC to near-random levels, confirming the calibration direction but not satisfying upgrade evidence requirements.

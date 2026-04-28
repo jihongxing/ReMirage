@@ -161,6 +161,7 @@
     - 若 XGBoost 可用，同时报告 XGBoost 结果
     - _需求: 6.2, 6.3, 6.4_
     - 2026-04-28 degraded run: completed with `features-m15-degraded.csv` and `results-m15-degraded.json`; RandomForest C1/C2/C3/C4 all returned AUC/F1/Accuracy = 1.0, so risk remains high and capability status does not upgrade.
+    - 2026-04-28 calibrated reference run: completed with `simulation-metadata-calibrated.json`, `features-m15-calibrated.csv`, and `results-m15-calibrated.json`; RandomForest AUC dropped to C1=0.5293, C2=0.4294, C3=0.3920, C4=0.3931. This validates the baseline-driven calibration direction but remains simulated remediation evidence, not upgrade evidence.
 
   - [ ] 5.4 更新实验结论文档
     - 更新 `docs/reports/stealth-experiment-results.md`：
@@ -173,6 +174,7 @@
     - 标注证据强度：真实基线（原生 OS 采集）/ 校准后模拟（非原生 OS）
     - _需求: 6.5_
     - 2026-04-28 degraded run: recorded in `docs/reports/m15-degraded-classifier-results.md`, `docs/reports/stealth-experiment-results.md`, `docs/reports/phase5-stealth-hardening-status.md`, `docs/reports/stealth-claims-boundary.md`, and `docs/governance/capability-truth-source.md`.
+    - 2026-04-28 calibrated reference run: recorded in `docs/reports/m15-degraded-classifier-results.md`, `docs/reports/stealth-experiment-results.md`, `docs/reports/phase5-stealth-hardening-status.md`, and `docs/governance/capability-truth-source.md`.
 
 - [ ] 6. Checkpoint — M15 实验结果确认
   - 确认分类器实验已重跑，AUC 数据已记录，请用户确认是否继续。

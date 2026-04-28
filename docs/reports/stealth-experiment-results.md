@@ -17,6 +17,8 @@
 
 2026-04-28 更新：M15 degraded 分类器复验已完成。RandomForest 在 C1/C2/C3/C4 四个检测面均为 `AUC=1.0`、`F1=1.0`、`Accuracy=1.0`，风险未下降，能力状态不得升级。
 
+2026-04-28 更新：M15 calibrated reference remediation run 已完成。使用 `simulation-metadata-calibrated.json` 后，RandomForest AUC 降至 C1=0.5293、C2=0.4294、C3=0.3920、C4=0.3931。该结果证明 baseline-driven 校准能消除当前模拟参考样本中的主要分类捷径，但仍是校准模拟参考，不是能力升级证据。
+
 ## Evidence Inputs
 
 | Evidence | Path | Status |
@@ -32,6 +34,8 @@
 | M15 降级特征构建脚本 | `artifacts/dpi-audit/classifier/build-m15-degraded-features.py` | present |
 | M15 降级特征 | `artifacts/dpi-audit/classifier/features-m15-degraded.csv` | generated on target, not committed |
 | M15 降级分类器结果 | `artifacts/dpi-audit/classifier/results-m15-degraded.json` | generated on target, not committed |
+| M15 校准参考元数据 | `artifacts/dpi-audit/simulation-metadata-calibrated.json` | generated on target, not committed |
+| M15 校准参考分类器结果 | `artifacts/dpi-audit/classifier/results-m15-calibrated.json` | generated on target, not committed |
 | M15 降级结果报告 | `docs/reports/m15-degraded-classifier-results.md` | present |
 
 ## Classifier Results — M6 Simulated Reference
@@ -59,6 +63,22 @@ Input:
 | C3 | 时序特征 | RandomForest | 1.0 | 1.0 | 1.0 | 高可区分性风险 |
 | C4 | 握手+包长+时序 | RandomForest | 1.0 | 1.0 | 1.0 | 综合高可区分性风险 |
 
+## Classifier Results — M15 Calibrated Reference
+
+Input:
+
+- Control: same `chrome-win` + `firefox-linux` real M13 baseline bootstrap, 120 rows.
+- ReMirage: `simulation-metadata-calibrated.json`, 120 rows.
+- Missing: `chrome-macos`.
+- Classifier: RandomForest only; XGBoost unavailable on target.
+
+| Experiment | Feature Set | Classifier | AUC | F1 | Accuracy | Risk |
+|------------|-------------|------------|-----|----|----------|------|
+| C1 | 握手特征 | RandomForest | 0.5293 | 0.5479 | 0.5417 | 校准参考低可分 |
+| C2 | 包长特征 | RandomForest | 0.4294 | 0.4571 | 0.4722 | 校准参考低可分 |
+| C3 | 时序特征 | RandomForest | 0.3920 | 0.4474 | 0.4167 | 校准参考低可分 |
+| C4 | 握手+包长+时序 | RandomForest | 0.3931 | 0.4658 | 0.4583 | 校准参考低可分 |
+
 ## Observations
 
 握手侧：模拟数据中 `remirage` 与 `chrome` 的 TCP MSS、TLS extension count 和 extension sequence 仍可区分。
@@ -71,6 +91,8 @@ Input:
 
 M15 degraded 复验：将两族真实 baseline 引入 control 后，当前 ReMirage 参考样本仍被 RandomForest 完全区分。该结果说明当前 M14/M15 链条还没有产生可量化的分类风险下降，需要继续修正 ReMirage 样本侧的握手、包长和时序特征。
 
+M15 calibrated reference：将 ReMirage 参考样本按两族真实 baseline 的 MSS、包长 CDF 和 IAT 统计重新校准后，分类器 AUC 降至接近随机水平。该结果验证了修复方向，但不是能力升级证据；真正的下一步是从当前 ReMirage TCP/WSS 部署中采集真实 pcap 并提取 label=1 特征。
+
 ## Claim Boundary
 
 允许表述：M6 实验管线已跑通，当前模拟样本暴露出高可区分性风险。
@@ -80,6 +102,8 @@ M15 degraded 复验：将两族真实 baseline 引入 control 后，当前 ReMir
 M13-degraded 限制：当前只覆盖 `firefox-linux` 与 `chrome-win`，不覆盖 `chrome-macos`。任何后续 M15 改善只能表述为“风险下降的部分证据”，不能触发 Capability-Upgrade Gate。
 
 M15-degraded 限制：`features-m15-degraded.csv` 的 control 侧来自真实 M13 两族 baseline 的统计/CDF bootstrap；ReMirage 侧来自当前 `simulation-metadata.json` 中 label=1 的参考样本。该结果可用于比较风险趋势，但不能替代真实 ReMirage pcap 派生样本，也不能用于能力状态升级。本轮结果为四项 AUC 全 1.0，因此不支持任何风险下降或能力升级表述。
+
+M15-calibrated 限制：`features-m15-calibrated.csv` 证明校准模拟参考可以降低分类器可分性，但仍不是真实 ReMirage 流量证据。不得据此宣称已抵抗 DPI/ML，也不得升级 capability truth source 中的能力状态。
 
 ## Upgrade Conditions
 
