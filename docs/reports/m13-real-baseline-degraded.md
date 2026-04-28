@@ -88,3 +88,31 @@ Proceed with M15 as `M15-degraded`:
 2. Generate or collect comparable ReMirage-side samples under the current TCP/WSS, no-UDP deployment.
 3. Rerun classifier experiments and record AUC/F1/Accuracy as risk trend evidence only.
 
+## M15 Degraded Feature Builder
+
+The formal degraded feature builder is:
+
+```bash
+python3 artifacts/dpi-audit/classifier/build-m15-degraded-features.py \
+  --baseline-root artifacts/dpi-audit/baseline \
+  --simulation-metadata artifacts/dpi-audit/simulation-metadata.json \
+  --output artifacts/dpi-audit/classifier/features-m15-degraded.csv \
+  --metadata-output artifacts/dpi-audit/classifier/m15-degraded-metadata.json
+```
+
+It generates classifier-compatible features by bootstrapping control rows from the completed real M13 families and pairing them with current ReMirage reference rows from `simulation-metadata.json`.
+
+Expected degraded metadata:
+
+- `control_families`: `chrome-win`, `firefox-linux`
+- `missing_or_incomplete_families`: `chrome-macos`
+- `remirage_evidence`: `current_simulation_metadata_label_1`
+- `upgrade_eligible`: `false`
+
+The follow-up classifier command is:
+
+```bash
+python3 artifacts/dpi-audit/classifier/train-classifier.py \
+  -i artifacts/dpi-audit/classifier/features-m15-degraded.csv \
+  -o artifacts/dpi-audit/classifier/results-m15-degraded.json
+```

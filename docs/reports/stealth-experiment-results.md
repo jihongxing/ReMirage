@@ -13,6 +13,8 @@
 
 2026-04-28 更新：M13 真实基线已完成 `firefox-linux` 与 `chrome-win` 两族采集，但缺少 `chrome-macos` 原生采集节点，因此结果为 `M13-degraded`。后续 M15 可以继续作为降级复验推进，但不得作为能力状态升级依据。
 
+2026-04-28 更新：新增 `build-m15-degraded-features.py`，用于把两族真实 M13 baseline 与当前 ReMirage 参考样本合成为 `features-m15-degraded.csv`。该输出明确标注 `upgrade_eligible=false`，只能作为 M15 风险趋势复验输入。
+
 ## Evidence Inputs
 
 | Evidence | Path | Status |
@@ -25,6 +27,9 @@
 | 分类器特征 | `artifacts/dpi-audit/classifier/features.csv` | present |
 | 分类器结果 | `artifacts/dpi-audit/classifier/results.json` | present |
 | M13 降级真实基线报告 | `docs/reports/m13-real-baseline-degraded.md` | present |
+| M15 降级特征构建脚本 | `artifacts/dpi-audit/classifier/build-m15-degraded-features.py` | present |
+| M15 降级特征 | `artifacts/dpi-audit/classifier/features-m15-degraded.csv` | generated on target, not committed |
+| M15 降级分类器结果 | `artifacts/dpi-audit/classifier/results-m15-degraded.json` | generated on target, not committed |
 
 ## Classifier Results
 
@@ -52,6 +57,8 @@
 不允许表述：不得宣称已抵抗 DPI/ML，不得宣称与 Chrome/真实浏览器流量不可区分，不得把当前结果写成 Linux 受控基线或生产环境观测。
 
 M13-degraded 限制：当前只覆盖 `firefox-linux` 与 `chrome-win`，不覆盖 `chrome-macos`。任何后续 M15 改善只能表述为“风险下降的部分证据”，不能触发 Capability-Upgrade Gate。
+
+M15-degraded 限制：`features-m15-degraded.csv` 的 control 侧来自真实 M13 两族 baseline 的统计/CDF bootstrap；ReMirage 侧来自当前 `simulation-metadata.json` 中 label=1 的参考样本。该结果可用于比较风险趋势，但不能替代真实 ReMirage pcap 派生样本，也不能用于能力状态升级。
 
 ## Upgrade Conditions
 
