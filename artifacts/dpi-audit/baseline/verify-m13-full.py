@@ -22,7 +22,7 @@ def check_family(root: Path, family: str) -> list[str]:
     if not metadata.exists():
         errors.append(f"{family}: missing capture-metadata.json")
     else:
-        data = json.loads(metadata.read_text(encoding="utf-8"))
+        data = json.loads(metadata.read_text(encoding="utf-8-sig"))
         if data.get("profile_family") != family:
             errors.append(f"{family}: metadata profile_family mismatch")
         if data.get("native_os") is not True:

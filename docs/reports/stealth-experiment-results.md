@@ -1,7 +1,7 @@
 # Stealth Experiment Results
 
-> Status: simulated-reference
-> Evidence Strength: 模拟环境参考
+> Status: simulated-reference + M13-degraded real baseline available
+> Evidence Strength: 模拟环境参考；两族真实原生 OS 基线已采集但未达到 M13-full
 > Source: `artifacts/dpi-audit/`
 > Generated From: `deploy/evidence/m6-experiment-drill.log`
 
@@ -10,6 +10,8 @@
 当前 M6 隐匿实验链路已能端到端运行：样本生成、握手特征提取、包长分布分析、时序分析、分类器特征构建和 RandomForest 训练均已完成。
 
 但本轮数据来自模拟样本，不能作为 Linux 受控环境基线，也不能作为生产 DPI/ML 对抗效果证明。当前结论只能用于验证实验管线和暴露风险方向。
+
+2026-04-28 更新：M13 真实基线已完成 `firefox-linux` 与 `chrome-win` 两族采集，但缺少 `chrome-macos` 原生采集节点，因此结果为 `M13-degraded`。后续 M15 可以继续作为降级复验推进，但不得作为能力状态升级依据。
 
 ## Evidence Inputs
 
@@ -22,6 +24,7 @@
 | 时序统计 | `artifacts/dpi-audit/timing/iat-stats.csv` | present |
 | 分类器特征 | `artifacts/dpi-audit/classifier/features.csv` | present |
 | 分类器结果 | `artifacts/dpi-audit/classifier/results.json` | present |
+| M13 降级真实基线报告 | `docs/reports/m13-real-baseline-degraded.md` | present |
 
 ## Classifier Results
 
@@ -47,6 +50,8 @@
 允许表述：M6 实验管线已跑通，当前模拟样本暴露出高可区分性风险。
 
 不允许表述：不得宣称已抵抗 DPI/ML，不得宣称与 Chrome/真实浏览器流量不可区分，不得把当前结果写成 Linux 受控基线或生产环境观测。
+
+M13-degraded 限制：当前只覆盖 `firefox-linux` 与 `chrome-win`，不覆盖 `chrome-macos`。任何后续 M15 改善只能表述为“风险下降的部分证据”，不能触发 Capability-Upgrade Gate。
 
 ## Upgrade Conditions
 

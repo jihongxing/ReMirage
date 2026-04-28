@@ -4,6 +4,15 @@ Updated: 2026-04-28
 
 ## Completed And Verified
 
+- M13 degraded real baseline capture:
+  - `firefox-linux` native Linux capture completed: `connection_count=9505`, `packet_count=406637`.
+  - `chrome-win` native Windows capture completed: `connection_count=102`, `packet_count=2011`.
+  - `chrome-macos` is missing because no macOS capture node is currently available.
+  - Result remains `M13-degraded`; see `docs/reports/m13-real-baseline-degraded.md`.
+- Linux eBPF runtime evidence completed on OpenCloudOS:
+  - `REQUIRE_EBPF_LOAD=1 ./scripts/smoke-ebpf-load.sh` verifier-loaded 11 eBPF objects.
+  - `./scripts/smoke-ebpf-runtime-attach.sh` passed on a temporary veth interface.
+  - `REQUIRE_BDNA_MAPS=1 ./scripts/smoke-ebpf-runtime-attach.sh` passed, confirming B-DNA runtime maps are visible.
 - M13 runner scaffolding exists:
   - `artifacts/dpi-audit/baseline/capture-baseline.sh`
   - `artifacts/dpi-audit/baseline/capture-baseline-macos.sh`
@@ -26,28 +35,30 @@ Updated: 2026-04-28
   - `scripts/smoke-ebpf-load.sh` completed the compile smoke path.
   - Load smoke skipped locally because `bpftool` is not installed.
 
-## Completed But Not Verified In Target Environment
+## Completed But Requires Continued Evidence
 
-- M14 eBPF data-plane changes are implemented in source:
+- M14 eBPF data-plane changes are implemented and now load/attach on the OpenCloudOS target:
   - `bdna.c` adds `conn_profile_map`, `profile_select_map`, `profile_count_map`.
   - `bdna.c` routes TCP/TLS/QUIC through `select_profile_for_conn`.
   - `bdna.c` prevents invalid profile IDs from being written to `conn_profile_map`.
   - `npm.c` adds `NPM_MODE_MIMIC` and `npm_target_distribution_map`.
-- These eBPF changes were not loaded or attached in a Linux kernel environment during this pass.
-- eBPF verifier load is not verified locally because `bpftool` is not installed.
-- Real capture runners are implemented but have not been executed on native Windows/macOS/Linux nodes.
+- Runtime map wiring is verified for:
+  - `conn_profile_map`
+  - `profile_select_map`
+  - `profile_count_map`
+  - `npm_target_distribution_map`
+- Remaining evidence needed: M15 classifier rerun against real/degraded baseline and current ReMirage-side samples.
 
 ## Not Completed
 
 - M13-full real baseline is not available yet:
-  - No `chrome-win`, `chrome-macos`, or `firefox-linux` pcapng captures are present.
-  - No per-family `capture-metadata.json`, `baseline-stats.csv`, or `baseline-distribution.json` evidence is present.
-  - `verify-m13-full.py` currently reports `M13-degraded`.
+  - `firefox-linux` and `chrome-win` are complete.
+  - `chrome-macos` is missing.
+  - `verify-m13-full.py` reports `M13-degraded`.
 - M15 classifier rerun with real baseline has not been completed.
 - M15 TLS/QUIC/WebSocket fingerprint audit has not been completed.
 - AUC/F1/Accuracy targets have not been verified.
 - Capability status must remain "部分实现" until M13-full plus M15 AUC gates pass.
-- Linux eBPF attach/runtime behavior has not been verified.
 - Per-family NPM CDF and per-family Jitter IAT calibration remain out of scope for this spec and are not implemented.
 
 ## Verification Commands Run
@@ -64,4 +75,4 @@ bash -lc "cd /mnt/d/codeSpace/ReMirage/mirage-gateway && bash -n scripts/smoke-e
 bash -lc "cd /mnt/d/codeSpace/ReMirage/mirage-gateway && rm -f bpf/*.o && ./scripts/smoke-ebpf-load.sh"
 ```
 
-`go test ./...` passed in `mirage-gateway`. `verify-m13-full.py` correctly failed closed as `M13-degraded` because real capture evidence is not present. `smoke-ebpf-load.sh` compiled all BPF objects and skipped load with `bpftool not found` in the local WSL environment.
+`go test ./...` passed in `mirage-gateway`. Target OpenCloudOS eBPF verifier load and runtime attach smoke passed after reducing B-DNA verifier complexity. `verify-m13-full.py` correctly fails closed as `M13-degraded` because `chrome-macos` is not present.
