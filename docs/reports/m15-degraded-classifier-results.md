@@ -70,3 +70,53 @@ The result points to three likely gaps:
 3. Timing: generated ReMirage IAT values remain far from observed browser/network timing.
 
 The next pass should prioritize real ReMirage-side sample extraction and feature calibration before attempting another classifier gate.
+
+## Feature Gap Diagnostic
+
+The formal diagnostic script is:
+
+```bash
+python3 artifacts/dpi-audit/classifier/analyze-feature-gap.py \
+  --input artifacts/dpi-audit/classifier/features-m15-degraded.csv \
+  --output artifacts/dpi-audit/classifier/feature-gap-m15-degraded.csv \
+  --json-output artifacts/dpi-audit/classifier/feature-gap-m15-degraded.json
+```
+
+The first OpenCloudOS diagnostic run showed the top gaps:
+
+| Rank | Feature | Effect Size | Control Mean | ReMirage Mean |
+|------|---------|-------------|--------------|---------------|
+| 1 | `tcp_mss` | 7.402 | 1446.108 | 1380.000 |
+| 2 | `pkt_len_std` | 3.780 | 611.833 | 214.825 |
+| 3 | `pkt_len_mean` | 2.911 | 645.918 | 1173.558 |
+| 4 | `iat_p95` | 2.332 | 2507526.727 | 1507.429 |
+| 5 | `iat_p99` | 2.123 | 34003914.749 | 1645.850 |
+
+This indicates the classifier primarily separates stable MSS, packet-size distribution, and timing-scale differences.
+
+## Calibrated Reference Candidate
+
+The remediation experiment should use a separate calibrated metadata file, leaving the original simulation metadata intact:
+
+```bash
+python3 artifacts/dpi-audit/classifier/calibrate-remirage-reference.py \
+  --baseline-root artifacts/dpi-audit/baseline \
+  --input-metadata artifacts/dpi-audit/simulation-metadata.json \
+  --output-metadata artifacts/dpi-audit/simulation-metadata-calibrated.json
+```
+
+Then rerun the degraded feature builder against the calibrated reference:
+
+```bash
+python3 artifacts/dpi-audit/classifier/build-m15-degraded-features.py \
+  --baseline-root artifacts/dpi-audit/baseline \
+  --simulation-metadata artifacts/dpi-audit/simulation-metadata-calibrated.json \
+  --output artifacts/dpi-audit/classifier/features-m15-calibrated.csv \
+  --metadata-output artifacts/dpi-audit/classifier/m15-calibrated-metadata.json
+
+python3 artifacts/dpi-audit/classifier/train-classifier.py \
+  -i artifacts/dpi-audit/classifier/features-m15-calibrated.csv \
+  -o artifacts/dpi-audit/classifier/results-m15-calibrated.json
+```
+
+This calibrated run is still not upgrade-eligible. It is a remediation experiment to verify whether baseline-driven feature calibration reduces classifier shortcuts before collecting real ReMirage pcap-derived samples.

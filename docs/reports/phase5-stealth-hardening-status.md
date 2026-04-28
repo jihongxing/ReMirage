@@ -34,6 +34,10 @@ Updated: 2026-04-28
   - Missing family: `chrome-macos`.
   - RandomForest C1/C2/C3/C4 all returned `AUC=1.0`, `F1=1.0`, `Accuracy=1.0`.
   - Result: high distinguishability risk remains; no capability upgrade is allowed.
+- M15 remediation tooling exists:
+  - `artifacts/dpi-audit/classifier/analyze-feature-gap.py` ranks classifier feature gaps by effect size.
+  - `artifacts/dpi-audit/classifier/calibrate-remirage-reference.py` creates `simulation-metadata-calibrated.json` for remediation experiments without overwriting the original simulation metadata.
+  - These tools are not upgrade evidence; they are for feature calibration and next-iteration diagnosis.
 - M14 Go control-plane support exists and is verified by `go test ./...` in `mirage-gateway`:
   - `ConnKey` includes `l4_proto`.
   - B-DNA profile selector entries support sparse profile IDs.
@@ -81,6 +85,7 @@ python -m py_compile artifacts\dpi-audit\baseline\extract-baseline-stats.py arti
 python -m py_compile artifacts\dpi-audit\classifier\build-m15-degraded-features.py
 python artifacts\dpi-audit\classifier\build-m15-degraded-features.py --baseline-root artifacts\dpi-audit\baseline --simulation-metadata artifacts\dpi-audit\simulation-metadata.json --output artifacts\dpi-audit\classifier\features-m15-degraded.csv --metadata-output artifacts\dpi-audit\classifier\m15-degraded-metadata.json
 python artifacts\dpi-audit\classifier\train-classifier.py -i artifacts\dpi-audit\classifier\features-m15-degraded.csv -o artifacts\dpi-audit\classifier\results-m15-degraded.json
+python artifacts\dpi-audit\classifier\analyze-feature-gap.py --input artifacts\dpi-audit\classifier\features-m15-degraded.csv --output artifacts\dpi-audit\classifier\feature-gap-m15-degraded.csv --json-output artifacts\dpi-audit\classifier\feature-gap-m15-degraded.json
 python artifacts\dpi-audit\baseline\verify-m13-full.py
 $errors=$null; [System.Management.Automation.PSParser]::Tokenize((Get-Content artifacts\dpi-audit\baseline\capture-baseline.ps1 -Raw), [ref]$errors)
 bash -n artifacts/dpi-audit/baseline/capture-baseline.sh; bash -n artifacts/dpi-audit/baseline/capture-baseline-macos.sh
