@@ -28,6 +28,12 @@ Updated: 2026-04-28
   - Builds `features-m15-degraded.csv` from completed M13 real baseline families plus current ReMirage reference samples.
   - Writes `m15-degraded-metadata.json` with `upgrade_eligible=false`, missing family status, source evidence, and limitations.
   - Python syntax check passed.
+- M15 degraded classifier rerun completed on OpenCloudOS:
+  - Input rows: control=120, remirage=120.
+  - Control families: `chrome-win`, `firefox-linux`.
+  - Missing family: `chrome-macos`.
+  - RandomForest C1/C2/C3/C4 all returned `AUC=1.0`, `F1=1.0`, `Accuracy=1.0`.
+  - Result: high distinguishability risk remains; no capability upgrade is allowed.
 - M14 Go control-plane support exists and is verified by `go test ./...` in `mirage-gateway`:
   - `ConnKey` includes `l4_proto`.
   - B-DNA profile selector entries support sparse profile IDs.
@@ -52,7 +58,7 @@ Updated: 2026-04-28
   - `profile_select_map`
   - `profile_count_map`
   - `npm_target_distribution_map`
-- Remaining evidence needed: run the M15 degraded classifier on the OpenCloudOS target and record `results-m15-degraded.json`.
+- Remaining evidence needed: real ReMirage-side pcap-derived sample extraction and another classifier iteration after feature calibration.
 
 ## Not Completed
 
@@ -60,9 +66,9 @@ Updated: 2026-04-28
   - `firefox-linux` and `chrome-win` are complete.
   - `chrome-macos` is missing.
   - `verify-m13-full.py` reports `M13-degraded`.
-- M15 classifier rerun with real/degraded baseline has not been completed.
+- M15-full classifier rerun has not been completed because M13-full is unavailable.
 - M15 TLS/QUIC/WebSocket fingerprint audit has not been completed.
-- AUC/F1/Accuracy targets have not been verified.
+- AUC/F1/Accuracy targets are not met in degraded rerun; all four RandomForest AUC values are 1.0.
 - Capability status must remain "部分实现" until M13-full plus M15 AUC gates pass.
 - Per-family NPM CDF and per-family Jitter IAT calibration remain out of scope for this spec and are not implemented.
 
@@ -73,6 +79,8 @@ go test ./pkg/ebpf
 go test ./...
 python -m py_compile artifacts\dpi-audit\baseline\extract-baseline-stats.py artifacts\dpi-audit\baseline\verify-m13-full.py
 python -m py_compile artifacts\dpi-audit\classifier\build-m15-degraded-features.py
+python artifacts\dpi-audit\classifier\build-m15-degraded-features.py --baseline-root artifacts\dpi-audit\baseline --simulation-metadata artifacts\dpi-audit\simulation-metadata.json --output artifacts\dpi-audit\classifier\features-m15-degraded.csv --metadata-output artifacts\dpi-audit\classifier\m15-degraded-metadata.json
+python artifacts\dpi-audit\classifier\train-classifier.py -i artifacts\dpi-audit\classifier\features-m15-degraded.csv -o artifacts\dpi-audit\classifier\results-m15-degraded.json
 python artifacts\dpi-audit\baseline\verify-m13-full.py
 $errors=$null; [System.Management.Automation.PSParser]::Tokenize((Get-Content artifacts\dpi-audit\baseline\capture-baseline.ps1 -Raw), [ref]$errors)
 bash -n artifacts/dpi-audit/baseline/capture-baseline.sh; bash -n artifacts/dpi-audit/baseline/capture-baseline-macos.sh
@@ -81,4 +89,4 @@ bash -lc "cd /mnt/d/codeSpace/ReMirage/mirage-gateway && bash -n scripts/smoke-e
 bash -lc "cd /mnt/d/codeSpace/ReMirage/mirage-gateway && rm -f bpf/*.o && ./scripts/smoke-ebpf-load.sh"
 ```
 
-`go test ./...` passed in `mirage-gateway`. Target OpenCloudOS eBPF verifier load and runtime attach smoke passed after reducing B-DNA verifier complexity. `verify-m13-full.py` correctly fails closed as `M13-degraded` because `chrome-macos` is not present.
+`go test ./...` passed in `mirage-gateway`. Target OpenCloudOS eBPF verifier load and runtime attach smoke passed after reducing B-DNA verifier complexity. `verify-m13-full.py` correctly fails closed as `M13-degraded` because `chrome-macos` is not present. M15 degraded classifier rerun completed, but all four RandomForest AUC values remain 1.0, so the stealth capability remains `部分实现`.
